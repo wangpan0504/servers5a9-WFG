@@ -575,6 +575,9 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             await context.Altar.WakeAsync(altar);
         if (receipt.HellPartyRoomCleared)
             await context.Notify(NotiPacketType.HELL_PARTY_CLEAR, DungeonPackets.HellPartyCleared(), "formal_hell_party_clear", Guard);
+        var deferredClear = context.Session.CompletePendingCinematicClear();
+        if (deferredClear?.Commit?.Plan.SceneClear is not null)
+            await EnableSettlementAsync(context);
         if (receipt.Snapshot.Phase == SinglePlayerDungeonPhase.Settlement)
             await EnableSettlementAsync(context);
         await PublishEpicPieceShopAsync(context, prepare: false);

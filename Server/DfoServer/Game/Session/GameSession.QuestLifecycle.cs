@@ -3,6 +3,7 @@ using DfoServer.Game.Dungeons;
 using DfoServer.Game.Quests;
 using DfoServer.GameWorld.Items;
 using DfoServer.GameWorld.Quests;
+using DfoServer.GameWorld.Dungeons;
 
 namespace DfoServer.Game.Session;
 
@@ -18,6 +19,34 @@ internal sealed partial class GameSession
     private sealed record PendingQuestLifecycle(QuestLifecyclePlan Plan, long SelectionEpoch, SessionPhase Phase,
         DungeonRunIdentity? Identity, QuestClientCondition? Condition);
     private PendingQuestLifecycle? pendingQuestLifecycle;
+    private sealed record PendingCinematicClear(ushort QuestId, Guid AcceptanceId, long SelectionEpoch,
+        DungeonRunIdentity Identity, DungeonMap Map, QuestCatalog Quests, ItemCatalog Items,
+        GoldLimitCatalog GoldLimits, EpicPieceCatalog Pieces);
+    private PendingCinematicClear? pendingCinematicClear;
+
+    // 仅消费原加载动作和原接取绑定；复用33的完整场景校验及事务，异常时保留原事务恢复能力。
+    public QuestLifecycleReceipt? CompletePendingCinematicClear()
+    {
+        var pending = owner.Execute(() =>
+        {
+            var value = pendingCinematicClear;
+            if (value is null) return null;
+            if (!Ready || Phase != SessionPhase.Dungeon || SelectionEpoch != value.SelectionEpoch ||
+                formalDungeon?.Run is not { } run || run.LastLoadingFact is not { } loaded ||
+                loaded.Identity != value.Identity || loaded.Map != value.Map || run.Snapshot.CurrentMap != value.Map ||
+                Selected?.ActiveMainQuests.Any(row => row.QuestId == value.QuestId && row.AcceptanceId == value.AcceptanceId) != true)
+            {
+                pendingCinematicClear = null;
+                return null;
+            }
+            return value;
+        });
+        if (pending is null) return null;
+        var receipt = ChangeQuest(pending.QuestId, QuestLifecycleAction.Condition, pending.Quests, pending.Items,
+            pending.GoldLimits, pending.Pieces, new QuestClientCondition(null, 0, 0));
+        owner.Execute(() => { if (ReferenceEquals(pendingCinematicClear, pending)) pendingCinematicClear = null; return true; });
+        return receipt;
+    }
 
     // 仅接收已经批准的同坐标演出导航终末；初次加载和水平换房仍须等待37。
     private static bool CinematicLoadingTransition(FormalDungeon dungeon, StoryQuest movie)
@@ -167,6 +196,16 @@ internal sealed partial class GameSession
             if (!commit.ProjectionCurrent) return receipt with { Reason = "任务事务已提交，当前投影已失效，需重新选角恢复" };
             Selected = commit.Character;
             completed = QuestEligibility.Completed(Selected);
+            if (capture.CinematicTransition && action == QuestLifecycleAction.Condition &&
+                capture.Identity is { } loadingIdentity && capture.Entry is { } loadingEntry && capture.Room is { } loadingRoom &&
+                PartyDungeon is null && loadingEntry.PassiveClearTerminalMap == loadingRoom.Map &&
+                loadingEntry.Maze.ClearConditions is [{ Type: "destroy object", Count: 1 } clear] &&
+                loadingRoom.PassiveObjects.Any(row => row.ObjectId == clear.TargetId) &&
+                commit.Character.ActiveMainQuests.SingleOrDefault(row => row.QuestId == questId && QuestHuntProgress.Bound(row, loadingEntry)) is { } active)
+                pendingCinematicClear = new(questId, active.AcceptanceId, capture.SelectionEpoch, loadingIdentity, loadingRoom.Map,
+                    quests, items, goldLimits, pieces);
+            if (action == QuestLifecycleAction.Giveup && pendingCinematicClear?.QuestId == questId)
+                pendingCinematicClear = null;
             if (action == QuestLifecycleAction.Accept && capture.Phase is SessionPhase.Dungeon or SessionPhase.Settlement && formalDungeon is { } dungeon &&
                 !dungeon.Entry.QuestAcceptances.Any(row => row.QuestId == quest.Id))
             {
