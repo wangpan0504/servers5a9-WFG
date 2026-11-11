@@ -52,7 +52,8 @@ internal sealed partial class GameSession
         static bool EligibleItems(TradeOffer offer)
         {
             long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-            return offer.Items.All(line => !line.Item.IsExpired(now) && line.Item.ExpireTime == 0 &&
+            // 未到期的普通期限留给仓储在 writer 之后复验。这里只挡已到期、租赁、交易限制和锁定。
+            return offer.Items.All(line => !line.Item.IsExpired(now) &&
                 !line.Item.Core.IsRental && line.Item.Core.TradeRestriction == 0 &&
                 line.Item.Core.SortLockFlag == 0 && line.Item.Core.EquipmentLockId == 0);
         }

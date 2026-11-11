@@ -186,10 +186,10 @@ internal static class ParticularHellPartyTests
             "裂缝奖励不写进死亡包或翻牌包");
         Console.WriteLine($"crack-dimension grant reward int data item {band.Items[0].ItemId} count {band.Items[0].Count} levels {band.MinLevel}-{band.MaxLevel}");
         Console.WriteLine($"crack-dimension grant daily reward info clears {crack.Daily.Clears} item {crack.Daily.ItemId} count {crack.Daily.Count}");
-        That(!File.ReadAllText(Path.Combine(ServerRoot(), "Network", "Projection", "TownProjection.cs")).Contains("PARTICULAR_HELL", StringComparison.Ordinal) &&
+        That(File.ReadAllText(Path.Combine(ServerRoot(), "Network", "Projection", "TownProjection.cs")).Contains("RiftDailyProjection.RefreshParticularHellAsync(context)", StringComparison.Ordinal) &&
             !File.ReadAllText(Path.Combine(ServerRoot(), "Network", "Projection", "TownProjection.cs")).Contains("CRACK_OF_DAYBREAK", StringComparison.Ordinal),
-            "进城初始化不发送裂缝次数包");
-        Console.WriteLine("rift count packets stay test-only; town init does not send PARTICULAR_HELL or CRACK_OF_DAYBREAK_INFO");
+            "进城恢复魔界角色专用次数，黎明仍仅在所属区域刷新");
+        Console.WriteLine("particular-hell initializes current-character counts; daybreak remains area-scoped");
     }
 
     static string ServerRoot([CallerFilePath] string thisFile = "")

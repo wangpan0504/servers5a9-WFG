@@ -374,6 +374,7 @@ internal sealed class DungeonSelectionHandler(TownProjection projection, ServerL
         if (dungeon == 0 || receipt.Tutorial && receipt.OpensClientSelector ||
             (dungeon is 5359 or 5363) && replayBefore.Phase == SessionPhase.Town)
         {
+            await RiftDailyProjection.RefreshParticularHellAsync(context, CanSend, onlyForSelection: true);
             await RiftDailyProjection.RefreshAsync(context, CanSend);
             await GriefTowerProjection.SelectionAsync(context,dungeons,legendTarget,"dungeon_select_notice",CanSend);
         }

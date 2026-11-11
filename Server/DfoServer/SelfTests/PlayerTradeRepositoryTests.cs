@@ -1,4 +1,7 @@
+using System.Reflection;
+using System.Text.Json;
 using DfoServer.Game.Accounts;
+using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.GameWorld.Items;
 using DfoServer.Game.Trade;
@@ -106,6 +109,197 @@ internal static class PlayerTradeRepositoryTests
         }
         finally
         {
+            SqliteConnection.ClearAllPools();
+            TestFiles.DeleteDirectory(root, true);
+        }
+        PeriodDeadline();
+    }
+
+    static void PeriodDeadline()
+    {
+        SuccessBeforeDeadline();
+        CrossDeadline(expireFirst: true);
+        CrossDeadline(expireFirst: false);
+    }
+
+    static void SuccessBeforeDeadline()
+    {
+        var start = DateTimeOffset.UtcNow;
+        var clock = new MutableClock(start);
+        using var scene = new DeadlineScene(clock, start.AddHours(2), start.AddHours(2));
+        var (first, second) = WhileWriterQueued(scene.DatabasePath, null, () => scene.Commit());
+        var loadedFirst = scene.Repository.LoadCharacter(scene.FirstOwner, first.Slot);
+        var loadedSecond = scene.Repository.LoadCharacter(scene.SecondOwner, second.Slot);
+        That(first.Inventory.Gold == 1500 && second.Inventory.Gold == 1500 &&
+            first.Inventory.Items.Single().Uid == scene.SecondItem.Uid && first.Inventory.Items.Single().ExpireTime == scene.SecondItem.ExpireTime &&
+            second.Inventory.Items.Single().Uid == scene.FirstItem.Uid && second.Inventory.Items.Single().ExpireTime == scene.FirstItem.ExpireTime &&
+            loadedFirst.Inventory.Gold == 1500 && loadedFirst.Inventory.Items.Single().Uid == scene.SecondItem.Uid &&
+            loadedSecond.Inventory.Gold == 1500 && loadedSecond.Inventory.Items.Single().Uid == scene.FirstItem.Uid &&
+            loadedFirst.Revision == first.Revision && loadedSecond.Revision == second.Revision,
+            "writer 排队但尚未跨截止时，双方金币和期限实例一起成交并重读一致");
+        scene.Integrity();
+    }
+
+    static void CrossDeadline(bool expireFirst)
+    {
+        var start = DateTimeOffset.UtcNow;
+        var clock = new MutableClock(start);
+        var soon = start.AddMinutes(30);
+        var later = start.AddHours(2);
+        using var scene = new DeadlineScene(clock, expireFirst ? soon : later, expireFirst ? later : soon);
+        string before = scene.Snapshot();
+        var rejected = WhileWriterQueued(scene.DatabasePath, () => clock.Set(start.AddHours(1)), () =>
+        {
+            try { scene.Commit(); return null; }
+            catch (InventoryQualificationExpiredException error) { return error; }
+        });
+        That(rejected is not null && scene.Snapshot() == before, expireFirst
+            ? "排队跨过第一方转出截止时整笔取消，双方金币、实例和托管不变"
+            : "排队跨过第二方转出截止时整笔取消，双方金币、实例和托管不变");
+        That(RejectCommit(scene) is not null && scene.Snapshot() == before, "过期后重试同一报价仍然取消且不写库");
+        clock.Set(start);
+        var (first, second) = WhileWriterQueued(scene.DatabasePath, null, () => scene.Commit());
+        That(first.Inventory.Gold == 1500 && second.Inventory.Gold == 1500 &&
+            first.Inventory.Items.Single().Uid == scene.SecondItem.Uid && second.Inventory.Items.Single().Uid == scene.FirstItem.Uid &&
+            scene.Repository.LoadCharacter(scene.FirstOwner, first.Slot).Inventory.Items.Single().Uid == scene.SecondItem.Uid &&
+            scene.Repository.LoadCharacter(scene.SecondOwner, second.Slot).Inventory.Items.Single().Uid == scene.FirstItem.Uid,
+            "时钟回到截止前，同一冻结报价可以重新成交");
+        scene.Integrity();
+    }
+
+    static InventoryQualificationExpiredException? RejectCommit(DeadlineScene scene)
+    {
+        try { scene.Commit(); return null; }
+        catch (InventoryQualificationExpiredException error) { return error; }
+    }
+
+    static T WhileWriterQueued<T>(string path, Action? whileQueued, Func<T> action)
+    {
+        T result = default!;
+        Exception? failure = null;
+        using var finished = new ManualResetEventSlim();
+        var worker = new Thread(() =>
+        {
+            try { result = action(); }
+            catch (Exception error) { failure = error; }
+            finally { finished.Set(); }
+        }) { IsBackground = true, Name = "trade-deadline-writer" };
+        var gate = (SemaphoreSlim)typeof(SqliteWriteGate).GetField("Gate", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null)!;
+        var waiters = typeof(SemaphoreSlim).GetField("m_waitCount", BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? typeof(SemaphoreSlim).GetField("_waitCount", BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("无法观察原写入闸门等待计数");
+        var db = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path, Pooling = false, ForeignKeys = true }.ToString());
+        db.Open();
+        bool started = false;
+        try
+        {
+            var write = db.BeginWrite("PlayerTradeRepositoryTests.DeadlineHold");
+            try
+            {
+                var tx = write.Transaction;
+                try
+                {
+                    worker.Start();
+                    started = true;
+                    That(SpinWait.SpinUntil(() => Convert.ToInt32(waiters.GetValue(gate)) > 0 || finished.IsSet, TimeSpan.FromSeconds(5)) &&
+                        !finished.IsSet, "交易实际等待原写入闸门");
+                    whileQueued?.Invoke();
+                    That(!finished.IsSet, "调整时钟时交易仍堵在 writer 上");
+                }
+                finally { tx.Dispose(); }
+            }
+            finally { write.Dispose(); }
+            if (started && (!finished.Wait(TimeSpan.FromSeconds(10)) || !worker.Join(TimeSpan.FromSeconds(5))))
+                throw new TimeoutException("释放写入闸门后交易未退出");
+        }
+        finally { db.Dispose(); }
+        if (failure is not null) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
+        return result;
+    }
+
+    sealed class MutableClock(DateTimeOffset start) : TimeProvider
+    {
+        long ticks = start.UtcTicks;
+        public override DateTimeOffset GetUtcNow() => new(Interlocked.Read(ref ticks), TimeSpan.Zero);
+        public void Set(DateTimeOffset value) => Interlocked.Exchange(ref ticks, value.UtcTicks);
+    }
+
+    sealed class DeadlineScene : IDisposable
+    {
+        readonly string root = Path.Combine(Path.GetTempPath(), "s5a9-trade-deadline-" + Guid.NewGuid().ToString("N"));
+        readonly AccountOwners owners = new();
+        public string DatabasePath { get; }
+        public CharacterRepository Repository { get; }
+        public AccountOwners.Lease FirstOwner { get; }
+        public AccountOwners.Lease SecondOwner { get; }
+        public Character First { get; }
+        public Character Second { get; }
+        public InventoryItem FirstItem { get; }
+        public InventoryItem SecondItem { get; }
+        readonly TradeTicket ticket;
+        readonly TradeSettlementPlan plan;
+        readonly ItemCatalog items;
+        public DeadlineScene(TimeProvider clock, DateTimeOffset firstExpires, DateTimeOffset secondExpires)
+        {
+            DatabasePath = System.IO.Path.Combine(root, "game.db");
+            Directory.CreateDirectory(root);
+            Repository = new(DatabasePath, promotionClock: clock);
+            FirstOwner = owners.Acquire("trade-deadline-a", () => { });
+            SecondOwner = owners.Acquire("trade-deadline-b", () => { });
+            var core = new ItemCore(50002, ItemKind.Equipment, 999999998);
+            First = Repository.Create(FirstOwner, new("DeadlineA", new(38, 1, 450, 234, 0), null)
+            {
+                Inventory = new([new(0, new(InventoryListType.Main, 9), core with { ExpireTime = checked((int)firstExpires.ToUnixTimeSeconds()) })], Gold: 1000)
+            });
+            Second = Repository.Create(SecondOwner, new("DeadlineB", new(38, 1, 450, 234, 0), null)
+            {
+                Inventory = new([new(0, new(InventoryListType.Main, 9), core with { ExpireTime = checked((int)secondExpires.ToUnixTimeSeconds()) })], Gold: 2000)
+            });
+            FirstItem = First.Inventory.Items.Single();
+            SecondItem = Second.Inventory.Items.Single();
+            items = new ItemCatalog(null!, new Dictionary<int, string>(), new Dictionary<int, string>(), 0);
+            items.PrefillTemplates(new Dictionary<int, ItemTemplate>
+            {
+                [50002] = new(50002, ItemKind.Equipment, 12, 1, 0, 1, 0, 0, 1, "[free]", 65535, 0, "期限") { Expiration = new(Days: 30) }
+            });
+            ticket = new(new(First.Id, FirstOwner.Generation, 1), new(Second.Id, SecondOwner.Generation, 1),
+                new(0, [new(0, FirstItem, 1)]), new(500, [new(0, SecondItem, 1)]));
+            plan = TradeSettlement.Plan(First, Second, ticket, items) ?? throw new InvalidOperationException("截止前的期限交易必须能规划");
+        }
+        public (Character First, Character Second) Commit() =>
+            Repository.CommitPlayerTrade(FirstOwner, SecondOwner, First, Second, ticket, plan, items);
+        public string Snapshot()
+        {
+            using var db = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = DatabasePath, Pooling = false, ForeignKeys = true }.ToString());
+            db.Open();
+            using var command = db.CreateCommand();
+            var tables = new List<string>();
+            command.CommandText = "SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name";
+            using (var reader = command.ExecuteReader()) while (reader.Read()) tables.Add(reader.GetString(0));
+            var rows = new List<object>();
+            foreach (string table in tables)
+            {
+                command.CommandText = "SELECT * FROM [" + table + "] ORDER BY rowid";
+                using var reader = command.ExecuteReader();
+                while (reader.Read())
+                    rows.Add(new { Table = table, Values = Enumerable.Range(0, reader.FieldCount).Select(reader.GetValue).ToArray() });
+            }
+            return JsonSerializer.Serialize(rows);
+        }
+        public void Integrity()
+        {
+            using var db = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = DatabasePath, Pooling = false, ForeignKeys = true }.ToString());
+            db.Open();
+            using var command = db.CreateCommand();
+            command.CommandText = "PRAGMA integrity_check";
+            That(command.ExecuteScalar() is "ok", "期限交易提交后库完整");
+            command.CommandText = "SELECT count(*) FROM pragma_foreign_key_check";
+            That(command.ExecuteScalar() is 0L, "期限交易提交后外键完整");
+        }
+        public void Dispose()
+        {
+            SecondOwner.Dispose();
+            FirstOwner.Dispose();
             SqliteConnection.ClearAllPools();
             TestFiles.DeleteDirectory(root, true);
         }

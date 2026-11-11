@@ -28,7 +28,9 @@ internal static class SkillLayout
         var tree = current.Trees.Single(value => value.Context == command.Context);
         LearnedSkill? from = tree.Skills.SingleOrDefault(skill => skill.Slot == command.From);
         LearnedSkill? to = tree.Skills.SingleOrDefault(skill => skill.Slot == command.To);
-        if (from is null)
+        // 缔造者切栏固定发送六组 i→i+6，空源与双空也需要 ACK 才能释放客户端等待。
+        bool creatorRowSwap = job == 10 && command.From < 6 && command.To == command.From + 6;
+        if (from is null && !creatorRowSwap)
             return Fail(SkillLearningFailure.MissingSkill);
         foreach ((LearnedSkill? skill, byte slot) in new[] { (from, command.To), (to, command.From) })
         {
@@ -43,7 +45,7 @@ internal static class SkillLayout
                 (SkillSlotAllocator.QuickSlot(slot) && resource.Type != SkillType.Active))
                 return Fail(SkillLearningFailure.Unsupported);
         }
-        if (command.From == command.To)
+        if (command.From == command.To || from is null && to is null)
             return new(SkillLearningFailure.None, current);
         var bindings = tree.Skills.Select(skill => skill.Slot == command.From ? skill with { Slot = command.To } :
             skill.Slot == command.To ? skill with { Slot = command.From } : skill).OrderBy(skill => skill.Slot).ToArray();

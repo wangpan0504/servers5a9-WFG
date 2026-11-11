@@ -17,4 +17,15 @@ internal static class RiftDailyProjection
         await context.Notify(NotiPacketType.DUNGEON_ENTER_COUNT_INFO,
             DungeonEnterCountPackets.Info(count.Dungeon, count.Daily, 0), "crack_of_daybreak_count", CanSend);
     }
+
+    public static async Task RefreshParticularHellAsync(GameConnectionContext context, Func<bool>? guard = null,
+        bool onlyForSelection = false)
+    {
+        if (context.Session.CaptureParticularHellCount(onlyForSelection) is not { } receipt) return;
+        bool CanSend() => (guard?.Invoke() ?? true) && context.Session.CanPublishParticularHellCount(receipt);
+        await context.Notify(NotiPacketType.PARTICULAR_HELL, RiftDailyPackets.ParticularHell(receipt.Total),
+            "particular_hell_info", CanSend);
+        await context.Notify(NotiPacketType.PARTICULAR_HELL_DUNGEON, RiftDailyPackets.ParticularHellDungeon(316, receipt.Used),
+            "particular_hell_count", CanSend);
+    }
 }

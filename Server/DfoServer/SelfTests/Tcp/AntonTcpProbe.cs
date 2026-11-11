@@ -391,14 +391,23 @@ internal static partial class AntonTcpProbe
         bool tremor = dungeon is 212 or 214;
         if (tremor)
         {
-            if (report.Opcode31 != permissionsBefore)
-                throw new InvalidOperationException("震颤炮击落地前提前许可菜单");
+            bool passive = TremorUsesPassiveTerminal(catalog, dungeon, info.Body[7]);
+            // 当前资源可显式声明15467；空条件走终点加载，有物件条件则由首次合法终末提交一次许可。
             peer.Send(39, QuestPassiveClearTcpTests.PassiveDeath(15467));
-            Note(report, Flush(peer, "炮击销毁终点指引"));
+            var late = Flush(peer, "15467原资源终末分支");
+            Note(report, late);
+            if (late.Count(packet => packet is { Kind: 0, Opcode: 31 }) != (passive ? 1 : 0) ||
+                late.Any(packet => packet is { Kind: 0, Opcode: 115 }))
+                throw new InvalidOperationException("震颤首次15467许可须匹配真实ClearConditions且不伪造Boss确认");
+            peer.Send(39, QuestPassiveClearTcpTests.PassiveDeath(15467));
+            var duplicate = Flush(peer, "通关后重复15467");
+            Note(report, duplicate);
+            if (duplicate.Any(packet => packet is { Kind: 0, Opcode: 31 or 115 }))
+                throw new InvalidOperationException("震颤通关后的15467不能再发31或伪造115");
         }
         if (formalSettles)
             RequireRunSettlement(report, confirmationsBefore, permissionsBefore, dungeon);
-        // 震颤由炮击物件39结算，不补造key0的117。
+        // 震颤由全员终点加载结算，不补造key0的117。
         if (!tremor) peer.Send(117, check);
         int seen = report.Opcode586;
         var cleared = Flush(peer, (tremor ? "终点加载结算 " : "117 确认 ") + dungeon);
@@ -655,11 +664,23 @@ internal static partial class AntonTcpProbe
         BinaryPrimitives.WriteUInt64LittleEndian(check.AsSpan(17), 504);
         if (dungeon is 212 or 214)
         {
-            if (leaderReport.Opcode31 != leaderPermissions || memberReport.Opcode31 != memberPermissions)
-                throw new InvalidOperationException("双人震颤炮击落地前提前许可菜单");
+            bool passive = TremorUsesPassiveTerminal(catalog, dungeon, info.Body[7]);
             leader.Send(39, QuestPassiveClearTcpTests.PassiveDeath(15467));
-            Note(leaderReport, Flush(leader, "炮击销毁分队终点指引"));
-            Note(memberReport, Barrier(member, "炮击分队结算"));
+            var lateLeader = Flush(leader, "15467分队原资源终末");
+            var lateMember = Barrier(member, "15467队员原资源终末");
+            Note(leaderReport, lateLeader);
+            Note(memberReport, lateMember);
+            if (new[] { lateLeader, lateMember }.Any(rows =>
+                rows.Count(packet => packet is { Kind: 0, Opcode: 31 }) != (passive ? 1 : 0) ||
+                rows.Any(packet => packet is { Kind: 0, Opcode: 115 })))
+                throw new InvalidOperationException("震颤两名成员首次15467许可须各自匹配真实资源条件");
+            leader.Send(39, QuestPassiveClearTcpTests.PassiveDeath(15467));
+            var duplicateLeader = Flush(leader, "通关后重复分队15467");
+            var duplicateMember = Barrier(member, "通关后队员15467");
+            Note(leaderReport, duplicateLeader);
+            Note(memberReport, duplicateMember);
+            if (duplicateLeader.Concat(duplicateMember).Any(packet => packet is { Kind: 0, Opcode: 31 or 115 }))
+                throw new InvalidOperationException("双人震颤通关后的15467不能再发31或伪造115");
         }
         RequireRunSettlement(leaderReport, leaderConfirmations, leaderPermissions, dungeon);
         RequireRunSettlement(memberReport, memberConfirmations, memberPermissions, dungeon);
@@ -689,6 +710,16 @@ internal static partial class AntonTcpProbe
         member.Send(42);
         Note(leaderReport, Flush(leader, "42 返回候战室"));
         Note(memberReport, Barrier(member, "42 队员返回"));
+    }
+
+    static bool TremorUsesPassiveTerminal(RaidDungeonCatalog catalog, int dungeon, byte ordinal)
+    {
+        var definition = catalog.Find(dungeon) ?? throw new InvalidDataException("震颤正式定义缺失");
+        var maze = definition.Mazes.FirstOrDefault(row => row.SourceOrdinal == ordinal)
+            ?? throw new InvalidDataException("震颤原迷宫缺失");
+        return maze.ClearConditions.Count == 0 ? false :
+            maze.ClearConditions.SequenceEqual([new DungeonClearCondition("destroy object", 15467, 1)]) ? true :
+                throw new InvalidDataException("震颤资源不是已验证的空条件或15467单物件条件");
     }
 
     static void SameSquadMap(WirePacket leader, WirePacket? member)

@@ -35,6 +35,24 @@ internal static class FiendwarPacketTests
         Bytes(PreyRewardPackets.FiendwarTeamResults([(0x1234, offer)]),
             [3, 1, 0x34, 0x12, 0, 1, 0, 0x78, 0x56, 0x34, 0x12, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
             "漩涡第二页完整wire3、owner和16B产物的独立字节预期");
+        var goldOffer = new RaidRewardOffer(0, 0, [new(10306741, 1), new(10306750, 10)], [])
+        {
+            PreyDisplay =
+            [
+                new(1, 10306741, 1, 0, 0, 0),
+                new(1, 10306750, 10, 0, 0, 0)
+            ]
+        };
+        Bytes(PreyRewardPackets.FiendwarTeamResults([(0x1234, goldOffer)]),
+            [3, 1, 0x34, 0x12, 0, 2,
+             1, 0xB5, 0x44, 0x9D, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+             1, 0xBE, 0x44, 0x9D, 0, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            "漩涡金牌双产物团队页为每条16B结果保留code=1");
+        Bytes(PreyRewardPackets.Reward(0x1234, goldOffer with { Card = 3 }, RaidKind.Fiendwar),
+            [0, 1, 0x34, 0x12, 3, 2,
+             1, 0xB5, 0x44, 0x9D, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+             1, 0xBE, 0x44, 0x9D, 0, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            "漩涡金牌本人选牌为每条16B结果保留code=1");
         Reject<InvalidDataException>(() => PreyRewardPackets.FiendwarTeamResults([(1, offer), (1, offer)]),
             "完整团队表拒绝重复owner");
         Reject<InvalidDataException>(() => PreyRewardPackets.FiendwarTeamResults([(1, offer with { Kind = 1 })]),

@@ -9,6 +9,7 @@ namespace DfoServer.Game.Session;
 
 internal sealed record DungeonEnterCountReceipt(long Generation, long Epoch, Character Character, int Day,
     ImmutableArray<DungeonEnterCount> Counts);
+internal sealed record ParticularHellCountReceipt(long Generation, long Epoch, Character Character, int Day, uint Total, uint Used);
 
 internal sealed partial class GameSession
 {
@@ -92,6 +93,23 @@ internal sealed partial class GameSession
         towns.Areas.TryGetValue((character.Position.Town, character.Position.Area), out var area) &&
         area.DungeonWorldMap is { } world && towns.DungeonMaps.TryGetValue(world, out var map) &&
         map.Options.Any(option => option.DungeonId == 530));
+
+    public ParticularHellCountReceipt? CaptureParticularHellCount(bool onlyForSelection = false) => owner.Execute(() =>
+    {
+        if (Selected is not { } character || incounts?.ParticularHellRow is not { } row) return null;
+        if (onlyForSelection && (!towns.Areas.TryGetValue((character.Position.Town, character.Position.Area), out var area) ||
+            area.DungeonWorldMap is not { } world || !towns.DungeonMaps.TryGetValue(world, out var map) ||
+            !map.Options.Any(option => option.DungeonId == 316))) return null;
+        var now = IncountNow();
+        var period = DungeonIncountPolicy.Period(now, incounts.WeeklyResetDay(row.CountKey));
+        var usage = repository.LoadDungeonIncount(owner, character.Id, row.CountKey, period);
+        return new ParticularHellCountReceipt(owner.Generation, SelectionEpoch, character, period.Day,
+            checked((uint)(row.Limit + usage.DailyExtra)), checked((uint)usage.DailyUsed));
+    });
+
+    public bool CanPublishParticularHellCount(ParticularHellCountReceipt receipt) => owner.Execute(() =>
+        owner.Generation == receipt.Generation && SelectionEpoch == receipt.Epoch && ReferenceEquals(Selected, receipt.Character) &&
+        DungeonIncountPolicy.Period(IncountNow()).Day == receipt.Day);
     public bool CanPublishDungeonEnterCounts(DungeonEnterCountReceipt receipt) => owner.Execute(() =>
         owner.Generation == receipt.Generation && SelectionEpoch == receipt.Epoch && ReferenceEquals(Selected, receipt.Character) &&
         ShopPurchaseCount.Today((timeProvider ?? TimeProvider.System).GetUtcNow()) == receipt.Day);

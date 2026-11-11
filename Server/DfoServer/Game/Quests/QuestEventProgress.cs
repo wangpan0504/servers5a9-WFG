@@ -47,7 +47,7 @@ internal static class QuestEventProgress
             (quest.IntData[0] == -1 || quest.IntData[0] == grade));
     }
 
-    static int? EffectiveGrade(StoryQuest quest, QuestCatalog quests)
+    internal static int? EffectiveGrade(StoryQuest quest, QuestCatalog quests)
     {
         var visited = new HashSet<int>();
         while (quest.MainQuest is > 0 && visited.Add(quest.Id) && quests.TryGet(quest.MainQuest.Value, out var parent)) quest = parent;

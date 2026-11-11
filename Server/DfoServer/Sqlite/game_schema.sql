@@ -2136,7 +2136,7 @@ CREATE TABLE character_beast_stage_rewards(
         );
 
 CREATE TABLE IF NOT EXISTS character_rename_pending(
-  character_id INTEGER NOT NULL,account TEXT NOT NULL,source_uid INTEGER NOT NULL CHECK(source_uid>0),
+  character_id INTEGER NOT NULL,account TEXT NOT NULL,source_uid INTEGER NOT NULL CHECK(source_uid>=0),
   PRIMARY KEY(character_id),FOREIGN KEY(character_id,account) REFERENCES characters(id,account));
 
 CREATE TABLE IF NOT EXISTS character_name_history(
@@ -2685,6 +2685,31 @@ CREATE UNIQUE INDEX account_mock_battle_active ON account_monster_mock_battle_ru
             FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
         );
 
+CREATE TABLE character_various_buffs(
+    character_id INTEGER PRIMARY KEY,
+    account TEXT NOT NULL,
+    buffs TEXT NOT NULL CHECK(json_valid(buffs)),
+    FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
+) STRICT;
+CREATE TABLE account_returning_mission_progress(
+    account TEXT NOT NULL,
+    period_until INTEGER NOT NULL CHECK(period_until BETWEEN 1 AND 4294967295),
+    mission_id INTEGER NOT NULL CHECK(mission_id BETWEEN 1 AND 100),
+    progress INTEGER NOT NULL CHECK(progress BETWEEN 0 AND 4294967295),
+    PRIMARY KEY(account,period_until,mission_id)
+) STRICT;
+CREATE TABLE account_returning_reward_claims(
+    account TEXT NOT NULL,
+    period_until INTEGER NOT NULL CHECK(period_until BETWEEN 1 AND 4294967295),
+    action INTEGER NOT NULL CHECK(action IN (1,3,4)),
+    argument INTEGER NOT NULL CHECK(argument BETWEEN 0 AND 100),
+    day INTEGER NOT NULL,
+    recipient_id INTEGER NOT NULL,
+    item_id INTEGER NOT NULL CHECK(item_id>0),
+    item_count INTEGER NOT NULL CHECK(item_count>0),
+    claimed_at INTEGER NOT NULL,
+    PRIMARY KEY(account,period_until,action,argument,day)
+) STRICT;
 CREATE TABLE IF NOT EXISTS character_npc_bookmarks(
             character_id INTEGER PRIMARY KEY,
             account TEXT NOT NULL,

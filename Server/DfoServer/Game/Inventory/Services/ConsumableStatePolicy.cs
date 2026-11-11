@@ -54,6 +54,7 @@ internal static class ConsumableStatePolicy
         definition.ItemId == itemId || definition.RevivalBlessing && ConsumableSpecialItems.IsRevivalBlessing(itemId) ||
         ConsumableSpecialItems.IsStaminaRecovery(definition.ItemId) && ConsumableSpecialItems.IsStaminaRecovery(itemId) ||
         definition.EpicDropBuff?.IsFamilyItem(itemId) == true || definition.HellLegendEpicDropBuff?.IsFamilyItem(itemId) == true ||
+        definition.DungeonEpicDropBuff?.IsFamilyItem(itemId) == true ||
         definition.VillageMoveSpeedBuff?.IsFamilyItem(itemId) == true || definition.EnhancementPotion?.IsFamilyItem(itemId) == true ||
         definition.TreasureHunterPotion is not null && TreasureHunterPotionDefinition.FamilyItems.Contains(itemId);
 

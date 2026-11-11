@@ -95,8 +95,10 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
         bool seriaLuck = events?.Read(ServerEventService.SeriaLuckId).Active ?? true;
         bool hongbao = events?.Read(ServerEventService.GuildHongbaoId).Active ?? true;
         bool jonathan = events?.Read(ServerEventService.JonathanVisibilityId).Active ?? true;
+        bool weeklyDungeon = events?.Read(ServerEventService.WeeklyDungeonVisibilityId).Active ?? true;
         // 关闭只阻止新购买和新发放；保留原入口供已付费红包领取、退款和查询。
         if (jonathan) openEvents = [JonathanVisibleEvent, .. openEvents];
+        if (weeklyDungeon) openEvents = [.. openEvents, ServerEventService.WeeklyDungeonVisibilityId];
         openEvents = [GuildHongbaoPackets.OpenEvent, .. openEvents];
         bool nolanVisible = events?.Read(ServerEventService.NolanVisibilityId).Active == true;
         if (nolanVisible)
@@ -136,6 +138,7 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
         List<ushort> activeEvents = [];
         if (endless) activeEvents.Add(Game.Events.EndlessAdventurePolicy.EventId);
         if (jonathan) activeEvents.Add(JonathanVisibleEvent);
+        if (weeklyDungeon) activeEvents.Add(ServerEventService.WeeklyDungeonVisibilityId);
         if (onlineEnabled) activeEvents.Add(ServerEventService.PcRoomTimePointId);
         if (attendanceEnabled) activeEvents.Add(ServerEventService.DailyAttendanceId);
         if (weeklyEnabled) activeEvents.Add(ServerEventService.WeeklyAttendanceId);
@@ -219,7 +222,7 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
         await context.Notify(NotiPacketType.USERINFO,
             TownPackets.Actor(context.Session.ReadSkillCharacter(expected), grade, context.Channel,
                 timer.GetUtcNow().ToUnixTimeSeconds(), context.Session.ReadAdventureName(),
-                premiumPcRoom: context.Session.PremiumPcRoom), "pvp_grade_recovered", Current);
+                premiumPcRoom: context.Session.PremiumPcRoom, returningAdventurerType: context.Session.ReturningAdventurerType), "pvp_grade_recovered", Current);
     }
 
     public async Task OtherPlayerAsync(GameConnectionContext context, DfoServer.Game.Session.PublicCharacterSnapshot snapshot,
@@ -229,7 +232,7 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
         var now = timer.GetUtcNow();
         var actor = TownPackets.Actor(character, snapshot.PvpGrade, snapshot.Channel, now.ToUnixTimeSeconds(), snapshot.AdventureName,
             snapshot.Phase == DfoServer.Game.Session.SessionPhase.Town ? ActorSceneState.Town : ActorSceneState.Dungeon,
-            snapshot.PremiumPcRoom);
+            snapshot.PremiumPcRoom, returningAdventurerType: snapshot.ReturningAdventurerType);
         var player = TownPackets.OtherPlayer(character, stats.Compute(character), snapshot.AdventureLevel,
             snapshot.Channel, now);
         // 公开属性依赖同一目标的Actor身份，不能复用本人Player或接收者的资产。
@@ -265,9 +268,11 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
             await settings.PreloadGameOptionsAsync(context, settingReceipt);
         var appearanceTime = timer.GetUtcNow();
         bool premiumPcRoom = context.Session.PremiumPcRoom;
+        // 原生Player初始化消费幸运名单，必须先于本人Actor及技能表建立资格。
+        AdventurerBenefitProjection.PostLucky(context);
         await context.Notify(NotiPacketType.USERINFO,
             TownPackets.Actor(context.Session.ReadSkillCharacter(c), context.Session.ReadPvpGrade(c), context.Channel, appearanceTime.ToUnixTimeSeconds(), context.Session.ReadAdventureName(),
-                premiumPcRoom: premiumPcRoom), "actor");
+                premiumPcRoom: premiumPcRoom, returningAdventurerType: context.Session.ReturningAdventurerType), "actor");
         context.Premiums?.RecordPremiumAppearance(c, appearanceTime.ToUnixTimeSeconds(), premiumPcRoom);
         // Actor先建立本人对象；穿戴表装载前恢复装备准入技能，避免光剑、拳套、扫把被客户端按空技能树卸下。
         if (c.Learning.Initialized)
@@ -276,9 +281,11 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
             TownPackets.Player(context.Session.ReadSkillCharacter(c), stats.Compute(context.Session.ReadSkillCharacter(c)), context.Session.ReadAdventureLevel(), context.Channel, appearanceTime), "player");
         await PrivilegeServiceProjection.PostAsync(context, initialization: true);
         await PcRoomBuffProjection.PostAsync(context);
+        AdventurerBenefitProjection.Post(context, clear: true, force: true);
         await GuildTrainingProjection.PostAsync(context, clear: true);
         await BossSelectionBuffProjection.PostAsync(context, force: true);
         await HellLegendBuffProjection.PostAsync(context, force: true);
+        await DungeonEpicBuffProjection.PostAsync(context, force: true);
         await DungeonEnterCountProjection.RefreshAsync(context, dungeons);
         // 本人Actor初始职位为6；成员名单和70均不会设置它，必须由127独立安装权限索引。
         await context.Notify(NotiPacketType.GUILD_MEMBER_INFO, [c.Guild?.Grade ?? (byte)100], "guild_member_grade_initialize");
@@ -335,6 +342,7 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
                 "dungeon_enter_count_initialize");
         await DimensionEntranceProjection.RefreshAsync(context);
         await DimensionEntranceProjection.AncientAsync(context);
+        await RiftDailyProjection.RefreshParticularHellAsync(context);
         if (mailbox is not null)
             await mailbox.InitializeAsync(context);
         if (marriage is not null)
@@ -415,6 +423,7 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
         foreach (var count in context.Session.EnterCounts())
             await context.Notify(NotiPacketType.DUNGEON_ENTER_COUNT_INFO, DungeonEnterCountPackets.Remaining(count), "dungeon_enter_count_daily", Guard);
         await DungeonEnterCountProjection.RefreshAsync(context, dungeons, Guard);
+        await RiftDailyProjection.RefreshParticularHellAsync(context, Guard);
         if (adventure is not null) await adventure.InformationAsync(context);
         if (context.Premiums is { } premiums) await premiums.RefreshAsync();
         if (context.BoosterUses is { } boosters) await boosters.RefreshAsync();
@@ -695,6 +704,7 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
         await GuildTrainingProjection.PostAsync(context, clear: true);
         await BossSelectionBuffProjection.PostAsync(context, force: true, canSend: CanSend);
         await HellLegendBuffProjection.PostAsync(context, force: true, canSend: CanSend);
+        await DungeonEpicBuffProjection.PostAsync(context, force: true, canSend: CanSend);
         if (context.Session.RaidStatusSnapshot() is { } raid)
         {
             // 业务Town可早于24写出；时钟资格提交不得把成功演出投到仍在图内的原生场景。
@@ -712,6 +722,17 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
             if (!context.Sender.TryPost(0, (ushort)NotiPacketType.AREA_USERS, TownPackets.Transition(receipt.Character),
                 action, CanSend, afterWritten: SceneWritten))
                 throw new IOException("Raid return scene queue unavailable");
+            // 42在排队发布里会跳过Drain，24的写后回调因此落在ACK 1278之后。引导奖励须把601紧跟24入队，探针才能在屏障内看到演出。
+            if (raid.Battle.PreyGuide)
+            {
+                var follow = raid.Battle.View;
+                bool Follow() => CanSend() && raid.Actor.IsCurrent &&
+                    ReferenceEquals(context.Session.CurrentRaidBattle(raid.Actor), raid.Battle) &&
+                    follow.State == Game.Raids.AntonRaidBattleState.Reward && follow.Phase == raid.View.Phase &&
+                    !follow.PhaseExpired && !follow.ClockFaulted && context.Session.CanPublishRaidBattle(raid.Actor, follow);
+                if (context.Owner.Execute(Follow))
+                    RaidCombatProjection.PostState(context, follow, raid.Actor, Follow, "raid_return_state", sceneFollowsQueuedAreaUsers: true);
+            }
             if (!context.Sender.IsPublicationQueued) await context.Sender.DrainAsync();
         }
         else

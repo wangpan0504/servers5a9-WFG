@@ -461,8 +461,10 @@ internal static class MonsterMockBattleTcpTests
             }));
             That(packets.Single(row => row is { Kind: 1, Opcode: 19 }).Body[0] == 1,
                 "真实CMD19时装穿脱成功");
-            That(packets.Any(row => row is { Kind: 0, Opcode: 1681 }) && packets.Any(row => row is { Kind: 0, Opcode: 2 }),
-                "时装穿脱保留库存差量与本人外观刷新");
+            That(packets.Count(row => row is { Kind: 0, Opcode: 13 } && row.Body[0] == 1) == 1 &&
+                packets.All(row => row is not { Kind: 0, Opcode: 1681 }) &&
+                packets.Count(row => row is { Kind: 0, Opcode: 2 }) == 2,
+                "时装穿脱按最新静默整表协议刷新Avatar及本人Actor/Player，不重引入1681新物品黄框");
             That(packets.All(row => row is not { Kind: 0, Opcode: 1766 }),
                 "背包快照变化但完整模拟战状态相同，不重复发送1766");
         }

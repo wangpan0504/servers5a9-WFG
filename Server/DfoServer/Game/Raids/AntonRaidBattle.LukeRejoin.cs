@@ -11,6 +11,9 @@ internal sealed partial class AntonRaidBattle
     internal bool SupportsLukeRejoin => Kind is RaidKind.Luke or RaidKind.Fiendwar ||
         Kind == RaidKind.Prey && !PreyGuide && LukeRejoinWindow > TimeSpan.Zero;
     internal GameWorld.Raids.RaidWaitingRoom? LukeWaitingRoom => SupportsLukeRejoin ? script.WaitingRoom : null;
+    // 引导不启用重返。终局回候战只读脚本 [waiting room]，不借 LukeWaitingRoom。
+    internal GameWorld.Raids.RaidWaitingRoom? PreyGuideWaitingRoom =>
+        Kind == RaidKind.Prey && PreyGuide ? script.WaitingRoom : null;
     bool LukeRejoinOpenLocked() => SupportsLukeRejoin && current.State != AntonRaidBattleState.Completed &&
         !current.ClockFaulted && !current.PhaseExpired && !LukePhaseDueLocked();
 

@@ -194,9 +194,9 @@ internal static class WorldMapHoverTests
         string projection = File.ReadAllText(Path.Combine(ServerRoot(), "Network", "Projection", "TownProjection.cs"));
         That(projection.Contains("DUNGEON_PERMISSION", StringComparison.Ordinal) &&
             projection.Contains("worldmap_hover_dungeon_permission", StringComparison.Ordinal) &&
-            !projection.Contains("PARTICULAR_HELL", StringComparison.Ordinal) &&
+            projection.Contains("RiftDailyProjection.RefreshParticularHellAsync(context)", StringComparison.Ordinal) &&
             !projection.Contains("CRACK_OF_DAYBREAK", StringComparison.Ordinal),
-            "选角入城发送世界地图悬浮开通包，不发送裂缝次数包");
+            "选角入城保留世界地图悬浮开通并恢复魔界角色次数，黎明仍按区域发送");
 
         Console.WriteLine("world-map hover 77 " + names[8523] + " id 8523");
         Console.WriteLine("world-map hover 148 " + names[291100373] + " / " + names[291100374]);

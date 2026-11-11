@@ -34,7 +34,8 @@ internal static class BattlePassUndefeatedSongSource
         long declared = 0;
         foreach (var row in prepared.Grants.Where(row => row.ItemId == ItemId))
         {
-            if (row.Count <= 0) throw new InvalidDataException("原攻坚材料奖励数量无效");
+            if (row.Count < 0) throw new InvalidDataException("原攻坚材料奖励数量无效");
+            if (row.Count == 0) continue;
             declared = checked(declared + row.Count);
         }
         long overflow = 0;
@@ -57,7 +58,7 @@ internal static class BattlePassUndefeatedSongSource
                 plan.AccountMaterialRaidWeek != AccountMaterialService.RaidWeek(now))
                 throw new InvalidDataException("不渝之咏攻坚账号材料规划不一致");
             var expected = plan.Before;
-            foreach (var row in prepared.Grants.Where(row => row.ItemId == ItemId))
+            foreach (var row in prepared.Grants.Where(row => row.ItemId == ItemId && row.Count > 0))
             {
                 var grant = AccountMaterialService.Grant(expected, prepared.Character, ItemId, row.Count, definition, now, raidReward: true);
                 if (!grant.Accepted || grant.Plan is null)

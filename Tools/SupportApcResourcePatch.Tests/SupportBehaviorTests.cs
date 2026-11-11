@@ -18,6 +18,20 @@ internal static class SupportBehaviorTests
             int buff = definition.Id switch { 20900 => 45, 9986 => 30, 74990 => 14, _ => 335 };
             replay.Skills.UnionWith(ordinals.Keys);
             Check(replay.Run() == -1, "All sufficient buffs without enemy must stay idle");
+            if (definition.Id is 74990 or 19973)
+            {
+                int first = definition.Id == 74990 ? 14 : 330;
+                int second = definition.Id == 74990 ? 21 : 335;
+                int heal = definition.Id == 74990 ? 3 : 367;
+                replay.Hp = 20; replay.Buffs.Remove(first); replay.Buffs.Remove(second);
+                Check(replay.Run() == ordinals[first], "Opening first buff preempts low-health healing");
+                replay.Buffs.Add(first);
+                Check(replay.Run() == ordinals[second], "Opening second buff preempts low-health healing");
+                replay.Buffs.Add(second);
+                Check(replay.Run() == ordinals[heal], "Healing resumes after opening buffs are sufficient");
+                replay.Hp = 100;
+                Check(replay.Run() == -1, "Opening completion does not repeat sufficient buffs");
+            }
             // 攻击测试只开放小技能，避免已有增益觉醒合法分支遮挡。
             replay.Skills.Clear(); replay.Skills.Add(small);
             foreach (int rank in new[] { 0, 1, 2, 3 })

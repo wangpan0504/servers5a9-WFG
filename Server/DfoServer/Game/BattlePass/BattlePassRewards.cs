@@ -48,6 +48,9 @@ internal sealed record BattlePassRewardResult(bool Accepted, ushort Error, Battl
 internal sealed class BattlePassRewardService(BattlePassCatalog catalog, ItemCatalog items,
     GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, TimeProvider? clock = null, Func<DateTimeOffset, bool>? available = null)
 {
+    internal const string OverflowMailSender = "阿拉德探险记";
+    internal const string OverflowMailText = "背包空间不足，奖励已通过邮件发放。";
+
     public BattlePassRewardResult Plan(Character character, BattlePassSeasonState state, byte action, byte track, uint key)
     {
         if (available?.Invoke((clock ?? TimeProvider.System).GetUtcNow()) == false)
@@ -112,8 +115,9 @@ internal sealed class BattlePassRewardService(BattlePassCatalog catalog, ItemCat
                 if (!pieces.ByPiece.ContainsKey(reward.ItemId) && CurrencyWallet.RewardKind(reward.ItemId) is null &&
                     !items.TryGet(reward.ItemId, out _))
                     return BattlePassRewardResult.Reject(reason: "battle_pass_reward_definition");
+            // 普通物品沿共享发放：能入包的入包，放不下的完整实例转溢出邮件。钱包/碎片仍须足额入账。
             granted = InventoryRewardGrantService.TryGrantBatch(character, rewards, items, goldLimits, pieces,
-                (clock ?? TimeProvider.System).GetUtcNow());
+                utcNow: (clock ?? TimeProvider.System).GetUtcNow(), allowOverflowMail: true);
         }
         catch (InvalidDataException) { return BattlePassRewardResult.Reject(reason: "battle_pass_reward_definition"); }
         catch (OverflowException) { return BattlePassRewardResult.Reject(reason: "battle_pass_reward_overflow"); }
@@ -136,7 +140,9 @@ internal sealed class BattlePassRewardService(BattlePassCatalog catalog, ItemCat
             EquipmentSlotFlagsAfter = grant.EquipmentSlotFlagsAfter,
             UnlockSkillTree = grant.UnlockSkillTree,
             GuildHongbaoPurchase = grant.GuildHongbaoPurchase,
-            RequiredEvent = grant.RequiredEvent
+            RequiredEvent = grant.RequiredEvent,
+            OverflowMailSender = BattlePassRewardService.OverflowMailSender,
+            OverflowMailText = BattlePassRewardService.OverflowMailText
         };
         // 此处只是规划。仓储在完整发奖与唯一领取事实的同一事务中推进一次版本。
         var after = state with { Claims = state.Claims.Union(keys) };

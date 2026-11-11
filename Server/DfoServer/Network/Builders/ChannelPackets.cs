@@ -66,22 +66,6 @@ internal static class ChannelPackets
         return output.ToArray();
     }
 
-    // CHANNEL_EVILDOM_WAR：ARAD 频道类型名表 03EFBF1D 写入 0x36。
-    const int EvildomWarType = 0x36;
-    // 0233EF02原样写入0x40，028FA2F0独立判断英雄频道，不能替换为普通战役0x36。
-    const int EvildomWarChallengeType = 0x40;
-    // CHANNEL_FIEND_WAR：超时空之战频道 39 [fiendwar]。
-    const int FiendWarType = 0x2D;
-    // CHANNEL_PREY_RAID：普雷频道 42 [prey]。选角前 03B55580 经 02330DF0 读 +0x1010，cmp 0x32 → 名册 +0x494（tail[41]），为 0 弹 1099 / dstr 32116；
-    // RaidModeSelectWindow 014C0D40 按 +0x1010-0x20 跳表，0x32 → 信息框下标 2；ACK LOGIN 处理器的 03EF95B0 改写列表不含 0x32，原样写入。
-    const int PreyRaidType = 0x32;
-    const int AntonRaidType = 0x17;
-    const int LukeRaidType = 0x20;
-    // 再战魔界：028FA250按+1010==0x35选择双角色UI和9608/400000095；该字段由ACK LOGIN类型写入。
-    const int EvildomGatheringType = 0x35;
-    // CHANNEL_DPL_PVE：03EFBF5E登记0x37，moveDPLPVEChannel经016EA08B选择该类型；ACK LOGIN保留真实模式。
-    const int DplPveType = 0x37;
-
     // ACK LOGIN 正文第 0 字节是结果，之后 ARAD 0233EA10 依次读 u8 年龄 [ebp-0x34b]、u8 网吧 [ebp-0x347]、u8 频道类型 [ebp-0x336]；
     // 频道类型经 0233EF02 → 028FA920 写入频道对象 +0x1010（02330DF0 读出），RaidModeSelectWindow 打开时 014C0D40 按它选信息框下标：
     // 0x36 → 3（Lv95、4 人、+12 史诗武器、抗魔 5382、疲劳 30，表 0530C088..0530C0D8），其余未列类型 → 4，填字函数 014BF460 遇 4 直接跳过，
@@ -95,8 +79,7 @@ internal static class ChannelPackets
     // 页签与换频道快照谓词读脚本类型（+8），不读 +0x1010。证据：evidence/anton-luke-channel-type-audit-20261021.txt。
     // 03EF95B0/028FA230将4纳入普通决斗准入；01714BC0/01714BCD：8显示无双决斗场，24显示传统决斗场；LOGIN均保留实际类型。
     // 普通type22用于冒险团页准入（012AE420→028FB170）；其他未确认入口继续发0，避免扩大客户端模式变化。
-    public static byte LoginChannelType(ChannelEntry channel) =>
-        channel.Type is 40 or 4 or 5 or 8 or 13 or 24 or 22 or 39 or AntonRaidType or LukeRaidType or EvildomWarType or EvildomWarChallengeType or FiendWarType or PreyRaidType or EvildomGatheringType or DplPveType ? (byte)channel.Type : (byte)0;
+    public static byte LoginChannelType(ChannelEntry channel) => channel.LoginType;
 
     public static byte[] Endpoint(string address, int port, uint association = 0, byte channelType = 0)
     {

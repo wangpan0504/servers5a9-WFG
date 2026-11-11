@@ -137,8 +137,7 @@ internal static class AvatarPresetTcpTests
                 writer.Write((byte)1); writer.Write((byte)1); writer.Write((short)0); writer.Write(1);
                 writer.Write((byte)3); writer.Write((short)3);
             }));
-            peer.Expect(0, 1681);
-            peer.Expect(0, 1681);
+            peer.Expect(0, 13);
             // 当前橱窗跟着换装实时回写，服务端必须把新内容补回客户端缓存；否则装扮栏预览停在旧内容。
             var resampled = ParseRecord(peer.Expect(0, Update).Body);
             That(resampled is { Slot: 0, Name: "第二格" } && resampled.Parts.Length == 1 &&
@@ -179,8 +178,7 @@ internal static class AvatarPresetTcpTests
                 writer.Write((byte)1); writer.Write((byte)1); writer.Write((short)0); writer.Write(1);
                 writer.Write((byte)3); writer.Write((short)3);
             }));
-            peer.Expect(0, 1681);
-            peer.Expect(0, 1681);
+            peer.Expect(0, 13);
             var resampledActive = ParseRecord(peer.Expect(0, Update).Body);
             That(resampledActive is { Slot: 1, Name: "改名" } && resampledActive.Parts.Length == 1 &&
                 resampledActive.Parts[0] is { Slot: 3, Color1: 11, Color2: 13 },

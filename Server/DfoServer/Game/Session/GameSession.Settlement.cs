@@ -231,7 +231,7 @@ internal sealed partial class GameSession
                 GrowthContractExperience = bonuses.Amount(ExperienceBonusSource.GrowthContract),
                 PotionExperience = bonuses.Amount(ExperienceBonusSource.Potion), AdventureExperience = adventureBonus };
         }
-        if (dungeon.Settlement is null && !((dungeon.Entry.IsTutorial || dungeon.Entry.DisableMonsterAndClearExperience) && reward.TotalExperience == 0) &&
+        if (dungeon.Settlement is null && !(dungeon.Entry.AllowsZeroClearExperience && reward.TotalExperience == 0) &&
             !CharacterGrowthPlan.AddExperience(Selected!, reward.TotalExperience, growth).Success)
             return new FormalDungeonSettlementResult(DungeonRunOutcome.Rejected);
         var ancientGate = dungeon.Settlement?.Pending.AncientGate ?? (dungeon.Entry.DungeonId is >= 7101 and <= 7107 && !dungeon.Entry.IsPractice
@@ -721,7 +721,7 @@ internal sealed partial class GameSession
             formalDungeon is not { HellTicket: not null, HellPieces: { } pieces } dungeon ||
             Selected is not { } character) return false;
         if (dungeon.Entry.UsesFatigue && FatigueForClient(character).Remaining == 0 ||
-            debugSettings?.InfiniteFatigue != true && dungeon.Entry.StartFatigue > 0 &&
+            !InfiniteFatigue && dungeon.Entry.StartFatigue > 0 &&
             (character.Fatigue is not { } fatigue || fatigue.Remaining < dungeon.Entry.StartFatigue ||
              FatigueForClient(character).Remaining < dungeon.Entry.StartFatigue)) return false;
         if (!towns.Areas.TryGetValue((character.Position.Town, character.Position.Area), out var area) ||
@@ -741,7 +741,7 @@ internal sealed partial class GameSession
             Selected is not { } character) return false;
         if (serverEvents?.Read(Game.Events.ServerEventService.EpicRoadId).Active != true) return false;
         if (dungeon.Entry.UsesFatigue && FatigueForClient(character).Remaining == 0 ||
-            debugSettings?.InfiniteFatigue != true && dungeon.Entry.StartFatigue > 0 &&
+            !InfiniteFatigue && dungeon.Entry.StartFatigue > 0 &&
             (character.Fatigue is not { } fatigue || fatigue.Remaining < dungeon.Entry.StartFatigue ||
              FatigueForClient(character).Remaining < dungeon.Entry.StartFatigue)) return false;
         var done = QuestEligibility.Completed(character);

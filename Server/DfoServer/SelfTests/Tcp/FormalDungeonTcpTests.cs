@@ -109,7 +109,12 @@ internal static partial class FormalDungeonTcpTests
                     DfoServer.Game.Inventory.Services.InventoryRewardGrantService.Create(items.Items.Get(100331240)) with { ExpireTime = 0 });
                 DfoServer.Game.Inventory.Services.InventoryService.Commit(repository, owner, character,
                     new(true, 0, new(character.Inventory, character.Inventory with
-                    { Items = character.Inventory.Items.Where(item => item.Position != goldTitle.Position).Append(goldTitle).ToImmutableArray() },
+                    {
+                        // 累计资源的随机金币可超过低等级容量；本组显式准备扩容资格，验证完整拾取和出售成功链。
+                        // 不改角色等级或生产容量规则，金币上限拒绝由货币专项验证。
+                        GoldCarryLimit = CurrencyService.ExpandedLimit(4),
+                        Items = character.Inventory.Items.Where(item => item.Position != goldTitle.Position).Append(goldTitle).ToImmutableArray()
+                    },
                     "gold-bonus-tcp-fixture", new(character))));
             }
             fixture.Sql("UPDATE character_dungeon_state SET next_object_key=65536 WHERE character_id=$p0", peer.Id);
@@ -583,7 +588,7 @@ internal static partial class FormalDungeonTcpTests
                     SelfTestCatalogs.Quests(resources.Archive).Get(3145), SelfTestCatalogs.QuestRewardParameters(resources.Archive)).Amount;
             peer.Send(34, Convert.FromHexString("2200490CFFFF0100FFFF"));
             byte[] questAck = peer.Expect(1, 34).Body;
-            int[] rewards = [10165055, 101010438, 10403, 12403, 14403, 16403, 18403];
+            int[] rewards = [10165055, 10005531, 8050536, 12403, 14403, 16403, 18403];
             var rewardSlots = new Dictionary<ushort, int>();
             That(questAck.Length == 143 && questAck[0] == 1 && U16(questAck, 1) == 3145 && questAck[3] == 3 &&
                 U32(questAck, 4) == questExperience && questAck[8] == 0 && questAck[9] == 7,
@@ -593,7 +598,7 @@ internal static partial class FormalDungeonTcpTests
                 int at = 10 + 19 * index;
                 ushort slot = U16(questAck, at);
                 That(rewardSlots.TryAdd(slot, rewards[index]) && U32(questAck, at + 2) == rewards[index] &&
-                    U32(questAck, at + 6) == (index == 0 ? 1u : 999999998u), "七项任务奖励原序/实际槽/数量或特殊品级来源");
+                    U32(questAck, at + 6) == (index < 3 ? 1u : 999999998u), "七项任务奖励原序/实际槽/礼盒数量或装备特殊品级来源");
                 var row = fixture.Query("""
                     SELECT i.item_uid,i.item_core FROM character_inventory_items i JOIN character_inventory_slots s ON s.item_uid=i.item_uid
                     WHERE s.character_id=$p0 AND s.list_type=0 AND s.slot_index=$p1
@@ -676,8 +681,9 @@ internal static partial class FormalDungeonTcpTests
             That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort,line,out var text),"GM调试端口返回 " + line);
             return text;
         }
-        That(Command("infinite-fatigue") == "OK {\"infiniteFatigue\":true}" &&
-            Command("cash-shop-expiration") == "OK {\"ignoreAbsoluteExpiration\":true}", "两个调试开关默认开启");
+        That(Command("infinite-fatigue") == "OK {\"infiniteFatigue\":false}" &&
+            Command("cash-shop-expiration") == "OK {\"ignoreAbsoluteExpiration\":true}", "无限疲劳默认关闭，商城绝对期限默认开启");
+        That(Command("infinite-fatigue on").StartsWith("OK "), "本账号显式开启无限模式");
         using (var peer = Open(fixture))
         {
             peer.Create("InfiniteTcp");
@@ -730,8 +736,8 @@ internal static partial class FormalDungeonTcpTests
         VerifyExhaustedOrdinaryRetry(fixture, resources);
         await fixture.StopAsync();
         await fixture.StartAsync("restart");
-        That(Command("infinite-fatigue") == "OK {\"infiniteFatigue\":true}" &&
-            Command("cash-shop-expiration") == "OK {\"ignoreAbsoluteExpiration\":true}", "服务重建恢复两个开关默认开启");
+        That(Command("infinite-fatigue") == "OK {\"infiniteFatigue\":false}" &&
+            Command("cash-shop-expiration") == "OK {\"ignoreAbsoluteExpiration\":true}", "服务重建保持本账号无限疲劳关闭与商城默认开启");
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0,
             "调试切换保留SQLite完整性");
         await fixture.StopAsync();
@@ -1015,6 +1021,8 @@ internal static partial class FormalDungeonTcpTests
             using (var create = Open(fixture)) create.Create(name);
             That(ExecuteOfflineGm(fixture, $"level {name} {definition.MinimumLevel}", out var reply) && reply.StartsWith("OK "),
                 "独立测试角色经完整成长用例达到对应普通图等级，保留合法初装与两树状态：" + reply);
+            // 六图逐件拾取沿成功路径核对完整资源奖励；在选角前准备容量，避免随机金币填满低等级角色。
+            fixture.Sql("UPDATE characters SET gold_carry_limit=$p0 WHERE slot=$p1", CurrencyService.ExpandedLimit(4), slot);
             using var peer = Open(fixture);
             peer.Select(slot);
             EntryTown(peer);
@@ -1264,7 +1272,7 @@ internal static partial class FormalDungeonTcpTests
             "普通完整TCP挑战复用真实领奖角色，不伪造任务完成或清空活动任务");
         long[] originalRewardUids = fixture.Query("""
             SELECT item_uid FROM character_inventory_items WHERE character_id=$p0 AND
-              json_extract(item_core,'$.ItemId') IN (10165055,101010438,10403,12403,14403,16403,18403) ORDER BY item_uid
+              json_extract(item_core,'$.ItemId') IN (10165055,10005531,8050536,12403,14403,16403,18403) ORDER BY item_uid
             """, peer.Id).Select(row => Convert.ToInt64(row[0])).ToArray();
         That(originalRewardUids.Length >= 7, "普通挑战前确有完整七项领奖实例，不能用空查询证明资产保全");
         string originalRewardQuery = "SELECT item_uid,item_core FROM character_inventory_items WHERE character_id=$p0 AND item_uid IN (" +
@@ -1561,7 +1569,13 @@ internal static partial class FormalDungeonTcpTests
             long beforeReceipts = Convert.ToInt64(fixture.Query(
                 "SELECT count(*) FROM character_dungeon_drop_pickups WHERE character_id=$p0 AND receipt_format=1", peer.Id)[0][0]);
             peer.Send(43, pickup);
-            byte[] got = peer.Expect(0, 39).Body;
+            byte[] got;
+            try { got = peer.Expect(0, 39).Body; }
+            catch (InvalidOperationException exception)
+            {
+                throw new InvalidOperationException(
+                    $"正式逐件拾取失败：ground={ground}, item={itemId}, value={value}, ordinal={ordinal}", exception);
+            }
             That(U32(got, 0) == ground && U16(got, 4) == peer.Id, "逐件拾取回报本次实际地面与本人身份");
             if (itemId == 0)
             {

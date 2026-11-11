@@ -56,8 +56,10 @@ internal static class SpecialContainerTcpTests
             wornAvatar = peer.SpecialContainers[1].Body.AsSpan(5, 165).ToArray();
             peer.Send(19, Move(1, 0, 101550507, 3, 0, 0));
             peer.Expect(1, 19, Ack(1, 0, 3, 0));
-            var clear = peer.Expect(0, 1681).Body;
-            That(clear.Length == 168 && clear[0] == 1 && U32(clear, 5) == uint.MaxValue && U32(clear, 126) == 30, "avatar unequipped-list clear keeps RAW suffix");
+            var avatarList = peer.Expect(0, 13).Body;
+            That(avatarList[0] == 1 && U16(avatarList, 3) == 1 && avatarList.Length == 5 + 165 &&
+                !Enumerable.Range(0, 1).Any(_ => U16(avatarList, 5) == 0 && U32(avatarList, 7) == 101550507),
+                "时装穿上后NOTI13不再包含源格，不发14/1681新物品标记");
             var presetSync = peer.Expect(0, 1599).Body;
             That(presetSync.Length == 49 && presetSync[0] == 0 && presetSync[5] == 1,
                 "穿戴变化实时回写1号橱窗：0x063F单条在Actor之前补发且部位数为1");
@@ -68,13 +70,16 @@ internal static class SpecialContainerTcpTests
             peer.Expect(0, 105, details);
             wornPet = peer.Expect(0, 14).Body;
             That(wornPet.Length == 126 && wornPet[0] == 3 && U32(wornPet, 9) == petUid, "pet equip sends linked identity before Player");
-            peer.Expect(0, 1681);
+            var wornBag = peer.Expect(0, 13).Body;
+            That(wornBag[0] == 7 && wornBag.Length == 3 + 123 * U16(wornBag, 1),
+                "宠物穿上后背包用NOTI13全量，不发1681新物品标记");
             CreatureActor(peer.Expect(0, 2).Body, 63000, defaultPetName, "穿戴提交后的Actor创建当前宠物实体");
             peer.Expect(0, 2);
             peer.Send(19, Move(7, 140, 2680000, 3, 28, 0));
             peer.Expect(1, 19, Ack(7, 140, 3, 28));
             That(peer.Expect(0, 14).Body.Length == 126, "pet artifact uses ordinary core at Client slot28");
-            peer.Expect(0, 1681); peer.Expect(0, 2); peer.Expect(0, 2);
+            That(peer.Expect(0, 13).Body[0] == 7, "宠物装备穿上后背包用NOTI13，不发1681");
+            peer.Expect(0, 2); peer.Expect(0, 2);
             peer.Barrier();
             That(JsonSerializer.Serialize(fixture.Query("SELECT item_uid,json_remove(item_core,'$.SealFlag') FROM character_inventory_items ORDER BY item_uid")) == identities,
                 "TCP equip preserves UID and core fields other than artifact unsealing");
@@ -88,9 +93,9 @@ internal static class SpecialContainerTcpTests
             That(packets[3].Body[126] == 3, "reconnect Player includes avatar, pet and pet equipment together");
             peer.Send(19, Move(1, 2, 0, 3, 0, 101550507));
             peer.Expect(1, 19, Ack(1, 2, 3, 0));
-            That(U32(peer.Expect(0, 1681).Body, 5) == uint.MaxValue, "时装卸下先无播报清除ACK图标，随后重新装载图标effect");
-            var avatar = peer.Expect(0, 1681).Body;
-            Bytes(avatar.AsSpan(5), wornAvatar!.AsSpan(2), "reverse unequip keeps avatar extra data");
+            var avatar = peer.Expect(0, 13).Body;
+            int avatarAt = Enumerable.Range(0, U16(avatar, 3)).Select(index => 5 + index * 165).Single(index => U16(avatar, index) == 2);
+            Bytes(avatar.AsSpan(avatarAt + 2, 163), wornAvatar!.AsSpan(2), "时装卸下的NOTI13保留原165B核心，不发14/1681新物品标记");
             var presetCleared = peer.Expect(0, 1599).Body;
             That(presetCleared is [0, 0, 0, 0, 0, 0], "卸下全部时装后1号橱窗同步为空部位");
             CreatureActor(peer.Expect(0, 2).Body, 63000, defaultPetName, "时装脱下不会清空仍穿戴的宠物");
@@ -98,9 +103,9 @@ internal static class SpecialContainerTcpTests
             peer.Send(19, Move(7, 5, 0, 3, 26, 63000));
             peer.Expect(1, 19, Ack(7, 5, 3, 26));
             peer.Expect(0, 105); peer.Expect(0, 14);
-            That(U32(peer.Expect(0, 1681).Body, 5) == uint.MaxValue, "宠物卸下先无播报清除ACK图标，再完整载入以保留穿脱effect");
-            var pet = peer.Expect(0, 1681).Body;
-            Bytes(pet.AsSpan(5), wornPet!.AsSpan(5), "reverse unequip retains complete pet core");
+            var pet = peer.Expect(0, 13).Body;
+            int petAt = Enumerable.Range(0, U16(pet, 1)).Select(index => 3 + index * 123).Single(index => U16(pet, index) == 5);
+            Bytes(pet.AsSpan(petAt + 2, 121), wornPet!.AsSpan(5), "宠物卸下的NOTI13保留完整核心，不发14/1681新物品标记");
             CreatureActor(peer.Expect(0, 2).Body, 0, "", "宠物脱下提交后的Actor清除实体");
             peer.Expect(0, 2);
             peer.Barrier();

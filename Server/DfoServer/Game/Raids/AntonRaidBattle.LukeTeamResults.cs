@@ -7,6 +7,46 @@ internal sealed partial class AntonRaidBattle
     // 仅供本Battle自动收尾精确重放已提交资产，不保存另一份资格或重新规划随机结果。
     readonly Dictionary<(int Phase, ushort Character, byte Kind), PreparedRaidReward> lukeSubmittedRewards = [];
 
+    // 领取事务把不渝之咏裁到更低数量后，内存资格和成员牌面改成同一数量，供 600 与重放读取。
+    internal void ApplySettledSongOffer(RaidActor actor, int phase, RaidRewardOffer settled)
+    {
+        lock (gate)
+        {
+            byte storedCard = SelectableRewardCards ? (byte)0 : settled.Card;
+            if (members.TryGetValue(actor, out var policies) && (uint)phase < (uint)policies.Length)
+            {
+                policies = ReplaceSongPhase(policies, phase, settled, storedCard);
+                members[actor] = policies;
+                if (originalLukePolicies.ContainsKey(actor.Character))
+                    originalLukePolicies[actor.Character] = policies;
+            }
+            if (!lukePhaseCommits.TryGetValue(phase, out var committed)) return;
+            lukePhaseCommits[phase] = new(committed.Members.Select(member => member.Character != actor.Character ? member :
+                member with { Offers = ReplaceSongOffers(member.Offers, settled, storedCard) }).ToImmutableArray());
+        }
+    }
+
+    static ImmutableArray<RaidPhaseRewardPolicy> ReplaceSongPhase(ImmutableArray<RaidPhaseRewardPolicy> phases, int phase,
+        RaidRewardOffer settled, byte storedCard)
+    {
+        var policy = phases[phase];
+        return phases.SetItem(phase, policy with { Offers = ReplaceSongOffers(policy.Offers, settled, storedCard) });
+    }
+
+    static ImmutableArray<RaidRewardOffer> ReplaceSongOffers(ImmutableArray<RaidRewardOffer> offers, RaidRewardOffer settled, byte storedCard)
+    {
+        if (offers.IsDefaultOrEmpty) return offers;
+        return offers.Select(offer => offer.Kind == settled.Kind && offer.Card == storedCard
+            ? offer with
+            {
+                Grants = settled.Grants,
+                LukeResult = settled.LukeResult,
+                LukeAdditionalResults = settled.LukeAdditionalResults,
+                PreyDisplay = settled.PreyDisplay
+            }
+            : offer).ToImmutableArray();
+    }
+
     internal void RecordLukeRewardReceipt(RaidActor actor, RaidRewardReceipt receipt)
     {
         lock (gate)

@@ -6,6 +6,7 @@ namespace DfoServer.GameWorld.Characters;
 internal enum ExperienceBonusSource
 {
     GrowthContract, Potion, QuestPotion, BlackDiamond, InternetCafe, Equipment, Party, Avatar,
-    Creature, Adventure, Guild, FatigueBurning, FatigueBuff, SeriaBlessing, SeriaWelcome, FastGrowth, Event, Charm, ReturningPlayer, Channel, Buff
+    Creature, Adventure, Guild, FatigueBurning, FatigueBuff, SeriaBlessing, SeriaWelcome, FastGrowth, Event, Charm, ReturningPlayer, Channel, Buff,
+    LuckyCharacter, LuckyParty
 }
 internal sealed record ExperienceBonusPart(ExperienceBonusSource Source, uint Amount);

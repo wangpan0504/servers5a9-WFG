@@ -240,10 +240,15 @@ internal static class FiendwarGuideTcpTests
                     display.Body[1] == 1 && U16(display.Body, 2) == peer.Id && display.Body[4] == 3 &&
                     display.Body[5] > 0 && display.Body.Length == 6 + 16 * display.Body[5],
                     "引导独立原奖励非零卡位实际领取，原16B产物展示先于660成功");
-                if (kind == 0) That(teamReward is not null && display!.Body.AsSpan(6).SequenceEqual(teamReward),
-                    "引导第二页已准备的产物与本人真实资产领取完全一致");
-                else That(display!.Body[5] == 1 && U32(display.Body, 7) == 10308807 && U16(display.Body, 11) == 90,
-                    "引导沿独立资源直接显示90不渝，不套团队150或发源盒");
+                if (kind == 0)
+                {
+                    byte expectedCode = display!.Body[5] == 2 || U32(display.Body, 7) == 10309041 || U16(display.Body, 11) == 20 ? (byte)1 : (byte)0;
+                    That(teamReward is not null && display.Body.AsSpan(6).SequenceEqual(teamReward) &&
+                        Enumerable.Range(0, display.Body[5]).All(entry => display.Body[6 + entry * 16] == expectedCode),
+                        "引导第二页已准备的产物与本人真实资产领取完全一致，且普通/金牌code与产物档位匹配");
+                }
+                else That(display!.Body[5] == 1 && display.Body[6] == 0 && U32(display.Body, 7) == 10308807 && U16(display.Body, 11) == 90,
+                    "引导沿独立资源直接显示90不渝且code=0，不套团队150或发源盒");
                 string receipts = fixture.Snapshot("SELECT * FROM character_raid_reward_receipts WHERE character_id=$p0 ORDER BY kind", peer.Id);
                 string assets = fixture.Snapshot("SELECT * FROM character_inventory_items WHERE character_id=$p0 ORDER BY item_uid", peer.Id) +
                     fixture.Snapshot("SELECT * FROM account_material_balances ORDER BY account,item_id");

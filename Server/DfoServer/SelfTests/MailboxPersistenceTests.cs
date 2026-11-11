@@ -1,5 +1,6 @@
 using static DfoServer.Testing.TestCheck;
 using System.Collections.Immutable;
+using System.Reflection;
 using System.Text.Json;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
@@ -22,6 +23,9 @@ internal static class MailboxPersistenceTests
         TalismanTransfer();
         Rollback();
         ClaimDeadline();
+        OrdinaryPeriodIsolation();
+        SendDeadline();
+        ExpiredAttachmentDelete();
         ExpirationAndStorage();
         DailyGold();
         CharacterDeletion();
@@ -228,6 +232,329 @@ internal static class MailboxPersistenceTests
         f.Integrity();
     }
 
+    static void OrdinaryPeriodIsolation()
+    {
+        using var f = new Fixture();
+        var equipment = f.Sender.Inventory.Find(new(InventoryListType.Main, 9))!;
+        var avatar = f.Sender.Inventory.Find(new(InventoryListType.Avatar, 0))!;
+        var pet = f.Sender.Inventory.Find(new(InventoryListType.Pet, 0))!;
+        int expire = checked((int)(f.Now + 86400));
+        var periodCore = equipment.Core with { ExpireTime = expire };
+        var inventory = f.Sender.Inventory with { Items = f.Sender.Inventory.Items
+            .Replace(equipment, equipment with { Core = periodCore })
+            .Add(new(0, new(InventoryListType.Main, 10), periodCore)) };
+        f.Sender = f.Repository.CommitInventory(f.SenderOwner, f.Sender, new(f.Sender.Inventory, inventory, "period_pair"));
+        var live = f.Sender.Inventory.Find(new(InventoryListType.Main, 9))!;
+        var later = f.Sender.Inventory.Find(new(InventoryListType.Main, 10))!;
+        That(live.Uid == equipment.Uid && later.Uid > 0 && later.Uid != live.Uid && live.ExpireTime == expire && later.ExpireTime == expire,
+            "两件普通期限实例各自持有截止，且第二件分配了新 UID");
+        var catalog = new ItemCatalog(null!, new Dictionary<int, string>(), new Dictionary<int, string>(), 0);
+        catalog.PrefillTemplates(new Dictionary<int, ItemTemplate>
+        {
+            [50002] = new(50002, ItemKind.Equipment, 12, 1, 0, 1, 0, 0, 1, "[free]", 65535, 0, "期限") { Expiration = new(Days: 30) },
+            [50003] = new(50003, ItemKind.Avatar, 0, 1, 0, 1, 0, 0, 1, "[free]", 65535, 0, "时装"),
+            [50004] = new(50004, ItemKind.Creature, 0, 1, 0, 1, 0, 0, 1, "[free]", 65535, 0, "宠物")
+        });
+        var service = new MailboxService(f.Repository, catalog,
+            new GoldLimitCatalog("[gold limit from level]\n0 1000000000\n[/gold limit from level]"),
+            new EpicPieceCatalog("[piece list]\n50000 50001\n[/piece list]"));
+        var now = DateTimeOffset.FromUnixTimeSeconds(f.Now);
+        string before = f.Snapshot();
+        MailboxError Reject(MailboxSendRequest request)
+        {
+            var error = service.PlanSend(f.Sender, f.SenderOwner.Account, request, now, out var plan);
+            That(plan is null, "被拒绝的寄送没有计划");
+            return error;
+        }
+        That(Reject(new("Receiver", 80, [new(0, 9, 50002, 1)], "金币")) == MailboxError.InvalidAttachment &&
+            Reject(new("Receiver", 0, [new(0, 9, 50002, 1), new(1, 0, 50003, 1)], "附件")) == MailboxError.InvalidAttachment &&
+            Reject(new("Receiver", 0, [new(0, 9, 50002, 1), new(0, 10, 50002, 1)], "两件期限")) == MailboxError.InvalidAttachment &&
+            f.Snapshot() == before,
+            "普通期限不能与金币或其他附件同封，拒绝不扣资产也不写邮件");
+        var ordinary = new MailboxSendRequest("Receiver", 80, [new(1, 0, 50003, 1), new(3, 0, 50004, 1)], "金币和附件");
+        That(service.PlanSend(f.Sender, f.SenderOwner.Account, ordinary, now, out var ordinaryPlan) == MailboxError.None && ordinaryPlan is not null,
+            "没有期限附件时，金币和多附件仍可同封");
+        var sentOrdinary = service.Send(f.SenderOwner, f.Sender, ordinaryPlan!);
+        That(sentOrdinary.Accepted, "金币和多附件寄送提交成功");
+        f.Sender = sentOrdinary.Character!;
+        That(service.PlanSend(f.Sender, f.SenderOwner.Account, new("Receiver", 0, [new(0, 9, 50002, 1)], "未到期"), now, out var livePlan) == MailboxError.None,
+            "单独的未到期普通期限可以寄送");
+        var sentLive = service.Send(f.SenderOwner, f.Sender, livePlan!);
+        That(sentLive.Accepted, "第一件期限附件寄送成功");
+        f.Sender = sentLive.Character!;
+        That(service.PlanSend(f.Sender, f.SenderOwner.Account, new("Receiver", 0, [new(0, 10, 50002, 1)], "稍后到期"), now, out var laterPlan) == MailboxError.None,
+            "另一件单独的普通期限也可以寄送");
+        var sentLater = service.Send(f.SenderOwner, f.Sender, laterPlan!);
+        That(sentLater.Accepted && sentLater.Character!.Inventory.Gold == 495_616, "第二件期限附件寄送成功，三次拒绝没有多扣金币");
+        f.Sender = sentLater.Character!;
+        var page = f.Repository.LoadMailbox(f.ReceiverOwner, f.Receiver.Id, f.Now);
+        var goldMail = page.Entries.Single(mail => mail.Gold == 80);
+        var liveMail = page.Entries.Single(mail => mail.Attachments.Any(item => item.Item.Uid == live.Uid));
+        var laterMail = page.Entries.Single(mail => mail.Attachments.Any(item => item.Item.Uid == later.Uid));
+        That(page.Entries.Length == 3 && goldMail.Attachments.Length == 2 && liveMail.Attachments.Length == 1 && laterMail.Attachments.Length == 1,
+            "金币多附件与两件期限附件分成三封");
+        string held = f.Snapshot();
+        var expiredAt = DateTimeOffset.FromUnixTimeSeconds(expire);
+        That(service.PlanClaim(f.ReceiverOwner, f.Receiver, [laterMail.Id], expiredAt, out var expiredPlan) == MailboxError.ExpiredItem && expiredPlan is null &&
+            f.Snapshot() == held &&
+            service.PlanClaim(f.ReceiverOwner, f.Receiver, [laterMail.Attachments.Single().ClaimId], expiredAt, out expiredPlan) == MailboxError.ExpiredItem &&
+            expiredPlan is null && f.Snapshot() == held,
+            "到期后整封和单附件领取都拒绝，不删除、不入包、不重复消费");
+        That(service.PlanClaim(f.ReceiverOwner, f.Receiver, [goldMail.Id], now, out var goldPlan) == MailboxError.None, "过期期限邮件不挡住另一封金币和附件");
+        var claimedGold = service.Claim(f.ReceiverOwner, f.Receiver, goldPlan!);
+        That(claimedGold.Accepted, "金币和多附件领取提交成功");
+        f.Receiver = claimedGold.Character!;
+        That(f.Receiver.Inventory.Gold == 80 && f.Receiver.Inventory.Items.Single(item => item.Avatar is not null).Avatar == avatar.Avatar &&
+            f.Receiver.Inventory.Items.Single(item => item.Creature is not null).Creature == pet.Creature &&
+            service.PlanClaim(f.ReceiverOwner, f.Receiver, [goldMail.Id], now, out _) == MailboxError.MailMissing &&
+            f.ReadReceiver().Inventory.Gold == 80,
+            "金币只领取一次，时装和宠物详情保留，重复领取没有第二次入包");
+        That(service.PlanClaim(f.ReceiverOwner, f.Receiver, [liveMail.Attachments.Single().ClaimId], now, out var liveClaim) == MailboxError.None,
+            "同一件期限附件在到期前可以领取");
+        var claimedLive = service.Claim(f.ReceiverOwner, f.Receiver, liveClaim!);
+        That(claimedLive.Accepted, "到期前领取提交成功");
+        f.Receiver = claimedLive.Character!;
+        That(f.Receiver.Inventory.Items.Count(item => item.Uid == live.Uid) == 1 &&
+            f.Receiver.Inventory.Items.Single(item => item.Uid == live.Uid).ExpireTime == expire &&
+            service.PlanClaim(f.ReceiverOwner, f.Receiver, [liveMail.Attachments.Single().ClaimId], now, out _) == MailboxError.MailMissing &&
+            f.ReadReceiver().Inventory.Items.Count(item => item.Uid == live.Uid) == 1,
+            "到期前领取保留原 UID 和截止，重复领取不能再拿一份");
+        That(service.PlanClaim(f.ReceiverOwner, f.Receiver, [laterMail.Id], expiredAt, out _) == MailboxError.ExpiredItem &&
+            !f.ReadReceiver().Inventory.Items.Any(item => item.Uid == later.Uid) &&
+            f.Query("SELECT count(*) FROM mailbox_attachments WHERE claimed=0") is 1L,
+            "已领取的金币、附件和未到期券不影响另一封到期附件，它仍留在邮件里");
+        f.Integrity();
+    }
+
+    static void SendDeadline()
+    {
+        var start = DateTimeOffset.UtcNow;
+        var clock = new MutableClock(start);
+        using var f = new Fixture(clock);
+        int expire = checked((int)start.AddHours(1).ToUnixTimeSeconds());
+        var equipment = f.Sender.Inventory.Find(new(InventoryListType.Main, 9))!;
+        var periodCore = equipment.Core with { ExpireTime = expire };
+        f.Sender = f.Repository.CommitInventory(f.SenderOwner, f.Sender, new(f.Sender.Inventory, f.Sender.Inventory with
+        {
+            Items = f.Sender.Inventory.Items.Replace(equipment, equipment with { Core = periodCore })
+                .Add(new(0, new(InventoryListType.Main, 10), periodCore))
+        }, "send_deadline"));
+        var first = f.Sender.Inventory.Find(new(InventoryListType.Main, 9))!;
+        var second = f.Sender.Inventory.Find(new(InventoryListType.Main, 10))!;
+        var catalog = new ItemCatalog(null!, new Dictionary<int, string>(), new Dictionary<int, string>(), 0);
+        catalog.PrefillTemplates(new Dictionary<int, ItemTemplate>
+        {
+            [50002] = new(50002, ItemKind.Equipment, 12, 1, 0, 1, 0, 0, 1, "[free]", 65535, 0, "期限") { Expiration = new(Days: 30) }
+        });
+        var service = new MailboxService(f.Repository, catalog,
+            new GoldLimitCatalog("[gold limit from level]\n0 1000000000\n[/gold limit from level]"),
+            new EpicPieceCatalog("[piece list]\n50000 50001\n[/piece list]"));
+        That(service.PlanSend(f.Sender, f.SenderOwner.Account, new("Receiver", 0, [new(0, 9, 50002, 1)], "未到期"), start, out var livePlan) == MailboxError.None &&
+            livePlan is not null && livePlan.Attachments.Single().Uid == first.Uid && !first.IsExpired(start.ToUnixTimeSeconds()),
+            "截止前的普通期限附件可以规划寄送");
+        var planned = livePlan ?? throw new InvalidOperationException("截止前寄送没有计划");
+        var sent = WhileWriterQueued(f.Path, null, () => f.Repository.SendMail(f.SenderOwner, f.Sender, planned));
+        That(sent.Accepted && sent.Character is not null, "截止前排队寄送被接受");
+        f.Sender = sent.Character ?? throw new InvalidOperationException("截止前排队寄送没有角色");
+        var mailed = f.Repository.LoadMailbox(f.ReceiverOwner, f.Receiver.Id, start.ToUnixTimeSeconds()).Entries.Single();
+        That(sent.MailId == mailed.Id && f.Sender.Inventory.Gold == planned.Inventory.After.Gold &&
+            f.Sender.Inventory.Find(first.Position) is null && mailed.Attachments.Single().Item.Uid == first.Uid &&
+            mailed.Attachments.Single().Item.ExpireTime == expire && f.ReadReceiver().Inventory.Items.IsEmpty &&
+            f.Query("SELECT count(*) FROM mailbox_sent_gold") is 0L && f.Query("SELECT count(*) FROM mailbox_audit_log") is 1L,
+            "writer 排队但尚未跨截止时扣一次邮费并托管原 UID，不把附件放进收件背包");
+        That(service.PlanSend(f.Sender, f.SenderOwner.Account, new("Receiver", 0, [new(0, 10, 50002, 1)], "排队"), start, out var queuedPlan) == MailboxError.None &&
+            queuedPlan is not null, "另一件期限附件在截止前仍可规划");
+        var queued = queuedPlan ?? throw new InvalidOperationException("跨截止寄送没有计划");
+        string before = f.Snapshot();
+        var rejected = WhileWriterQueued(f.Path, () => clock.Set(start.AddHours(2)), () => f.Repository.SendMail(f.SenderOwner, f.Sender, queued));
+        That(rejected.Error == MailboxError.ExpiredItem && rejected.Character is null && rejected.MailId == 0 && f.Snapshot() == before,
+            "writer 排队跨过附件截止时返回过期，不扣邮费、不投递、不改双方资产");
+        That(f.Repository.SendMail(f.SenderOwner, f.Sender, queued).Error == MailboxError.ExpiredItem && f.Snapshot() == before,
+            "过期后重试同一计划仍然拒绝，且不再写库");
+        clock.Set(start);
+        var retried = f.Repository.SendMail(f.SenderOwner, f.Sender, queued);
+        That(retried.Accepted && retried.Character is not null, "回到截止前的重试被接受");
+        f.Sender = retried.Character ?? throw new InvalidOperationException("回到截止前的重试没有角色");
+        var again = f.Repository.LoadMailbox(f.ReceiverOwner, f.Receiver.Id, start.ToUnixTimeSeconds()).Entries.Single(mail => mail.Id != mailed.Id);
+        That(again.Attachments.Single().Item.Uid == second.Uid && again.Attachments.Single().Item.ExpireTime == expire &&
+            f.Sender.Inventory.Gold == queued.Inventory.After.Gold && f.ReadSender().Inventory.Find(second.Position) is null &&
+            f.Query("SELECT count(*) FROM mailbox_messages") is 2L && f.Query("SELECT count(*) FROM mailbox_audit_log") is 2L,
+            "时钟回到截止前，同一计划可以重新寄送，只再扣一次邮费");
+        f.Integrity();
+    }
+
+    static T WhileWriterQueued<T>(string path, Action? whileQueued, Func<T> action)
+    {
+        T result = default!;
+        Exception? failure = null;
+        using var finished = new ManualResetEventSlim();
+        var worker = new Thread(() =>
+        {
+            try { result = action(); }
+            catch (Exception error) { failure = error; }
+            finally { finished.Set(); }
+        }) { IsBackground = true, Name = "mail-deadline-writer" };
+        var gate = (SemaphoreSlim)typeof(SqliteWriteGate).GetField("Gate", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null)!;
+        var waiters = typeof(SemaphoreSlim).GetField("m_waitCount", BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? typeof(SemaphoreSlim).GetField("_waitCount", BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("无法观察原写入闸门等待计数");
+        var db = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path, Pooling = false, ForeignKeys = true }.ToString());
+        db.Open();
+        bool started = false;
+        try
+        {
+            var write = db.BeginWrite("MailboxPersistenceTests.DeadlineHold");
+            try
+            {
+                var tx = write.Transaction;
+                try
+                {
+                    worker.Start();
+                    started = true;
+                    That(SpinWait.SpinUntil(() => Convert.ToInt32(waiters.GetValue(gate)) > 0 || finished.IsSet, TimeSpan.FromSeconds(5)) &&
+                        !finished.IsSet, "寄送实际等待原写入闸门");
+                    whileQueued?.Invoke();
+                    That(!finished.IsSet, "调整时钟时寄送仍堵在 writer 上");
+                }
+                finally { tx.Dispose(); }
+            }
+            finally { write.Dispose(); }
+            if (started && (!finished.Wait(TimeSpan.FromSeconds(10)) || !worker.Join(TimeSpan.FromSeconds(5))))
+                throw new TimeoutException("释放写入闸门后寄送未退出");
+        }
+        finally { db.Dispose(); }
+        if (failure is not null) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
+        return result;
+    }
+
+    sealed class MutableClock(DateTimeOffset start) : TimeProvider
+    {
+        long ticks = start.UtcTicks;
+        public override DateTimeOffset GetUtcNow() => new(Interlocked.Read(ref ticks), TimeSpan.Zero);
+        public void Set(DateTimeOffset value) => Interlocked.Exchange(ref ticks, value.UtcTicks);
+    }
+
+    static void ExpiredAttachmentDelete()
+    {
+        using var f = new Fixture();
+        int expire = checked((int)(f.Now + 3600));
+        var equipment = f.Sender.Inventory.Find(new(InventoryListType.Main, 9))!;
+        var periodCore = equipment.Core with { ExpireTime = expire };
+        var inventory = f.Sender.Inventory with { Items = f.Sender.Inventory.Items
+            .Replace(equipment, equipment with { Core = periodCore })
+            .Add(new(0, new(InventoryListType.Main, 10), periodCore)) };
+        f.Sender = f.Repository.CommitInventory(f.SenderOwner, f.Sender, new(f.Sender.Inventory, inventory, "period_delete"));
+        var normalItem = f.Sender.Inventory.Find(new(InventoryListType.Main, 9))!;
+        var savedItem = f.Sender.Inventory.Find(new(InventoryListType.Main, 10))!;
+        var sentNormal = f.Send([normalItem], 0);
+        var sentSaved = f.Send([savedItem], 0);
+        That(sentNormal.Accepted && sentSaved.Accepted && normalItem.Uid != savedItem.Uid, "普通邮件和准备保存的期限邮件都寄出");
+        var recipient = f.Repository.FindMailRecipient("Receiver")!;
+        var fillers = new List<uint>();
+        for (int index = 0; index < 9; index++)
+        {
+            var row = f.Repository.DeliverMail(new("period-save:" + index, recipient, "系统", "期限", 0,
+                [new(0, new(InventoryListType.Main, 9), new(50002, ItemKind.Equipment, 999999998) { ExpireTime = expire })], f.Now));
+            That(row.Accepted, "保存栏填充邮件投递成功");
+            fillers.Add(row.MailId);
+        }
+        var empty = f.Repository.DeliverMail(new("period-empty", recipient, "系统", "空位", 0, [], f.Now));
+        var gold = f.Repository.DeliverMail(new("period-gold", recipient, "系统", "金币", 5,
+            [new(0, new(InventoryListType.Main, 9), new(50002, ItemKind.Equipment, 999999998) { ExpireTime = expire })], f.Now));
+        var mixed = f.Repository.DeliverMail(new("period-mixed", recipient, "系统", "混合", 0,
+            [
+                new(0, new(InventoryListType.Main, 9), new(50002, ItemKind.Equipment, 999999998) { ExpireTime = expire }),
+                new(0, new(InventoryListType.Main, 10), new(50002, ItemKind.Equipment, 999999998))
+            ], f.Now));
+        That(empty.Accepted && gold.Accepted && mixed.Accepted, "空邮件、带金币的到期附件和混合附件都投递成功");
+        var savedIds = fillers.ToImmutableArray().Add(sentSaved.MailId);
+        That(f.Repository.ChangeMailState(f.ReceiverOwner, f.Receiver.Id, savedIds, 3, f.Now).Accepted, "十封带期限附件的邮件占满保存栏");
+        That(f.Repository.ChangeMailState(f.ReceiverOwner, f.Receiver.Id, [empty.MailId], 3, f.Now).Error == MailboxError.StorageFull,
+            "保存栏已满时再保存被拒绝");
+        string before = f.Snapshot();
+        That(f.Repository.ChangeMailState(f.ReceiverOwner, f.Receiver.Id, [sentNormal.MailId], 0, f.Now).Error == MailboxError.UnclaimedAssets &&
+            f.Repository.ChangeMailState(f.ReceiverOwner, f.Receiver.Id, [sentSaved.MailId], 0, f.Now).Error == MailboxError.UnclaimedAssets &&
+            f.Repository.ChangeMailState(f.ReceiverOwner, f.Receiver.Id, [fillers[0]], 0, f.Now).Error == MailboxError.UnclaimedAssets &&
+            f.Snapshot() == before, "到期前普通邮件和保存邮件都不能删除，库保持原样");
+        That(f.Repository.LoadMailClaims(f.ReceiverOwner, f.Receiver.Id, [sentNormal.MailId], f.Now).Length == 1 &&
+            f.Repository.LoadMailbox(f.ReceiverOwner, f.Receiver.Id, f.Now).Entries.Count(mail => mail.State == 3) == 10,
+            "到期前附件仍可领取，十个保存位仍被占用");
+
+        long at = expire;
+        var service = new MailboxService(f.Repository,
+            new ItemCatalog(null!, new Dictionary<int, string>(), new Dictionary<int, string>(), 0),
+            new GoldLimitCatalog("[gold limit from level]\n0 1000000000\n[/gold limit from level]"),
+            new EpicPieceCatalog("[piece list]\n50000 50001\n[/piece list]"));
+        var expiredAt = DateTimeOffset.FromUnixTimeSeconds(at);
+        string held = f.Snapshot();
+        That(service.PlanClaim(f.ReceiverOwner, f.Receiver, [sentNormal.MailId], expiredAt, out var expiredPlan) == MailboxError.ExpiredItem &&
+            expiredPlan is null &&
+            service.PlanClaim(f.ReceiverOwner, f.Receiver, [sentSaved.MailId], expiredAt, out expiredPlan) == MailboxError.ExpiredItem &&
+            expiredPlan is null && f.Snapshot() == held &&
+            !f.ReadReceiver().Inventory.Items.Any(item => item.Uid == normalItem.Uid || item.Uid == savedItem.Uid),
+            "到期后领取仍拒绝，不入包也不删除");
+        That(f.Repository.ChangeMailState(f.ReceiverOwner, f.Receiver.Id, [gold.MailId], 0, at).Error == MailboxError.UnclaimedAssets &&
+            f.Query($"SELECT gold FROM mailbox_messages WHERE mail_id={gold.MailId}") is 5L &&
+            f.Query($"SELECT count(*) FROM mailbox_attachments WHERE mail_id={gold.MailId} AND claimed=0") is 1L,
+            "未领金币即使附件已到期也拒绝删除");
+        That(f.Repository.ChangeMailState(f.ReceiverOwner, f.Receiver.Id, [mixed.MailId], 0, at).Error == MailboxError.UnclaimedAssets &&
+            f.Query($"SELECT count(*) FROM mailbox_attachments WHERE mail_id={mixed.MailId} AND claimed=0") is 2L,
+            "同一封还有未到期附件时整封拒绝，不部分作废");
+        That(f.Repository.ChangeMailState(f.ReceiverOwner, f.Receiver.Id, [sentNormal.MailId, gold.MailId], 0, at).Error == MailboxError.UnclaimedAssets &&
+            f.Query($"SELECT state FROM mailbox_messages WHERE mail_id={sentNormal.MailId}") is 1L &&
+            f.Query($"SELECT count(*) FROM mailbox_attachments WHERE mail_id={sentNormal.MailId} AND claimed=0") is 1L,
+            "同一批里有受保护邮件时，不删除另一封已到期邮件");
+
+        held = f.Snapshot();
+        f.Execute("CREATE TRIGGER reject_void_expired BEFORE DELETE ON character_inventory_items BEGIN SELECT RAISE(ABORT,'void'); END");
+        Reject<SqliteException>(() => f.Repository.ChangeMailState(f.ReceiverOwner, f.Receiver.Id, [sentNormal.MailId], 0, at), "作废托管实例失败");
+        f.Execute("DROP TRIGGER reject_void_expired");
+        That(f.Snapshot() == held, "作废失败回滚邮件状态、附件资格和托管 UID");
+
+        var deletedNormal = f.Repository.ChangeMailState(f.ReceiverOwner, f.Receiver.Id, [sentNormal.MailId], 0, at);
+        That(deletedNormal.Accepted && deletedNormal.Changes.Single().State == 0, "到期后普通邮件可以删除");
+        That(f.Query($"SELECT state FROM mailbox_messages WHERE mail_id={sentNormal.MailId}") is 0L &&
+            f.Query($"SELECT count(*) FROM mailbox_attachments WHERE mail_id={sentNormal.MailId} AND claimed=1 AND item_uid IS NULL") is 1L &&
+            f.Query($"SELECT count(*) FROM character_inventory_items WHERE item_uid={normalItem.Uid}") is 0L &&
+            f.Query($"SELECT assets FROM mailbox_audit_log WHERE mail_id={sentNormal.MailId} AND action_name='state'") is string assets &&
+            assets.Contains(normalItem.Uid.ToString(), StringComparison.Ordinal) &&
+            !f.ReadReceiver().Inventory.Items.Any(item => item.Uid == normalItem.Uid) &&
+            !f.ReadSender().Inventory.Items.Any(item => item.Uid == normalItem.Uid) &&
+            service.PlanClaim(f.ReceiverOwner, f.Receiver, [sentNormal.MailId], expiredAt, out _) == MailboxError.MailMissing,
+            "普通邮件的到期附件随删除作废，不入包且不能再领");
+        string once = f.Snapshot();
+        That(f.Repository.ChangeMailState(f.ReceiverOwner, f.Receiver.Id, [sentNormal.MailId], 0, at).Accepted && f.Snapshot() == once,
+            "重复删除普通邮件幂等且不再写库");
+        That(f.Repository.LoadMailbox(f.ReceiverOwner, f.Receiver.Id, at).Entries.Count(mail => mail.State == 3) == 10,
+            "删除未保存邮件不释放保存位");
+        var deletedSaved = f.Repository.ChangeMailState(f.ReceiverOwner, f.Receiver.Id, [sentSaved.MailId], 0, at);
+        That(deletedSaved.Accepted &&
+            f.Query($"SELECT state FROM mailbox_messages WHERE mail_id={sentSaved.MailId}") is 0L &&
+            f.Query($"SELECT count(*) FROM character_inventory_items WHERE item_uid={savedItem.Uid}") is 0L &&
+            !f.ReadReceiver().Inventory.Items.Any(item => item.Uid == savedItem.Uid) &&
+            f.Repository.LoadMailbox(f.ReceiverOwner, f.Receiver.Id, at).Entries.Count(mail => mail.State == 3) == 9,
+            "到期后保存邮件删除成功并让出一个保存位");
+        That(f.Repository.ChangeMailState(f.ReceiverOwner, f.Receiver.Id, [empty.MailId], 3, at).Accepted &&
+            f.Repository.LoadMailbox(f.ReceiverOwner, f.Receiver.Id, at).Entries.Count(mail => mail.State == 3) == 10,
+            "释放出的保存位可以保存另一封邮件");
+        once = f.Snapshot();
+        That(f.Repository.ChangeMailState(f.ReceiverOwner, f.Receiver.Id, [sentSaved.MailId], 0, at).Accepted && f.Snapshot() == once,
+            "重复删除保存邮件幂等且不再写库");
+
+        var reloaded = new CharacterRepository(f.Path);
+        var restoredPage = reloaded.LoadMailbox(f.ReceiverOwner, f.Receiver.Id, at);
+        That(restoredPage.Entries.All(mail => mail.Id != sentNormal.MailId && mail.Id != sentSaved.MailId) &&
+            restoredPage.Entries.Count(mail => mail.State == 3) == 10 &&
+            restoredPage.Entries.Any(mail => mail.Id == empty.MailId && mail.State == 3) &&
+            reloaded.LoadMailClaims(f.ReceiverOwner, f.Receiver.Id, [sentNormal.MailId, sentSaved.MailId], at).IsEmpty &&
+            reloaded.LoadCharacter(f.ReceiverOwner, 0).Inventory.Items.All(item => item.Uid != normalItem.Uid && item.Uid != savedItem.Uid),
+            "重启后两封已删邮件不可见、不可再领，保存位和空邮件保持");
+        string restored = f.Snapshot();
+        That(reloaded.ChangeMailState(f.ReceiverOwner, f.Receiver.Id, [sentNormal.MailId, sentSaved.MailId], 0, at).Accepted &&
+            f.Snapshot() == restored, "重启后重复删除成功且不再写库");
+        f.Integrity();
+    }
+
     static void ExpirationAndStorage()
     {
         using var f = new Fixture();
@@ -373,12 +700,12 @@ internal static class MailboxPersistenceTests
         public Character Receiver { get; set; }
         public Character Other { get; }
         public long Now { get; } = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-        public Fixture()
+        public Fixture(TimeProvider? clock = null)
         {
             SenderOwner = Owners.Acquire("sender", () => { });
             ReceiverOwner = Owners.Acquire("receiver", () => { });
             OtherOwner = Owners.Acquire("other", () => { });
-            Repository = new(Path);
+            Repository = new(Path, promotionClock: clock);
             Sender = Repository.Create(SenderOwner, new("Sender", new(38, 1, 450, 234, 0), null) { Level = 95,
                 Inventory = new([
                     new(0, new(InventoryListType.Main, 9), new(50002, ItemKind.Equipment, 999999998) { Rune = 4, Random0 = new(1, 2, 3),

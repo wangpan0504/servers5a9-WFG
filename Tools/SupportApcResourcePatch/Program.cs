@@ -3,6 +3,12 @@ using System.Text.Json;
 using PvfLib;
 
 Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+if (args is ["prepare-support-opening", var openingPvf, var openingOutput])
+{
+    using var source = PvfArchive.Open(openingPvf);
+    SupportOpeningDelta.Write(source, openingOutput);
+    return;
+}
 if (args.Length < 2) throw new ArgumentException("Usage: inspect pvf path... | audit-migration before.pvf after.pvf current.pvf output.json");
 if (args[0] == "inspect")
 {

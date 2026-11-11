@@ -47,6 +47,15 @@ internal sealed class TcpTestFixture : IAsyncDisposable
         return map.HellQuests.Any(quest => !completed.Contains(quest));
     }
 
+    internal bool ExpectsParticularHellSelection(ushort characterId)
+    {
+        var towns = townCatalog ?? resources?.Towns;
+        if (towns is null) return false;
+        var position = Query("SELECT town,area FROM characters WHERE id=$p0", characterId).Single();
+        return towns.Areas[(Convert.ToByte(position[0]), Convert.ToByte(position[1]))].DungeonWorldMap is { } world &&
+            towns.DungeonMaps[world].Options.Any(option => option.DungeonId == 316);
+    }
+
     // 选图状态预期取当前角色位置与独立日账本，不从收到的1545正文反推。
     internal byte? ExpectedDaybreakSelectionRemaining(ushort characterId)
     {
@@ -355,7 +364,7 @@ internal sealed class TcpTestFixture : IAsyncDisposable
         if (!useDefaultActivities)
         {
             var eventStore = new ServerEventRepository(Database);
-            foreach (ushort id in new ushort[] { 64, 312, 10005, 2257, 228, 2370, 2208 }
+            foreach (ushort id in new ushort[] { 64, 312, 10005, 2257, 228, 2370, 2208, 2514 }
                 .Concat(Options.BattlePassSeasonKey is null ? [DfoServer.Game.Events.ServerEventService.BattlePassId] : Array.Empty<ushort>()))
                 if (eventStore.Read(id) is { Revision: 0 } initial)
                     eventStore.Save(initial, initial with { OverrideActive = false });

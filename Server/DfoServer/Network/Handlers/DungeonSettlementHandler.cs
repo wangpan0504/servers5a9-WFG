@@ -162,6 +162,8 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         // 魔界大战小图只发结果页（34）：没有普通白图的翻牌会员刷新与 35 通关奖励，否则翻牌层压住结算阶段。
         bool war = result.EvildomWarClear;
         bool bossRush = receipt.Entry.IsBossRush;
+        if (receipt.Entry.DungeonId == 316)
+            await RiftDailyProjection.RefreshParticularHellAsync(context, Guard);
         if (receipt.Entry.DungeonId == 530)
             await RiftDailyProjection.RefreshAsync(context, Guard, force: true);
         if (!tournament && !cosmo && !grief && !bossRush)
@@ -868,6 +870,13 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
     async Task PublishRetryEnterCountsAsync(GameConnectionContext context, uint dungeon, FormalDungeonReceipt? retry,
         Func<bool> guard)
     {
+        if (dungeon == 316)
+        {
+            if (retry is { ChannelConsumedSlots.IsDefaultOrEmpty: false })
+                await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(retry.Character.Inventory,
+                    InventoryListType.Main, [.. retry.ChannelConsumedSlots]), "particular_hell_retry_items", guard);
+            await RiftDailyProjection.RefreshParticularHellAsync(context, guard);
+        }
         if (retry is not null && !retry.EntryItemConsumedSlots.IsDefaultOrEmpty)
             await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(retry.Character.Inventory,
                 InventoryListType.Main, [.. retry.EntryItemConsumedSlots]), "formal_retry_entry_items", guard);

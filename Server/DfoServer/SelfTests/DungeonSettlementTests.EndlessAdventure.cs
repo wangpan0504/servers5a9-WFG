@@ -64,7 +64,7 @@ internal static partial class DungeonSettlementTests
         foreach (bool infinite in new[] { false, true })
         foreach (bool burning in new[] { false, true })
         {
-            debug.InfiniteFatigue = infinite;
+            debug.SetInfiniteFatigue("endless", infinite);
             var (run, _) = CreateRun(role, Configure, accelerationPercent: burning ? 100 : 0);
             var reward = policy.Prepare(run, true, true);
             That(run.Snapshot.ConsumedFatigue == 1 && reward?.Amount == (burning ? 2 : 1),

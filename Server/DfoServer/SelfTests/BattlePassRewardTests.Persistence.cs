@@ -1,8 +1,11 @@
+using System.Collections.Immutable;
 using System.Text.Json;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.BattlePass;
 using DfoServer.Game.Characters;
+using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Session;
+using DfoServer.GameWorld.Items;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Persistence;
 using Microsoft.Data.Sqlite;
@@ -193,6 +196,151 @@ internal static partial class BattlePassRewardTests
         {
             if (succeeded) TestFiles.DeleteDirectory(root, recursive: true);
             else Console.Error.WriteLine($"战令持久化回归失败，隔离现场保留于：{root}");
+        }
+    }
+
+    static void OverflowPersistence()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "S5A9-pass-overflow-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        bool succeeded = false;
+        try
+        {
+            string path = Path.Combine(root, "game.db");
+            const string season = "core-overflow-season";
+            const string marker = "BP overflow last claim reached";
+            var fixture = new Fixture();
+            var repository = new CharacterRepository(path);
+            var owners = new AccountOwners();
+            using var owner = owners.Acquire("pass-overflow", () => { });
+            var point = new Location(1, 0, 10, 10);
+            var towns = new TownCatalog(new Dictionary<(byte, byte), TownArea>(), point, point,
+                new TownDock(0, [], []), [], new Dictionary<uint, uint[]>());
+            var created = repository.Create(owner, new NewCharacter("PassOverflow", point, null) { Level = 95 });
+            var session = new GameSession(repository, towns, owner, timeProvider: new FixedClock());
+            session.Select(created.Slot);
+            session.MarkReady();
+            _ = repository.ReadBattlePass(owner, season);
+            long experience = checked((long)fixture.Catalog.TotalExperienceToReach(4));
+            Sql("UPDATE account_battle_pass_seasons SET total_experience=$p0,pass_type=1 WHERE account=$p1 AND season_key=$p2",
+                experience, owner.Account, season);
+            var eventStore = new ServerEventRepository(path);
+            var eventService = new DfoServer.Game.Events.ServerEventService(eventStore, new FixedClock());
+            eventService.ConfigureBattlePass(Now.AddDays(-1), Now.AddDays(1), false);
+            eventService.InitializeDefault(2520);
+            repository.ConfigureBattlePassEvents(_ => true, false, new FixedClock());
+            eventService.Override(2520, true);
+            var fill = session.PlanAndCommitInventory(character =>
+            {
+                var after = new InventorySnapshot(Enumerable.Range(65, 55).Select(slot =>
+                    new InventoryItem(0, new(InventoryListType.Main, (short)slot), new(999001, ItemKind.Consumable, 999)))
+                    .ToImmutableArray());
+                return new InventoryResult(true, 0, new InventoryPlan(character.Inventory, after, "reward_grant", new(character)));
+            }, 1, requireTown: false);
+            That(fill.Accepted && session.Selected is { } filled && filled.Inventory.Items.Length == 55 &&
+                Totals(filled.Inventory).SequenceEqual(new[] { (999001, 55 * 999) }),
+                "overflow fixture fills 55 consumable stacks and leaves one free slot");
+            var selected = session.Selected ?? throw new InvalidOperationException("overflow fill selection missing");
+            string before = Snapshot();
+            Sql($"""
+                CREATE TRIGGER fail_overflow_claim AFTER INSERT ON account_battle_pass_claims
+                WHEN NEW.level=4 AND NEW.track=1
+                BEGIN
+                  SELECT CASE WHEN
+                    (SELECT revision FROM characters WHERE id=NEW.recipient_character_id)={selected.Revision + 1}
+                    AND (SELECT revision FROM account_battle_pass_seasons WHERE account=NEW.account AND season_key=NEW.season_key)=1
+                    AND (SELECT count(*) FROM account_battle_pass_claims WHERE account=NEW.account AND season_key=NEW.season_key)=5
+                    AND (SELECT count(*) FROM mailbox_messages WHERE recipient_id=NEW.recipient_character_id)=1
+                    AND (SELECT count(*) FROM mailbox_attachments a JOIN character_inventory_items i ON i.item_uid=a.item_uid
+                         WHERE a.claimed=0 AND json_extract(i.item_core,'$.ItemId') IN (15,490705101,490705122))=3
+                    AND (SELECT count(*) FROM character_inventory_slots s JOIN character_inventory_items i ON i.item_uid=s.item_uid
+                         WHERE s.character_id=NEW.recipient_character_id AND json_extract(i.item_core,'$.ItemId')=490705120
+                           AND json_extract(i.item_core,'$.Value')=3)=1
+                  THEN RAISE(ABORT,'{marker}') ELSE RAISE(ABORT,'BP overflow prerequisites missing') END;
+                END;
+                """);
+            bool late = false;
+            try { session.ClaimBattlePassReward(fixture.Service, season, 1, 1, 4); }
+            catch (SqliteException error) when (error.SqliteErrorCode == 19 &&
+                error.Message == $"SQLite Error 19: '{marker}'.") { late = true; }
+            That(late && Snapshot() == before && ReferenceEquals(session.Selected, selected),
+                "overflow claim-all late failure rolls back mail, remaining claims and the in-bag stack");
+            Sql("DROP TRIGGER fail_overflow_claim");
+            var committed = session.ClaimBattlePassReward(fixture.Service, season, 1, 1, 4);
+            var granted = session.Selected ?? throw new InvalidOperationException("overflow committed selection missing");
+            That(committed.Inventory is { Accepted: true, Receipt: not null, Plan.OverflowItems.Length: 3 } &&
+                committed.State is { Revision: 1, Claims.Count: 5 } &&
+                granted.Revision == selected.Revision + 1 &&
+                Totals(granted.Inventory).SequenceEqual(new[] { (999001, 55 * 999), (490705120, 3) }) &&
+                Number("SELECT count(*) FROM mailbox_messages WHERE recipient_id=" + granted.Id) == 1 &&
+                Number("SELECT count(*) FROM mailbox_attachments WHERE claimed=0") == 3 &&
+                Query("SELECT sender_name,body FROM mailbox_messages").Single() is { Length: 2 } mail &&
+                Equals(mail[0], BattlePassRewardService.OverflowMailSender) &&
+                Equals(mail[1], BattlePassRewardService.OverflowMailText),
+                "overflow claim-all commits in-bag stack, three mailed rewards and all five claim keys once");
+            string after = Snapshot();
+            var repeated = session.ClaimBattlePassReward(fixture.Service, season, 1, 1, 4);
+            That(!repeated.Inventory.Accepted && Snapshot() == after && ReferenceEquals(session.Selected, granted),
+                "overflow claim-all replay refuses without a second mail or claim");
+            var restoredRepository = new CharacterRepository(path);
+            var restoredSession = new GameSession(restoredRepository, towns, owner, timeProvider: new FixedClock());
+            restoredSession.Select(created.Slot);
+            restoredSession.MarkReady();
+            var state = restoredSession.ReadBattlePass(season)?.State ?? throw new InvalidOperationException("overflow restored season missing");
+            That(state.Revision == 1 && state.Claims.Count == 5 &&
+                state.Claims.SetEquals(committed.State!.Claims),
+                "new repository restores all five overflow claim keys");
+            That(restoredSession.Selected is { } restored && restored.Inventory.Items.Length == 56 &&
+                Totals(restored.Inventory).SequenceEqual(new[] { (999001, 55 * 999), (490705120, 3) }),
+                "new session restores the in-bag overflow stack and original filler stacks");
+            That(Number("SELECT count(*) FROM mailbox_messages") == 1 &&
+                Number("SELECT count(*) FROM mailbox_attachments WHERE claimed=0") == 3,
+                "new repository restores the unclaimed overflow mail attachments");
+            restoredSession.End();
+            session.End();
+            succeeded = true;
+
+            SqliteConnection Open()
+            {
+                var db = new SqliteConnection(new SqliteConnectionStringBuilder
+                { DataSource = path, Pooling = false, ForeignKeys = true }.ToString());
+                db.Open();
+                return db;
+            }
+            void Sql(string sql, params object[] values)
+            {
+                using var db = Open(); using var command = db.CreateCommand(); command.CommandText = sql;
+                for (int i = 0; i < values.Length; i++) command.Parameters.AddWithValue("$p" + i, values[i]);
+                command.ExecuteNonQuery();
+            }
+            object?[][] Query(string sql)
+            {
+                using var db = Open(); using var command = db.CreateCommand(); command.CommandText = sql;
+                using var reader = command.ExecuteReader();
+                var rows = new List<object?[]>();
+                while (reader.Read())
+                {
+                    var row = new object?[reader.FieldCount];
+                    for (int i = 0; i < row.Length; i++) row[i] = reader.IsDBNull(i) ? null : reader.GetValue(i);
+                    rows.Add(row);
+                }
+                return rows.ToArray();
+            }
+            long Number(string sql) => Convert.ToInt64(Query(sql)[0][0]);
+            string Snapshot() => JsonSerializer.Serialize(new[] {
+                "SELECT * FROM characters ORDER BY id", "SELECT * FROM character_inventory_items ORDER BY item_uid",
+                "SELECT * FROM character_inventory_slots ORDER BY character_id,list_type,slot_index",
+                "SELECT * FROM inventory_audit_log ORDER BY audit_id",
+                "SELECT * FROM account_battle_pass_seasons ORDER BY account,season_key",
+                "SELECT * FROM account_battle_pass_claims ORDER BY account,season_key,level,track",
+                "SELECT sender_name,body,delivery_key,state FROM mailbox_messages ORDER BY mail_id",
+                "SELECT mail_id,ordinal,claimed FROM mailbox_attachments ORDER BY attachment_id"
+            }.Select(Query).ToArray());
+        }
+        finally
+        {
+            if (succeeded) TestFiles.DeleteDirectory(root, recursive: true);
+            else Console.Error.WriteLine($"战令溢出邮件回归失败，隔离现场保留于：{root}");
         }
     }
 }

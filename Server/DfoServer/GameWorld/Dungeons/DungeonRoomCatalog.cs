@@ -6,6 +6,7 @@ namespace DfoServer.GameWorld.Dungeons;
 internal sealed record DungeonRoomMonster(int MonsterId, IReadOnlyList<int> RawValues, string PlacementKind, string? RankKind, string Path)
 {
     public int? Team { get; init; }
+    public string? FollowType { get; init; }
     public bool ScriptedRetirement { get; init; }
     // MOB禁止强化或命名演员声明只限制随机提升，不覆盖MAP显式品级。
     public bool ChampionRestricted { get; init; }
@@ -54,6 +55,7 @@ internal sealed record DungeonRoomDefinition(
 {
     // MAP自身的单值[type]，与迷宫位置的map/boss/layered声明分别保存；缺失或歧义不授予终点资格。
     public string? DeclaredType { get; init; }
+    public DungeonLanding? HelperLanding { get; init; }
     public IReadOnlyList<DungeonRoomSpecialObject> SpecialObjects { get; init; } = Array.Empty<DungeonRoomSpecialObject>();
     public IReadOnlyList<DungeonRoomAiCharacter> AiCharacters { get; init; } = Array.Empty<DungeonRoomAiCharacter>();
     public IReadOnlyList<int> EventMonsterPositions { get; init; } = Array.Empty<int>();
@@ -133,6 +135,9 @@ internal sealed class DungeonRoomCatalog
         var roomObjects = ReferenceEquals(source, archive) ? passiveObjects : ParsePassiveDirectory(source.ReadTokens("passiveobject/passiveobject.lst"), source.ResolveString);
         var room = ParseResource(map with { Path = path }, tokens, source.ResolveString, roomMonsters, roomObjects, source.Contains,
             requirePassiveDefinitions,ResolveAiCharacter,allowUnresolvedSpecialMetadata);
+        if (room.SpecialObjects.Any(row => row.Children.Any(child => child.Kind == "[hellparty]")))
+            room = room with { HelperLanding = HelperHellLanding.Read(room, tokens, source.ResolveString,
+                file => source.Contains(file) ? geometry.ReadTokens(source, file) : [], geometry.CollisionPlans.GetValueOrDefault(path)) };
         // 只读本房引用的MOB，同模板在本次操作内只解析一次；限制随资源行冻结，不另建全局缓存。
         var restrictions = new Dictionary<int, (bool Restricted, bool Named)>();
         room = room with { Monsters = Array.AsReadOnly(room.Monsters.Select(monster =>
@@ -478,6 +483,8 @@ internal sealed class DungeonRoomCatalog
         var sections = new Dictionary<string, IReadOnlyList<PvfToken>>(StringComparer.Ordinal);
         string? declaredType = null;
         bool typeSeen = false;
+        IReadOnlyList<PvfToken>? followTokens = null;
+        bool followSeen = false, followInvalid = false;
         for (int i = 0; i < tokens.Count;)
         {
             if (tokens[i].Type != 3)
@@ -492,6 +499,16 @@ internal sealed class DungeonRoomCatalog
                 declaredType = !typeSeen && i < tokens.Count && tokens[i].Type == 6 &&
                     (i + 1 == tokens.Count || tokens[i + 1].Type == 3) ? resolve(tokens[i].Value) : null;
                 typeSeen = true;
+                continue;
+            }
+            if (tag == "[monster follow type]")
+            {
+                int followStart = i;
+                while (i < tokens.Count && tokens[i].Type != 3) i++;
+                // 可选跟随声明只授予已完整对齐的资源行资格；未知、重复或损坏声明不收窄旧地图装载。
+                followInvalid |= followSeen || i == tokens.Count || resolve(tokens[i].Value) != "[/monster follow type]";
+                followSeen = true;
+                followTokens = Freeze(tokens.Skip(followStart).Take(i - followStart));
                 continue;
             }
             if (tag is not ("[monster]" or "[monster team]" or "[passive object]" or "[buff]" or "[ai character]" or "[special passive object]" or "[event monster position]"))
@@ -618,6 +635,15 @@ internal sealed class DungeonRoomCatalog
             throw new InvalidDataException("房间 monster team 索引超过怪物资源行");
         for (int index = 0; index < teams.Count; index++)
             monsterRows[index] = monsterRows[index] with { Team = teams[index] };
+        if (!followInvalid && followTokens is not null && followTokens.Count == monsterRows.Count && followTokens.All(token => token.Type == 6))
+        {
+            string[]? followTypes = null;
+            try { followTypes = followTokens.Select(token => resolve(token.Value)).ToArray(); }
+            catch (InvalidDataException) { } // 可选字符串引用损坏时整块不授资格，不能留下部分跟随行。
+            if (followTypes is not null)
+                for (int index = 0; index < followTypes.Length; index++)
+                    monsterRows[index] = monsterRows[index] with { FollowType = followTypes[index] };
+        }
         var actors = new List<DungeonRoomAiCharacter>();
         if (sections.TryGetValue("[ai character]",out var actorTokens))
         {

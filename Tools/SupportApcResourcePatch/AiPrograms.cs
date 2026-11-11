@@ -30,8 +30,10 @@ internal static class AiPrograms
                 else { Awakening(67); Awakening(26); }
                 break;
             case 74990:
+                // 开场先补主增益；足够时由同一增益条件跳过，治疗不能无限抢占开场。
+                Buff(14); Buff(21);
                 Heal(3, 70); Heal(32, 55); Buff(6); Revive(30);
-                foreach (int skill in new[] {14,21,23,28}) Buff(skill);
+                foreach (int skill in new[] {23,28}) Buff(skill);
                 if (keys.ContainsKey(36)) Buff(36);
                 if (keys.ContainsKey(91)) Buff(91, battle: true);
                 Buff(24, battle: true);
@@ -39,8 +41,9 @@ internal static class AiPrograms
                 if (revised) { Small(16); Small(31); } else { Small(31); Small(16); }
                 break;
             case 19973:
-                Heal(367, 70); Heal(339, 50);
+                // 偏爱先选定当前玩家，诅咒紧随其后；二者齐备后才进入治疗与战斗技能。
                 Buff(330, firstOnly: true); Buff(335);
+                Heal(367, 70); Heal(339, 50);
                 Revive(345); Buff(337, battle: true); Buff(332, battle: true);
                 if (keys.ContainsKey(341)) Heal(341, 35);
                 Awakening(343); if (!revised) Awakening(350);

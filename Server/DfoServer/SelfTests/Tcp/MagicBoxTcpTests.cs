@@ -1,5 +1,6 @@
 using System.Text;
 using DfoServer.Game.Accounts;
+using DfoServer.Game.Characters;
 using DfoServer.Game.Currency;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
@@ -14,6 +15,7 @@ internal static class MagicBoxTcpTests
 {
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
+        Inventory.MagicBoxTests.RunRewardRowCore();
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "magic-box"), resources: resources);
         var repository = new CharacterRepository(fixture.Database);
         using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
@@ -82,10 +84,51 @@ internal static class MagicBoxTcpTests
             That(restored.Inventory.Find(new(InventoryListType.Main, 70)) is { Core.Count: 989 } &&
                 restored.Inventory.AccountWallet.SeriaLuck == 1, "重新选角后持久化十连源数量及幸运值保持一致");
         }
+        DungeonBox(fixture, resources, repository);
         await fixture.StopAsync();
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0,
             "随机盒真实TCP后的存档完整性");
         await RunPotAsync(source, root, resources);
+    }
+
+    static void DungeonBox(TcpTestFixture fixture, TcpTestResources resources, CharacterRepository repository)
+    {
+        var places = resources.ItemResources.MagicBoxes.UsePlaces(2682272);
+        That(places.Allows(new(StackableUsePlace.Dungeon)), "真实赛丽亚幸运盒地点允许正式副本");
+        var candidate = CharacterCreation.Prepare("DungeonLucky", resources.Characters.Get(0), resources.Towns.Room,
+            resources.Towns.InitialReturn, resources.Learning.Get);
+        var growth = SelfTestCatalogs.Growth(resources.Archive, resources.Learning);
+        Character created;
+        using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
+            created = repository.Create(owner, candidate with
+            {
+                Level = 20, AcceptedStoryLevel = 1,
+                InitialLearning = DfoServer.Game.Skills.SkillPointLedger.Synchronize(0, 0, 20,
+                    candidate.InitialLearning with { Experience = growth.GetLevelStartExperience(20) }, resources.Learning),
+                Inventory = candidate.Inventory with { Items = candidate.Inventory.Items.Add(new(0,
+                    new(InventoryListType.Main, 70), InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(2682272), 2))) }
+            });
+        using var peer = Open(fixture);
+        peer.Select(created.Slot);
+        FormalDungeonTcpTests.EntryTown(peer);
+        FormalDungeonTcpTests.Enter(peer);
+        string before = fixture.Snapshot("SELECT * FROM character_inventory_items ORDER BY item_uid");
+        peer.Send(208, [4, 70, 0]);
+        peer.Expect(1, 208, [0]);
+        peer.Barrier();
+        That(before == fixture.Snapshot("SELECT * FROM character_inventory_items ORDER BY item_uid"), "加载阶段拒绝且不扣源");
+        FormalDungeonTcpTests.Load(peer, fatigue: false);
+        peer.Expect(0, 36);
+        peer.Send(208, [4, 70, 0]);
+        var ack = peer.Expect(1, 208).Body;
+        That(ack.Length >= 9 && ack[0] == 1 && ack[1] == 4 && U16(ack, 3) == 70,
+            "副本内单开返回真实成功结果");
+        using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
+        {
+            var saved = repository.List(owner).Single(role => role.Id == created.Id);
+            That(saved.Inventory.Find(new(InventoryListType.Main, 70)) is { Core.Count: 1 } &&
+                saved.Inventory.AccountWallet.SeriaLuck == 2, "副本开盒提交源及账号幸运值");
+        }
     }
 
     static async Task RunPotAsync(ServerOptions source, string root, TcpTestResources resources)

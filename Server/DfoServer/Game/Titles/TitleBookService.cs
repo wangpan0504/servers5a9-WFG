@@ -19,11 +19,17 @@ internal sealed class TitleBookService(TitleCatalog titles, ItemCatalog items, P
     {
         if (itemId == 0) return (0, null);
         if (itemId > int.MaxValue) return (2, null);
+        int id = (int)itemId;
+        if (character.Inventory.Find(new(InventoryListType.Equipment, 13)) is { } worn &&
+            items.TryGet(worn.Core.ItemId, out var wornTemplate) && wornTemplate.CannotBeHiddenByCloneTitle)
+            return (2, null);
+        if (!items.TryGet(id, out var sourceTemplate) || sourceTemplate.EquipmentSlot != 13 || sourceTemplate.CannotBeCloneTitle)
+            return (2, null);
         // 动画只借用当前角色真实持有的称号，不能凭客户端模板ID解锁未持有外观。
-        var sources = character.Inventory.Items.Where(item => item.Core.ItemId == (int)itemId &&
+        var sources = character.Inventory.Items.Where(item => item.Core.ItemId == id &&
             (IsBook(item.Position.List) || item.Position.List == InventoryListType.Main ||
                 item.Position is { List: InventoryListType.Equipment, Index: 13 }) &&
-            Valid(item, (int)itemId, utcSeconds)).ToArray();
+            Valid(item, id, utcSeconds)).ToArray();
         if (sources.Length == 0) return (2, null);
         return (0, sources.Any(item => item.ExpireTime <= 0) ? null : sources.Max(item => (long)item.ExpireTime));
     }
@@ -96,7 +102,7 @@ internal sealed class TitleBookService(TitleCatalog titles, ItemCatalog items, P
     long? QualificationExpiry(Character character, InventoryItem item) => character.Level < items.Get(item.Core.ItemId).MinimumLevel
         ? character.Inventory.AccountWallet.ContractExpiry(22) : null;
 
-    static InventoryResult Move(Character character, InventoryItem item, InventorySlot target, InventoryItem? previous,
+    InventoryResult Move(Character character, InventoryItem item, InventorySlot target, InventoryItem? previous,
         InventorySlot returnSlot, string reason, long? qualificationExpiresAt = null)
     {
         var before = character.Inventory;
@@ -105,6 +111,11 @@ internal sealed class TitleBookService(TitleCatalog titles, ItemCatalog items, P
         if (previous is not null) changed.Add(previous with { Position = returnSlot });
         var after = before with { Items = changed.OrderBy(value => value.Position.List).ThenBy(value => value.Position.Index).ToImmutableArray() };
         after.Validate(allocating: true);
-        return new(true, 0, new(before, after, reason, new(character, qualificationExpiresAt)));
+        var titleSlot = new InventorySlot(InventoryListType.Equipment, 13);
+        bool titleSlotChanged = item.Position == titleSlot || target == titleSlot || previous is not null && returnSlot == titleSlot;
+        return new(true, 0, new(before, after, reason, new(character, qualificationExpiresAt))
+        {
+            CloneTitleItemIdAfter = titleSlotChanged ? InventoryCloneAppearanceService.CloneTitleAfter(character, after, items) : null
+        });
     }
 }

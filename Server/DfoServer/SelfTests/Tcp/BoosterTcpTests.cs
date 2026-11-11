@@ -681,7 +681,11 @@ internal static class BoosterTcpTests
             FormalDungeonTcpTests.Enter(peer);
             RejectSource(peer, 65, "Loading阶段不能消费副本礼包");
             FormalDungeonTcpTests.Load(peer, fatigue: false);
-            peer.Expect(0, 36, [0, 0, 156, 0, 0, 0, 156, 0, 0, 0]);
+            byte[] fatigueBody = peer.Expect(0, 36).Body;
+            byte[] expectedFatigue = [1, 0, 156, 0, 0, 0, 155, 0, 0, 0];
+            That(fatigueBody.SequenceEqual(expectedFatigue), $"副本疲劳正文：实际 {Convert.ToHexString(fatigueBody)}，预期 {Convert.ToHexString(expectedFatigue)}");
+            That(fixture.Query("SELECT used,maximum,used_maximum,remaining,context_auxiliary FROM character_fatigue WHERE character_id=$p0", created.Id)
+                is [[1L, 156L, 0L, 155L, 0L]], "剧情首房加载后的疲劳通知与已提交账本一致");
             RejectSource(peer, 67, "仅城镇与房间礼盒在已加载正式副本仍拒绝");
             OpenAndVerify(peer, 2);
         }

@@ -50,7 +50,7 @@ internal sealed partial class DungeonHandler
             if (member.Actor.Session.PublicCharacter(member.Actor.Character.Id) is not { } identity) continue;
             await context.Notify(NotiPacketType.USERINFO,
                 TownPackets.Actor(identity.Character, identity.PvpGrade, identity.Channel, adventureName: identity.AdventureName,
-                    sceneState: ActorSceneState.Dungeon, premiumPcRoom: identity.PremiumPcRoom), "party_dungeon_actor", guard);
+                    sceneState: ActorSceneState.Dungeon, premiumPcRoom: identity.PremiumPcRoom, returningAdventurerType: identity.ReturningAdventurerType), "party_dungeon_actor", guard);
             // 0267C569读取角色ID，0267C581按ID查找已安装Actor；完整属性包同样适用于当前副本队员。
             await context.Notify(NotiPacketType.USERINFO,
                 TownPackets.Player(identity.Character, (partyStats ?? throw new InvalidOperationException("组队副本缺少属性目录")).Compute(identity.Character),
@@ -178,6 +178,7 @@ internal sealed partial class DungeonHandler
         if (notice.Kind == PartyDungeonNoticeKind.MemberLeft)
         {
             await context.Notify(NotiPacketType.USER_LEAVE, TownPackets.RemoveActor(notice.Peer), "party_dungeon_member_left");
+            AdventurerBenefitProjection.Post(context);
             GuildDungeonPartyBuffProjection.Post(context);
             await PublishPartyHostAsync(context, notice.Members, () => notice.Recipient.IsCurrent() &&
                 context.Session.PartyDungeon is { } instance && instance.Members.Contains(notice.Recipient));
@@ -355,6 +356,8 @@ internal sealed partial class DungeonHandler
                     await context.Notify(NotiPacketType.CERA, CurrencyPackets.Cera(scene.Character.Inventory.AccountWallet), "party_entry_cera", Current);
                 foreach (var count in scene.EnterCounts)
                     await context.Notify(NotiPacketType.DUNGEON_ENTER_COUNT_INFO, DungeonEnterCountPackets.Info(count.Dungeon, count.Daily, count.Weekly), "party_entry_count", Current);
+                if (scene.Entry.DungeonId == 316)
+                    await RiftDailyProjection.RefreshParticularHellAsync(context, Current);
                 if (scene.Entry.Dimension is not null) await DimensionEntranceProjection.RefreshAsync(context, Current, entranceOnly: false);
                 RaidCombatProjection.AntonTimersForScene(context, Current);
                 if(scene.BattlePassMissionClock is {} entryClock) await BattlePassMissionProjection.RefreshAsync(context,entryClock.GetUtcNow());
@@ -371,10 +374,12 @@ internal sealed partial class DungeonHandler
                     await context.Notify(NotiPacketType.DIE_STATE, DungeonPackets.CharacterLife(member, (byte)0), "anton_rejoin_dead_member", Current);
                 // 组队副本加载确认同样重建Actor，按当前网吧身份补发特权buff。
                 await PcRoomBuffProjection.PostAsync(context, Current);
+                AdventurerBenefitProjection.Post(context, force: true);
                 town.GuildEconomy?.Post(context, force: true);
                 await GuildTrainingProjection.PostAsync(context);
                 await BossSelectionBuffProjection.PostAsync(context, force: true, canSend: Current);
                 await HellLegendBuffProjection.PostAsync(context, force: true, canSend: Current);
+                await DungeonEpicBuffProjection.PostAsync(context, force: true, canSend: Current);
                 GuildDungeonPartyBuffProjection.Post(context);
                 if (scene.ScriptedReturnId != Guid.Empty)
                 {

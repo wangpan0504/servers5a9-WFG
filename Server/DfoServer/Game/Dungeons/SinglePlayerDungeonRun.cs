@@ -194,10 +194,12 @@ internal sealed partial class SinglePlayerDungeonRun
         FatigueAccelerationPercent = percent;
     }
     internal DungeonMonsterPlan CurrentMonsterPlan => current.Plan;
-    // 友方APC在原客户端跨房随行；只读取本实例真正加载过的资源演员，不把未来房间算作存活。
+    // 友方APC及MAP显式follow的monster跨房随行；只认本实例真正加载过的原对象key。
+    static bool IsFollowingFriendlyActor(DungeonPlannedMonster monster) => monster.IsFriendly && !monster.CanReportDeath &&
+        (monster.AiCharacter is not null || monster.Source?.FollowType == "follow");
     internal DungeonPlannedMonster? PublishedFriendlyActor(ushort key) => carriedCompanions.GetValueOrDefault(key) ?? allRooms.Where(room => room.Loaded)
         .SelectMany(room => room.Plan.Monsters).SingleOrDefault(monster => monster.ObjectKey == key &&
-            monster.AiCharacter is not null && monster.IsFriendly && !monster.CanReportDeath);
+            IsFollowingFriendlyActor(monster));
 
     internal bool HasLivingFriendlyActor(int id, DungeonRunSnapshot snapshot) =>
         carriedCompanions.Values.Any(monster => monster.MonsterId == id && !retiredCarriedCompanions.Contains(monster.ObjectKey)) ||
@@ -264,7 +266,7 @@ internal sealed partial class SinglePlayerDungeonRun
         }
         var room = current.Plan.Monsters.Any(monster => monster.ObjectKey == key && !monster.CanReportDeath) ? current :
             allRooms.SingleOrDefault(candidate => candidate.Loaded && candidate.Plan.Monsters.Any(monster =>
-                monster.ObjectKey == key && monster.AiCharacter is not null && monster.IsFriendly && !monster.CanReportDeath));
+                monster.ObjectKey == key && IsFollowingFriendlyActor(monster)));
         room?.Dead.Add(key);
     }
     internal bool MockBattleDefeated => entry.MockBattle is not null &&
@@ -532,8 +534,7 @@ internal sealed partial class SinglePlayerDungeonRun
             var baseMonsters = plan.Monsters.Where(monster => monster.HellWave is null).ToArray();
             var waveMonsters = plan.Monsters.Where(monster => monster.HellWave is not null).ToArray();
             if (baseMonsters.Length != resourcePlan.Monsters.Count || waveMonsters.Length != plan.HellWaves.Count ||
-                !EpicRoad2019MonsterPolicy.Matches(entry) &&
-                    baseMonsters.Zip(resourcePlan.Monsters).Count(pair => pair.First.SpawnType != pair.Second.SpawnType) > 1 ||
+                baseMonsters.Zip(resourcePlan.Monsters).Count(pair => pair.First.SpawnType != pair.Second.SpawnType) > 1 ||
                 waveMonsters.Any(wave => !wave.IsBlocking || wave.ObjectKey == entry.CharacterId || !keys.Add(wave.ObjectKey) ||
                     !plan.HellWaves.Any(hell => hell.ObjectKey == wave.ObjectKey && hell.MonsterId == wave.MonsterId)) ||
                 baseMonsters.Zip(resourcePlan.Monsters).Any(pair =>
@@ -606,10 +607,8 @@ internal sealed partial class SinglePlayerDungeonRun
 
     // 入场已按资源[champion]抽出精英；复验不能把这一步合法的0→1变化当成伪造演员。
     static bool AllowedChampionPromotion(DungeonPlannedMonster planned, DungeonPlannedMonster resource, DungeonEntryPlan entry) =>
-        planned.SpawnType == 1 && (EpicRoad2019MonsterPolicy.Matches(entry)
-            ? EpicRoad2019MonsterPolicy.CanPromote(resource)
-            : DungeonMonsterPlan.CanBecomeChampion(resource) && !entry.NamedMonsters.Contains(resource.MonsterId) &&
-                entry.ChampionPercents.Percent(entry.Difficulty) > 0);
+        planned.SpawnType == 1 && DungeonMonsterPlan.CanBecomeChampion(resource) &&
+        !entry.NamedMonsters.Contains(resource.MonsterId) && entry.ChampionPercents.Percent(entry.Difficulty) > 0;
 
     // 等级只在房间首次安装时冻结；AI参数每次安装都重新解析，回访不沿用上一次访问的配置。
     // 组队各角色共享同一个冻结控制器，同房安装仍取同一份快照。
@@ -625,6 +624,9 @@ internal sealed partial class SinglePlayerDungeonRun
 
     // 本次房间访问冻结的AI参数；null 表示冻结时功能关闭，不发送私有包。
     internal MonsterAiProfile? CurrentMonsterAi => current.MonsterAi;
+    internal DungeonLanding? InitialHelperLanding => entry.HelperRotation is not null && LastLoadingFact is null &&
+        Phase == SinglePlayerDungeonPhase.Loading && current.Plan.Room.Map == entry.StartMap
+        ? current.Plan.Room.HelperLanding : null;
 
     public DungeonRunResult CompleteLoading(DungeonRunIdentity expected, Guid actionId, bool hasMatchingQuest = false)
     {
@@ -644,7 +646,11 @@ internal sealed partial class SinglePlayerDungeonRun
                 if (!HasLoadedHopeArea(area)) consumedFatigue = checked(consumedFatigue + (uint)hope.FatigueValue);
             }
             else if (entry.StartFatigue > 0 ? first : !allRooms.Any(room => room.Loaded && room.Plan.Room.Map.Id == current.Plan.Room.Map.Id))
-                consumedFatigue = checked(consumedFatigue + (entry.StartFatigue == 0 ? 1u : entry.StartFatigue));
+            {
+                // 入场一次性疲劳只在首次加载计 N。逐房基数默认 1，灾难领域为 3；0 仍按 1，避免漏字段后免费。
+                uint roomCost = entry.StartFatigue > 0 ? entry.StartFatigue : entry.RoomFatigueCost == 0 ? 1u : entry.RoomFatigueCost;
+                consumedFatigue = checked(consumedFatigue + roomCost);
+            }
         }
         acceptedActions.Add(actionId, new(expected, "loaded", null));
         current.Loaded = true;
@@ -693,9 +699,11 @@ internal sealed partial class SinglePlayerDungeonRun
             next = replacement;
         current = next;
         FreezeCurrentRoom();
-        mapOperation = DungeonMapOperation.Current;
+        // 原生普通格选择不会清除该坐标的叠层游标。末层直接离房后折返，
+        // 必须显式恢复基础格，否则客户端仍会用叠层演员缓存重建已死亡的怪物。
+        mapOperation = layerSources.ContainsKey(target) ? DungeonMapOperation.RestoreBase : DungeonMapOperation.Current;
         mapPayload = replaceVisited ? DungeonMapPayload.Refresh : current.Loaded ? DungeonMapPayload.Cached : DungeonMapPayload.Build;
-        pendingLayerBaseAck = null;
+        pendingLayerBaseAck = mapOperation == DungeonMapOperation.RestoreBase ? target : null;
         Phase = SinglePlayerDungeonPhase.Loading;
         Advance();
         return Result(DungeonRunOutcome.Accepted);
@@ -1025,7 +1033,7 @@ internal sealed partial class SinglePlayerDungeonRun
         ArgumentNullException.ThrowIfNull(fact);
         ArgumentNullException.ThrowIfNull(reward);
         if (entry.LostLand is not null || tagEvildom is not null || entry.IsPractice || entry.DungeonId is >= 11008 and <= 11107 || !ReferenceEquals(ClearFact, fact) || fact.Identity != identity || Phase != SinglePlayerDungeonPhase.Settlement ||
-            HasPendingDeath || reportBody.IsEmpty || reportBody.Length > 4096 || reward.TotalExperience == 0 && !entry.IsTutorial && !entry.DisableMonsterAndClearExperience ||
+            HasPendingDeath || reportBody.IsEmpty || reportBody.Length > 4096 || reward.TotalExperience == 0 && !entry.AllowsZeroClearExperience ||
             entry.DisableMonsterAndClearExperience && reward.TotalExperience != 0 ||
             (ulong)reward.BaseExperience + reward.RankExperience + reward.ExtraExperience != reward.TotalExperience || reward.RankBonusIndex is < -1 or > 4 ||
             string.IsNullOrWhiteSpace(reward.RuleId) || reward.RuleId.Length > 128 ||
@@ -1262,7 +1270,7 @@ internal sealed partial class SinglePlayerDungeonRun
     private bool TerminalBossCleared(ushort? preparedMonsterKey = null, bool passiveConfirmed = false)
     {
         if (antonTremorTargets is not null) return IsTerminalRoom() && AntonTremorTargetsCommitted &&
-            (HasCommittedPassiveClearCondition || passiveConfirmed);
+            (passiveClearTarget is null || HasCommittedPassiveClearCondition || passiveConfirmed);
         if (current.Altar is { } altar)
             return IsTerminalRoom() && (altar.Completed || altar.CanComplete(current.Dead, preparedMonsterKey));
         // 正常通关由当前终点Boss死亡决定；未走过的支路不属于全图清怪要求。

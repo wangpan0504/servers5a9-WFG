@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Characters;
@@ -8,6 +9,7 @@ using DfoServer.Infrastructure;
 using DfoServer.Network.Builders.Inventory;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Parsers.Inventory;
+using static DfoServer.Testing.TestCheck;
 
 namespace DfoServer.Testing.Inventory;
 
@@ -351,6 +353,75 @@ internal static class MagicBoxTests
             foreach (string failure in failures) Console.WriteLine("Magic-box candidate failure: " + failure);
             Check(failures.Count == 0, "真实赛丽亚全部正权重候选均有完整十连交付能力");
         }
+    }
+
+    public static void RunRewardRowCore()
+    {
+        var unrestricted = BoosterCatalog.ParseUsePlaces("[stackable type]\n`[random upgradable legacy]` 1\n");
+        var townOnly = BoosterCatalog.ParseUsePlaces("[action usable place]\n`[village]`\n");
+        That(unrestricted.Allows(new(StackableUsePlace.Dungeon)) && unrestricted.Allows(new(StackableUsePlace.Village)) &&
+            townOnly.Allows(new(StackableUsePlace.Village)) && !townOnly.Allows(new(StackableUsePlace.Dungeon)),
+            "随机盒未声明地点时允许副本，显式城镇限制不能在副本放行");
+        const int boxId = 912091;
+        const int rewardId = 912092;
+        const int limit = 10;
+        var now = new DateTimeOffset(2026, 11, 11, 0, 0, 0, TimeSpan.Zero);
+        var catalog = new ItemCatalog(null!, new Dictionary<int, string>(), new Dictionary<int, string>(), 0);
+        var boxTemplate = RowTemplate(boxId, 99);
+        var rewardTemplate = RowTemplate(rewardId, limit);
+        catalog.PrefillTemplates(new Dictionary<int, ItemTemplate> { [boxId] = boxTemplate, [rewardId] = rewardTemplate });
+        var boxes = MagicBoxCatalog.ForTests(boxId, new MagicBoxDefinition(
+            [new MagicBoxPool([new MagicBoxReward(rewardId, 1, 1)])], 0, 0));
+        var limits = new GoldLimitCatalog("[gold limit from level]\n0 1000000\n[/gold limit from level]");
+        var pieces = new EpicPieceCatalog("[piece list]\n50000 50001\n[/piece list]");
+        var service = new InventoryMagicBoxService(catalog, boxes, limits, pieces, new FirstRandom());
+        var reward = InventoryRewardGrantService.Create(rewardTemplate, 1, now);
+        var full = new InventoryItem(11, new(InventoryListType.Main, 65), reward with { Value = limit });
+        var later = new InventoryItem(12, new(InventoryListType.Main, 66), reward with { Value = limit - 1 });
+        var box = new InventoryItem(10, new(InventoryListType.Main, 94), new(boxId, ItemKind.Consumable, 2));
+        var request = new MagicBoxOpenRequest(0, box.Position, boxId, new(InventoryListType.Main, -1), 0, 1);
+        var character = new Character(1, 0, "MagicBoxRow", 0, new(1, 0, 10, 10), null)
+        {
+            Inventory = new([box, full, later], Expansion: 0)
+        };
+        var opened = service.Open(character, request, out var receipt, now);
+        var row = receipt?.Rewards.Single();
+        That(opened.Accepted && opened.Plan!.OverflowItems.IsEmpty && row is { ItemId: rewardId, Count: 1, Slot: 66, Durability: 0 } &&
+            opened.Plan.After.Find(full.Position) == full &&
+            opened.Plan.After.Find(later.Position) is { Uid: 12, Core.Count: limit } &&
+            opened.Plan.After.Items.Length == 3 && opened.Plan.After.Find(box.Position) is { Core.Count: 1 },
+            "首堆已满、后堆有空位时，结果行槽号是实际增加的后堆，数量是本次获得量");
+        var ack = MagicBoxPackets.OpenedSingle(receipt!);
+        That(ack.Length == 9 + ItemListProtocolWriter.EntrySize && ack[0] == 1 && BitConverter.ToInt16(ack, 7) == 1 &&
+            BitConverter.ToInt16(ack, 9) == 66 && BitConverter.ToInt32(ack, 11) == rewardId && BitConverter.ToInt32(ack, 15) == 1,
+            "成功 ACK 的槽号和数量与实际落点一致，不写未变化的首堆");
+
+        boxes = MagicBoxCatalog.ForTests(boxId, new MagicBoxDefinition(
+            [new MagicBoxPool([new MagicBoxReward(rewardId, 1, 3)])], 0, 0));
+        service = new InventoryMagicBoxService(catalog, boxes, limits, pieces, new FirstRandom());
+        var split = service.Open(character, request, out var splitReceipt, now);
+        var splitRow = splitReceipt?.Rewards.Single();
+        var created = split.Plan?.After.Items.Single(item => item.Position.Index == 67);
+        That(split.Accepted && split.Plan!.OverflowItems.IsEmpty && splitRow is { Slot: 66, Count: 3 } &&
+            split.Plan.After.Find(full.Position) == full &&
+            split.Plan.After.Find(later.Position) is { Uid: 12, Core.Count: limit } &&
+            created is { Core.ItemId: rewardId, Core.Count: 2 },
+            "奖励拆进多堆时，一行仍指向槽号最小的实际变化槽，数量保持本次获得总量");
+
+        var page = Enumerable.Range(65, 32).Where(slot => slot != 94)
+            .Select((slot, index) => new InventoryItem(index + 100, new(InventoryListType.Main, (short)slot), reward with { Value = limit }))
+            .Prepend(box).ToImmutableArray();
+        var mailed = service.Open(character with { Inventory = new(page, Expansion: 0) }, request, out var mailReceipt, now);
+        var hidden = MagicBoxPackets.OpenedSingle(mailReceipt!);
+        That(mailed.Accepted && mailed.Plan!.OverflowItems is [{ Core.ItemId: rewardId, Core.Count: 3 }] &&
+            mailReceipt!.Rewards.Single() is { Slot: -1, Count: 3 } &&
+            BitConverter.ToInt16(hidden, 7) == 0 && hidden.Length == 9 &&
+            page.Where(item => item.Core.ItemId == rewardId).All(item => mailed.Plan.After.Find(item.Position) == item),
+            "已有同编号满堆且页满、奖励全部进邮件时，结果行保持 -1，不指向未变化的首堆");
+        Console.WriteLine("PASS magic-box reward row tracks the changed slot");
+
+        static ItemTemplate RowTemplate(int id, int stackLimit) =>
+            new(id, ItemKind.Consumable, 0, 1, 0, stackLimit, 1, 0, 1, "[free]", 0, 0, "结果行槽位模板");
     }
 
     sealed class PoolRandom(int pools, int selectedPool, long offset, Action? firstDraw = null) : Random

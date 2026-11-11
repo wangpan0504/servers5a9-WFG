@@ -348,11 +348,21 @@ internal sealed partial class TcpPeer : IDisposable
             packet = Read();
         }
         bool griefAnnounced = false;
+        bool particularAnnounced = false;
         // 选图附带的状态通知逐项校验后记录，550须按两祭坛及悲叹当前楼层逐项匹配真实账本；保留原27及正文断言。
         while (kind == 0 && opcode == 27 && packet.Kind == 0 &&
                (packet.Opcode == 1536 && packet.Body.Length == 5 || packet.Opcode == 1303 && packet.Body.Length == 2 ||
-                packet.Opcode is 550 or 1608 or 815 or 772))
+                packet.Opcode is 550 or 1608 or 815 or 772 or 832))
         {
+            if (packet.Opcode == 832)
+            {
+                TestCheck.That(!particularAnnounced && fixture?.ExpectsParticularHellSelection(Id) == true,
+                    "仅包含316的当前世界地图选图允许一组832/833，不吞无关或重复通知");
+                particularAnnounced = true;
+                ReadParticularHellCounts(packet);
+                packet = Read();
+                continue;
+            }
             if (packet.Opcode == 1536)
             {
                 AssaultDailyInfo = packet.Body;
@@ -786,6 +796,13 @@ internal sealed partial class TcpPeer : IDisposable
                     (EnterCounts.Any(row => U32(row) == U32(packet.Body)) || DungeonEnterCounts.ContainsKey((int)U32(packet.Body))),
                     "在线副本次数属于初始化的当前角色副本且包含完整字段");
                 break;
+            case 832:
+                TestCheck.That(packet.Body.Length == 264 && U32(packet.Body) == 3 &&
+                    packet.Body.AsSpan(4).IndexOfAnyExcept((byte)0) == -1, "日切魔界832恢复真实总额度并清旧表");
+                break;
+            case 833:
+                CheckParticularHellUsage(packet.Body);
+                break;
             case 1536:
                 TestCheck.That(packet.Body.Length == 5 && packet.Body[2] <= 6 && packet.Body[3] == 0 && packet.Body[4] == 0,
                     "在线强袭信息保持完整五字节");
@@ -1099,7 +1116,8 @@ internal sealed partial class TcpPeer : IDisposable
         (SkinOwnership[] Owned, int[] Selected)? emoticons = null, SkinStorageState? accountSkins = null, byte[]? ekernCycle = null,
         byte? recoveredPvpGrade = null, byte recoveredPowerTitle = 0, SkinStorageKey[]? recentSkins = null, int[]? knightShieldDeck = null,
         (int BuffId, int Remaining)? bossBuff = null, byte[]? strongwayHistory = null, byte[]? strongwayAccountRewards = null,
-        int? hellLegendUntil = null)
+        int? hellLegendUntil = null, (int BuffId, int Value)[]? variousBuffs = null, byte[]? luckyProfessions = null,
+        bool luckyFatigueAcceleration = false)
     {
         // 三类决斗入口直接绑定非房间地区10/0；仍逐包断言1379不应出现，不跳过未知包。
         if (PvpEntry) room = false;
@@ -1158,6 +1176,9 @@ internal sealed partial class TcpPeer : IDisposable
             characterOptions = Build(writer => { writer.Write(512u); writer.Write(options); });
         }
         Expect(0, 390, characterOptions);
+        // 空名单也须先于Actor清除客户端上次连接残留；非空预期由专项显式独立编码。
+        Expect(0, 1057, luckyProfessions ?? new byte[4]);
+        if (luckyFatigueAcceleration) Expect(0, 490, [0, 0, 1]);
         var middle = new List<WirePacket>();
         RestoredConsumableStates.Clear();
         SkillInfo = [];
@@ -1248,6 +1269,9 @@ internal sealed partial class TcpPeer : IDisposable
                 if (hellLegendUntil is { } until)
                     Expect(0, 487, Build(writer =>
                     { writer.Write((byte)1); writer.Write(1271); writer.Write(until); writer.Write(0); writer.Write(0); }));
+                foreach (var buff in variousBuffs ?? [])
+                    Expect(0, 487, Build(writer =>
+                    { writer.Write((byte)1); writer.Write(buff.BuffId); writer.Write(buff.Value); writer.Write(0); writer.Write(0); }));
                 if (ekernCycle is not null) Expect(0,656,ekernCycle);
                 foreach (int dungeonId in new[] { 11006, 11007 })
                 {
@@ -1379,6 +1403,11 @@ internal sealed partial class TcpPeer : IDisposable
                 if (packet is { Kind: 0, Opcode: 772 })
                 {
                     ReadAncientGate(packet);
+                    packet = Read();
+                }
+                if (enterCounts.Count == 16)
+                {
+                    ReadParticularHellCounts(packet);
                     packet = Read();
                 }
                 TestCheck.That(enterCounts.Count is 0 or 16 && enterCounts.All(body => U32(body, 0) is not (11006 or 11007)) && enterCounts.Select(body => U32(body, 0)).Distinct().Count() == enterCounts.Count,
@@ -1654,6 +1683,8 @@ internal sealed partial class TcpPeer : IDisposable
                 int next = expectedSettings.FindIndex(option => option.Opcode != 173);
                 expectedSettings.Insert(next >= 0 ? next : expectedSettings.Count, (390, characterOptions));
             }
+            if (!expectedSettings.Any(option => option.Opcode == 454))
+                expectedSettings.Add((454, [Convert.ToByte(guideCharacter[0]) == 10 ? (byte)1 : (byte)0, 4, 0, 0, 0, 78, 79, 78, 69]));
             ClientSettings = expectedSettings.Select(option => Expect(0, option.Opcode, option.Body)).ToArray();
             if (appearanceFlags.HasValue)
                 Expect(0, 357, Build(w =>

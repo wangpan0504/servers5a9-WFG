@@ -263,6 +263,10 @@ internal static class FiendwarRewardClosureTests
                     That(offer.PreyDisplay.Length == offer.Grants.Length &&
                         offer.PreyDisplay.Zip(offer.Grants).All(pair => pair.First.Matches(pair.Second)),
                         "翻牌展示绑定已冻结的实际奖励数量");
+                byte expectedCode = index >= 3 ? (byte)1 : (byte)0;
+                That(offers[0].PreyDisplay.All(spec => spec.RawCode == 0) &&
+                    offers[1].PreyDisplay.All(spec => spec.RawCode == expectedCode),
+                    "固定牌保持code=0，分队牌全部展开项同步squad_item的RawD金牌标记：" + roots[index + 3].Id);
             }
             lower += weights[index];
         }
@@ -289,9 +293,11 @@ internal static class FiendwarRewardClosureTests
                 expected.Add(new(roots[0].Item, roots[0].Count));
                 if (pcroom) expected.Add(new(roots[1].Item, roots[1].Count));
                 if (entitled[member]) expected.Add(new(roots[2].Item, roots[2].Count));
+                var fixedOffer = frozen[member].Phases.Single().Rewards.Offers.Single(offer => offer.Kind == 1);
                 That(states[member].IsActive(at) == entitled[member] &&
-                    frozen[member].Phases.Single().Rewards.Offers.Single(offer => offer.Kind == 1).Grants.SequenceEqual(expected),
-                    "逐成员礼遇开始包含、到期排除，网吧资格与礼遇独立：" + member + "/" + pcroom);
+                    fixedOffer.Grants.SequenceEqual(expected) &&
+                    fixedOffer.PreyDisplay.All(spec => spec.RawCode == 0),
+                    "逐成员礼遇开始包含、到期排除，网吧资格与礼遇独立且固定牌code恒为0：" + member + "/" + pcroom);
             }
         }
 

@@ -49,6 +49,16 @@ internal sealed class NativeDungeonCombatAuthority : DungeonCombatAuthority
         accepted.Map == run.Snapshot.CurrentMap && accepted.Observation is NativeDungeonDeathObservation observation &&
         observation.SpawnLevel == level && observation.SpawnHpSnapshot == hp;
 
+    // 使用首次签发的原报告；SQL重试时客户端改写正文不能把清除事件升级成奖励死亡。
+    public bool WasReportedWithoutRewrite(ConfirmedDungeonMonsterDeath death) =>
+        issued.TryGetValue(death.MonsterKey, out var accepted) && ReferenceEquals(accepted.Death, death) &&
+        accepted.Observation is NativeDungeonDeathObservation { RewriteFlag: 0 };
+
+    public bool WasClearedWithRewrite(SinglePlayerDungeonRun run, ushort key) =>
+        ReferenceEquals(boundRun, run) && issued.TryGetValue(key, out var accepted) &&
+        accepted.Map == run.Snapshot.CurrentMap && !run.Snapshot.LivingMonsters.Contains(key) &&
+        accepted.Observation is NativeDungeonDeathObservation { RewriteFlag: 1 };
+
     public NativeDungeonDeathResult ValidateAndIssue(SinglePlayerDungeonRun run, DungeonRunIdentity expectedIdentity,
         NativeDungeonDeathObservation observation)
     {

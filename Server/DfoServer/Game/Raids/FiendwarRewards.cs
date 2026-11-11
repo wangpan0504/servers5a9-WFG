@@ -13,6 +13,7 @@ internal sealed class FiendwarRewards(FiendwarScript definition, ItemCatalog ite
     internal const string Source = "fiendwar-cn95-resource-v1;weighted-squad=1;per-character=1;privilege=entitled";
     internal static readonly RaidWeeklyCycle Cycle = new(DayOfWeek.Tuesday, new(6, 0), TimeSpan.FromHours(8));
     readonly RaidRewardContainers containers = new(definition.Script, items, boosters);
+    internal AccountMaterialDefinition? UndefeatedSongLimit => RaidSongQuota.Limit(items);
 
     readonly FiendwarRewards? guide = guideDefinition is null ? null : new(guideDefinition, items, boosters);
     internal LukeRaidCompletionPolicy CreateGuide(bool pcroom, bool privilege = false, decimal epicMultiplier = 1) => guide?.Create(pcroom, privilege, epicMultiplier: epicMultiplier) ??
@@ -27,7 +28,7 @@ internal sealed class FiendwarRewards(FiendwarScript definition, ItemCatalog ite
         foreach (string kind in new[] { "party_card", "pcroom_card", "privilege_card" })
         {
             var rows = phase.Rewards.Where(row => row.Kind == kind).ToArray();
-            if (rows is not [{ RawA: -1, RawB: 100, ItemId: > 0 } row])
+            if (rows is not [{ RawA: -1, RawB: 100, ItemId: > 0, RawD: 0 } row])
                 throw new InvalidDataException("漩涡固定奖励声明不唯一：" + kind);
             Require(row.ItemId);
             if (kind == "pcroom_card" && !pcroom || kind == "privilege_card" && !privilege) continue;
@@ -42,15 +43,15 @@ internal sealed class FiendwarRewards(FiendwarScript definition, ItemCatalog ite
         int roll = (draw ?? RandomNumberGenerator.GetInt32)(total);
         if (roll < 0 || roll >= total) throw new InvalidDataException("漩涡奖励随机数越界");
         var selected = squad.Where((row, index) => (roll -= adjusted[index]) < 0).First();
-        RaidRewardOffer Offer(byte kind, ImmutableArray<InventoryReward> grants) => new(kind, 0, grants, [])
+        RaidRewardOffer Offer(byte kind, ImmutableArray<InventoryReward> grants, byte code = 0) => new(kind, 0, grants, [])
         {
-            // type2使用原生通用16B结果行；展示绑定冻结的实际产物，不先广播未领取卡片。
-            PreyDisplay = grants.Select(grant => new LukeRewardResultSpec(0, checked((uint)grant.ItemId),
+            // type2使用原生通用16B结果行；客户端按红黑树首正数itemId读取+0x5C(code==1)判金牌，展开项统一带所选squad_item的RawD。
+            PreyDisplay = grants.Select(grant => new LukeRewardResultSpec(code, checked((uint)grant.ItemId),
                 checked((ushort)grant.Count), 0, 0,
                 InventoryRewardGrantService.Create(items.Get(grant.ItemId), upgrade: grant.Upgrade, refinement: grant.Refinement).EnchantUpgrade)).ToImmutableArray()
         };
         var reward = new RaidPhaseRewardPolicy(Source,
-            [Offer(1, fixedGrants.ToImmutable()), Offer(0, containers.ResolveAll(selected.ItemId, draw))],
+            [Offer(1, fixedGrants.ToImmutable()), Offer(0, containers.ResolveAll(selected.ItemId, draw), checked((byte)selected.RawD))],
             new(0, 0, 0, 0, 2, 0));
         return new(Source, definition.WeeklyClearLimit, Cycle,
             [new(definition.MinimumClears, definition.WeeklyClearLimit, reward)], LukeParticipationCutoff.TerminalCommittedFacts);

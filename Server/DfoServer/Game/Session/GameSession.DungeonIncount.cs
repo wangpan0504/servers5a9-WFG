@@ -83,18 +83,8 @@ internal sealed partial class GameSession
                 ? row with { Limit = row.Limit + DimensionEntryTicketService.Extra(character.Inventory, IncountNow()) } : row : null;
 
     // 进入 dungeon 要记的账号次数：自身（Check）+ [enter add incount dungeon index] 连带副本（只记不拦）。
-    ImmutableArray<AccountIncountCharge> AccountCharges(int dungeon)
-    {
-        if (incounts is null) return [];
-        var now = IncountNow();
-        var charges = ImmutableArray.CreateBuilder<AccountIncountCharge>();
-        if (incounts.FindAccount(dungeon) is { Limit: > 0 } own)
-            charges.Add(new(dungeon, DungeonIncountPolicy.AccountPeriod(incounts, own, now), own.Limit, true));
-        foreach (int linked in incounts.Linked(dungeon))
-            if (incounts.FindAccount(linked) is { Limit: > 0 } other)
-                charges.Add(new(linked, DungeonIncountPolicy.AccountPeriod(incounts, other, now), other.Limit, false));
-        return charges.ToImmutable();
-    }
+    ImmutableArray<AccountIncountCharge> AccountCharges(int dungeon) =>
+        incounts is null ? ImmutableArray<AccountIncountCharge>.Empty : DungeonIncountPolicy.AccountCharges(incounts, dungeon, IncountNow());
 
     // 所有有次数上限的角色副本当前日/周剩余（NOTI 550 两个 u8），入城时逐个下发；同行副本取同一份使用量。
     // 账号表副本不下发：客户端世界地图上限只读 [dungeon incount info]，账号次数无已知下发包。

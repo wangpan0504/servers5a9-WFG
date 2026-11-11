@@ -169,8 +169,21 @@ internal static class ServerRuntime
         accounts.EnsureDevelopmentAccount();
         // 网吧身份线上默认常开：本进程启动即为开，重启后自动恢复为开；GM 的 pc-room on/off 只改当前进程（不落盘）。
         var supportStore = new Game.Settings.SupportCompanionStore(options.DataDirectory);
-        var debugSettings = new GameDebugSettings(supportStore.Read(), supportStore.Write) { PremiumPcRoom = PremiumPcRoomDefault(options.DataDirectory),
-            SupportProfiles = GameWorld.Dungeons.SupportCompanionCatalog.Load(pvf) };
+        var fatigueStore = new AccountFatigueStore(options.DataDirectory);
+        var adventurerStore = new AdventurerBenefitStore(options.DataDirectory);
+        var adventurerBenefits = new Game.Events.AdventurerBenefitService(new GameWorld.Events.AdventurerBenefitCatalog(pvf),
+            adventurerStore.Read(), adventurerStore.Write);
+        var returningCatalog = new GameWorld.Events.ReturningAdventurerCatalog(pvf);
+        foreach (var reward in returningCatalog.Missions.Select(row => row.Reward).Append(returningCatalog.Welcome).Append(returningCatalog.Daily))
+            _ = itemResources.Items.Get(reward.ItemId);
+        var returningAntiEvil = new Game.Characters.CharacterAntiEvil(itemResources.Items, new(pvf),
+            itemResources.RecoveryConsumables, clock, itemResources.Contracts, sets: new(pvf));
+        repository.ConfigureReturningAdventurers(returningCatalog, adventurerBenefits, returningAntiEvil.Compute, clock);
+        var debugSettings = new GameDebugSettings(supportStore.Read(), supportStore.Write,
+            fatigueStore.Read(), fatigueStore.Write) { PremiumPcRoom = PremiumPcRoomDefault(options.DataDirectory),
+            SupportProfiles = GameWorld.Dungeons.SupportCompanionCatalog.Load(pvf), AdventurerBenefits = adventurerBenefits };
+        debugSettings.ReturningAdventurers = new Game.Events.ReturningAdventurerService(repository, returningCatalog, adventurerBenefits,
+            itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, debugSettings, clock);
         var monsterBattleLevels = new DungeonBattleLevelConfiguration(options.DataDirectory);
         monsterBattleLevels.Reload();
         log.Write("monster_battle_level_config", new { Rules = monsterBattleLevels.Settings.Current.Rules.Count });
@@ -230,7 +243,7 @@ internal static class ServerRuntime
             {
                 Source = "experience_bonus", Reason = "equipped_item_template_missing", CharacterId = request.Character.Id,
                 request.Event, request.DungeonId, ItemId = item.Core.ItemId, item.Uid, Slot = item.Position.Index
-            }), clock: clock);
+            }), clock: clock, adventurerBenefits: adventurerBenefits);
         tutorials ??= new TutorialCatalog(pvf);
         var questProjection = new QuestProjection(quests,questParameters,itemResources.Items,itemResources.GoldLimits,itemResources.EpicPieces,growth);
         var stats = new Game.Characters.CharacterStatComputer(characters);
@@ -704,8 +717,9 @@ internal static class ServerRuntime
                 new SleepyHollowMaterialDropPolicy(SleepyHollowRewardCatalog.Load(dungeonCatalog, rooms), itemResources.Items.Get),hopeRewards,dimensionRewards,dropControl.Settings,legacyHell,riftEpics,
                 regional: new PandemoniumRegionalDropPolicy(dungeonCatalog.Get, itemResources.Items.Get, specialDrops),
                 assaultMaterials: new AssaultMaterialDropPolicy(assaultMode, itemResources.Items.Get),
-                epicRoadSimulated: epicRoad2019Enabled && options.EpicRoad2019SimulatedDropsEnabled
-                    ? new EpicRoad2019SimulatedDropPolicy(dawnEpicPool, true) : null,
+                epicRoadSimulated: epicRoad2019Enabled
+                    ? new EpicRoad2019SimulatedDropPolicy(dawnEpicPool, options.EpicRoad2019SimulatedDropsEnabled, harlemEpics.Super
+                        ?? throw new InvalidDataException("超星河隐藏领主缺少 area54/list5 超界史诗池")) : null,
                 tayberrs: tayberrsDrops, carbonCrystal: new CarbonCrystalDropPolicy(itemResources.Items.Get));
             dropControl.Inspect = new DungeonDropInspection(dungeonCatalog, rooms, resourceDrops, dropControl.Settings).Query;
             passiveDrops = new(dungeonCatalog.Get, itemResources.Items.Get, DungeonDropRuleCatalog.LoadObjects(pvf), dropCandidates, amplificationDrops,
@@ -739,6 +753,7 @@ internal static class ServerRuntime
             log.Write("dungeon_drop_policy", new { Rule = DungeonResourceDropPolicy.Rule,
                 EpicRoadSimulatedEnabled = epicRoad2019Enabled && options.EpicRoad2019SimulatedDropsEnabled,
                 EpicRoadSimulatedRule = EpicRoad2019SimulatedDropPolicy.Rule,
+                EpicRoadHiddenBossRule = epicRoad2019Enabled ? EpicRoad2019SimulatedDropPolicy.HiddenRule : null,
                 EquipmentWeights = "current_pvf_creation_rate", Retained = DungeonResourceDropPolicy.RetainedFields,
                 RegionalMaterialRule = PandemoniumRegionalDropPolicy.Rule, RegionalCardSource = DungeonSpecialDropCatalog.CardPath,
                 SleepyHollowMaterialRule = SleepyHollowMaterialDropPolicy.Rule,
@@ -930,7 +945,7 @@ internal static class ServerRuntime
                 new Game.Marriage.MarriageShopService(itemResources.Items, itemResources.Shops,
                     itemResources.GoldLimits, itemResources.EpicPieces, marriageCatalog, clock), marriageProjection, promotions: cashPromotions, promotionPage: promotionPage, nativePromotionTown: promotionPageService is null ? null : projection,
                 serverEvents: events, strongwayShops: itemResources.Shops,
-                battlePassCertificateChanged: battlePassProjection is null ? null : battlePassProjection.MissionStateAsync),
+                battlePassCertificateChanged: battlePassProjection is null ? null : battlePassProjection.MissionStateAsync, renameTown: projection),
             new RepairHandler(new InventoryRepairService(itemResources.Items, itemResources.Repair, towns, clock), inventoryProjection, log),
             new CharmChargingHandler(new InventoryCharmChargingService(itemResources.Items.Get,
                 itemResources.Items.ActionConsumable, clock), inventoryProjection, log),
@@ -1050,7 +1065,7 @@ internal static class ServerRuntime
             marriageHandler,
             new AgitWarHandler(),
             raidHandler,
-            new RaidCombatHandler(repository, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, inventoryProjection, log, clock, repository),
+            new RaidCombatHandler(repository, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, inventoryProjection, log, clock, repository, projection),
             // 公会：创建窗口的两次查重（CMD 0x9C / 0x9D）、介绍校验（0x2E3）与建会认证链路（0x2E5 / 0x2E6 / 0x2E7）。
             // 顺序模式下创建者可能已经下线：接受认证时用离线账号租约提交，因此这里显式注入账号 owner 表。
             new GuildHandler(new Game.Guild.GuildDirectory(repository, guildParameters), guildPermits, online, owners, log, guildProjection, guildInvitations),
@@ -1099,6 +1114,7 @@ internal static class ServerRuntime
         if (epicPieceShop is not null) new EpicPieceShopHandler(epicPieceShop, inventoryProjection, log).Register(commands);
         if (pcRoomTimePoint is not null) new PcRoomTimePointHandler(log).Register(commands);
         if (dailyAttendance is not null) new DailyAttendanceHandler(log).Register(commands);
+        new ReturningAdventurerHandler(inventoryProjection, log).Register(commands);
         if (weeklyAttendance is not null) new WeeklyAttendanceHandler().Register(commands);
         if (monsterMockBattle is not null) new MonsterMockBattleHandler(log).Register(commands);
         commands.Seal();

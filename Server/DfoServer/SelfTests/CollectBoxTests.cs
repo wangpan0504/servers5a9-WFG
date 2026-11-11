@@ -93,6 +93,19 @@ internal static class CollectBoxTests
         That(permanent[1] == 1 && BinaryPrimitives.ReadUInt32LittleEndian(permanent.AsSpan(2)) == 0 &&
             permanent[6] == 1, "无期限箱使用永久标志");
 
+        var noDateCatalog = new CollectBoxCatalog(CatalogText.Replace("[base expiration date] `2029-01-01`", "")
+            .Replace("[max expiration date] `2030-12-31 23:59:59`", ""));
+        var noDates = noDateCatalog.Get(2);
+        var oldPermanent = CollectBoxPackets.State(noDates, state, 2, baseline + 1000);
+        That(noDates.Extensions.Length == 2 && noDates.ResolveExpiration(baseline) is null &&
+            oldPermanent[6] == 1 && BinaryPrimitives.ReadUInt32LittleEndian(oldPermanent.AsSpan(2)) == 0,
+            "删除两日期后即使保留续期物品及历史期限也按永久发送");
+        var permanentCharacter = new Character(1, 0, "Permanent", 1, new(1, 1, 0, 0, 0), null) with { CollectBox = state };
+        var rejectedExtension = new CollectBoxService(noDateCatalog, null!, null!).Extend(permanentCharacter,
+            new(2, 0, 5001), DateTimeOffset.FromUnixTimeSeconds(baseline));
+        That(!rejectedExtension.Accepted && rejectedExtension.Error == CollectBoxService.ErrorMissing && rejectedExtension.Plan is null,
+            "永久箱拒绝续期且不产生扣券计划");
+
         RunSpring2020Permanent();
 
         That(CollectBoxRequests.Select([2]) == 2 &&
@@ -167,8 +180,32 @@ internal static class CollectBoxTests
 
     public static void RunResources(TownCatalog towns, ItemResources resources)
     {
+        var boxes = resources.CollectBoxes;
+        That(boxes.Entries.Length == 8 && boxes.Entries.Sum(box => box.Slots.Count(slot => slot.ItemId > 0)) == 84,
+            "当前累计PVF八个收集箱及84个有效物品格完整，永久化不等于资源缺失");
+        if (boxes.Entries.All(box => box.BaseExpiration is null && box.MaximumExpiration is null))
+        {
+            That(boxes.Entries.All(box => box.ResolveExpiration(1) is null), "当前八箱删除日期后忽略历史存档期限");
+            var first = boxes.Entries.First(box => !box.Extensions.IsEmpty);
+            // 生产目录保持永久；仅以真实格子和券模板构造有期限夹具，保留续期事务及回滚合同。
+            boxes = new CollectBoxCatalog($"""
+                [collect box info]
+                [index] {first.Index}
+                [base expiration date] `2029-01-01`
+                [max expiration date] `2030-12-31 23:59:59`
+                [extend item] {string.Join(' ', first.Extensions.SelectMany(row => new[] { row.ItemId, row.RequiredCount }))}
+                [item position info]
+                {first.Rows} {first.SlotsPerRow} {string.Join(' ', first.Slots.SelectMany(row => new[] { row.ItemId, row.Metadata }))}
+                [/collect box info]
+                """, resources.Items.Get);
+        }
+        RunTimedResources(towns, resources, boxes);
+    }
+
+    static void RunTimedResources(TownCatalog towns, ItemResources resources, CollectBoxCatalog boxes)
+    {
         int before = Count;
-        var box = resources.CollectBoxes.Entries.FirstOrDefault(entry =>
+        var box = boxes.Entries.FirstOrDefault(entry =>
             entry.Slots.Any(slot => slot.ItemId > 0) && entry.Extensions.Length > 0 &&
             entry.BaseExpiration is { } baseline &&
             (entry.MaximumExpiration is null || entry.MaximumExpiration > baseline) &&
@@ -197,7 +234,7 @@ internal static class CollectBoxTests
             {
                 Inventory = draft.Inventory
             });
-            var service = new CollectBoxService(resources.CollectBoxes, resources.Items, resources.EpicPieces);
+            var service = new CollectBoxService(boxes, resources.Items, resources.EpicPieces);
 
             current = repository.CommitCollectBox(owner, service.Select(current, box.Index).Plan!);
             var source = current.Inventory.Items.Single(item => item.Core.ItemId == slot.ItemId);
@@ -276,7 +313,7 @@ internal static class CollectBoxTests
         {
             TestFiles.DeleteDirectory(root, true);
         }
-        Console.WriteLine($"PASS {Count - before} 宝珠收集箱真实PVF、事务与持久化断言");
+        Console.WriteLine($"PASS {Count - before} 宝珠收集箱真实物品模板、限时夹具事务与持久化断言");
     }
 
     static Character Grant(Character character, ItemTemplate template, int count, DateTimeOffset now, EpicPieceCatalog pieces)

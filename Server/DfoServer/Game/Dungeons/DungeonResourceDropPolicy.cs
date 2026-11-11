@@ -179,7 +179,8 @@ internal sealed class DungeonResourceDropPolicy(DungeonDropRuleCatalog rules, Du
             if (pool.TotalWeight > 0)
                 trials.Add(new(threshold, pool, 1, 1, ProbabilityDenominator: 1000000, Attempts: attempts,
                     GrowthContractEligible: row.ListFlag == 1 && monsterType == 3)
-                    { RarityBonusGroup = row.ListFlag == 1 ? DungeonRarityBonusGroup.IndependentLottery : DungeonRarityBonusGroup.None });
+                    { IndependentDrop = true,
+                        RarityBonusGroup = row.ListFlag == 1 ? DungeonRarityBonusGroup.IndependentLottery : DungeonRarityBonusGroup.None });
         }
         if (special?.WorldByLevel.TryGetValue(level, out var world) == true)
         {

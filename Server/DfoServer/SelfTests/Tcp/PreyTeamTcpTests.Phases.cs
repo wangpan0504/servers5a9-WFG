@@ -486,6 +486,21 @@ internal static partial class PreyTeamTcpTests
 
         void RevealFinalPhase()
         {
+            // 24写出后的阶段投影由退场执行器异步补发，1278只屏障已排队的帧。
+            // 持续收集两条连接直到各自的电影状态到达，再检查完整包序和禁止的提前通知。
+            for (int attempt = 0; attempt < 100; attempt++)
+            {
+                bool complete = true;
+                for (int index = 0; index < peers.Length; index++)
+                {
+                    if (packets[index].Skip(phaseOneStarts[index]).Any(row => row is { Kind: 0, Opcode: 587, Body: [3, 1] }))
+                        continue;
+                    complete = false;
+                    AntonTcpProbe.Note(reports[index], Read(peers[index], "second phase awaiting movie state"));
+                }
+                if (complete) break;
+                Task.Delay(10).GetAwaiter().GetResult();
+            }
             for (int index = 0; index < peers.Length; index++)
             {
                 var peer = peers[index];

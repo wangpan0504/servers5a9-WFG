@@ -113,6 +113,10 @@ internal sealed class MailboxService(IMailboxStore store, ItemCatalog items, Gol
             core = StackableTradePolicy.AfterTransfer(core, template);
             attachments.Add(item with { Uid = remaining is null ? item.Uid : 0, Core = core });
         }
+        // 领取仍把任一过期附件当成整批无效，不能在同一次请求里跳过它再领金币或其他附件。
+        // 因此普通期限附件只能单独成封；与金币或其他附件同封按附件不符合要求拒绝，避免到期后卡住同封资产。
+        if (attachments.Any(item => item.ExpireTime > 0) && (request.Gold != 0 || request.Items.Length != 1))
+            return MailboxError.InvalidAttachment;
         after = after with { Gold = checked((uint)(character.Inventory.Gold - cost)) };
         plan = new(recipient, request, new(character.Inventory, after, "mail_send", new(character)), attachments.ToImmutable(),
             checked((uint)fee), Day(now), now.ToUnixTimeSeconds());
@@ -128,7 +132,10 @@ internal sealed class MailboxService(IMailboxStore store, ItemCatalog items, Gol
             return MailboxError.LockedItem;
         if (item.IsExpired(now))
             return MailboxError.ExpiredItem;
-        if (item.Core.IsRental || item.ExpireTime > 0)
+        // 错误 219 的客户端文案是每日期限。租赁、每日/每周删除、未知或越界的周期声明，
+        // 以及模板没有普通期限却带截止的实例仍拒绝。
+        // 只有没有周期删除声明的相对天数或绝对日期，未到期时才继续按 attach type 判断。
+        if (item.Core.IsRental || BlocksOrdinaryPeriod(template, item.ExpireTime))
             return MailboxError.LimitedPeriod;
         if (template.Id != item.Core.ItemId || template.Kind != item.Core.Kind)
             return MailboxError.InvalidAttachment;
@@ -147,6 +154,16 @@ internal sealed class MailboxService(IMailboxStore store, ItemCatalog items, Gol
             _ => MailboxError.NotTradable
         };
     }
+    static bool BlocksOrdinaryPeriod(ItemTemplate template, int expireTime)
+    {
+        if (expireTime <= 0) return false;
+        var expiration = template.Expiration;
+        // 可流转的普通期限必须同时满足：没有周期删除声明，且模板写了相对天数或绝对日期。
+        // DailyDelete 只认 0；WeeklyDeleteDay 只认缺省。1 与 0..6 是已知每日/每周删除，其余整数值语义未证，一律拒绝。
+        return expiration.DailyDelete != 0 || expiration.WeeklyDeleteDay is not null
+            || expiration.Days <= 0 && expiration.AbsoluteTime <= 0;
+    }
+
     static string Normalize(string value) => value.Replace("`", "").Trim().Trim('[', ']').Trim().ToLowerInvariant();
 
     public MailboxResult Send(AccountOwners.Lease owner, Character character, MailboxSendPlan plan) => store.SendMail(owner, character, plan);

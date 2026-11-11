@@ -13,12 +13,13 @@ internal sealed class PreyGuideRewards(RaidScript script, ItemCatalog items, Boo
     internal const string Source = "prey-guide-resource-v1;etc/raid/prey/prey.etc;single;weighted-squad=1;legacy=resolved;booster=box";
     internal const string TeamSource = "prey-team-resource-v1;etc/raid/prey/prey.etc;weighted-squad=1;per-character=1;privilege=entitled";
     readonly RaidRewardContainers containers = new(script, items, boosters);
+    internal AccountMaterialDefinition? UndefeatedSongLimit => RaidSongQuota.Limit(items);
 
     internal static bool ValidDisplay(RaidRewardOffer offer) => offer.Kind is 0 or 1 && offer.Card == 0 &&
         !offer.PreyDisplay.IsDefaultOrEmpty && offer.PreyDisplay.Length == offer.Grants.Length && offer.Grants.Length <= 32 &&
         offer.PreyDisplay.Select((row, index) => row.Matches(offer with { Grants = [offer.Grants[index]] })).All(value => value);
 
-    internal LukeRaidCompletionPolicy Create(bool pcroom, Func<int, int>? draw = null, decimal epicMultiplier = 1)
+    internal LukeRaidCompletionPolicy Create(bool pcroom, Func<int, int>? draw = null, decimal epicMultiplier = 1, bool privilege = false)
     {
         if (!script.Issues.IsEmpty || script.Phases.Length != 2) throw new InvalidDataException("普雷引导奖励声明不完整");
         var phases = ImmutableArray.CreateBuilder<LukePhaseCompletionPolicy>(2);
@@ -32,7 +33,8 @@ internal sealed class PreyGuideRewards(RaidScript script, ItemCatalog items, Boo
                 foreach (var row in rows)
                 {
                     Require(row);
-                    if (kind != "pcroom_card" || pcroom) fixedGrants.AddRange(containers.ResolveAll(row.ItemId, draw));
+                    if (kind == "pcroom_card" && !pcroom || kind == "privilege_card" && !privilege) continue;
+                    fixedGrants.AddRange(containers.ResolveAll(row.ItemId, draw));
                 }
             }
             var squad = phase.Rewards.Where(row => row.Kind == "squad_item").ToArray();

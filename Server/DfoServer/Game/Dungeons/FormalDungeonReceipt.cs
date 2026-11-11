@@ -23,6 +23,7 @@ internal sealed record FormalDungeonReceipt(Character Character, long Generation
     public ImmutableArray<DungeonGroundObject> PassiveItems { get; init; } = [];
     // 本次房间访问冻结的AI参数；null不改原生数值，独立对象观测仍可发送仅携场景的私有包。
     public MonsterAiProfile? MonsterAi { get; init; }
+    public DfoServer.GameWorld.Dungeons.DungeonLanding? HelperLanding { get; init; }
     // #233 强袭入场提交时扣除材料变化的背包格，仅入场回执携带。
     public ImmutableArray<InventorySlot> AssaultConsumedSlots { get; init; } = [];
     // 实验性：深渊派对入场票在入场提交时扣掉的背包格与票据（日志 + UPDATE_ITEM_LIST 用）。
@@ -51,6 +52,10 @@ internal sealed record FormalDungeonDeathResult(DungeonRunOutcome Outcome, Forma
 {
     public DfoServer.GameWorld.Items.EquipmentRarityBonus EquipmentRarityBonus { get; init; }
     public int EpicPieceBonus { get; init; }
+    public int HellRewardEpicPotionPercent { get; init; }
+    public ImmutableArray<int> DungeonEpicBuffIds { get; init; } = [];
+    public int DungeonEpicBonusPercent { get; init; }
+    public int BossDropPercent { get; init; }
     public DfoServer.Game.Adventure.AdventureProgressionCommit? Adventure { get; init; }
     public Game.Session.TagEvildomClearPreparation? PendingTagEvildomClear { get; init; }
     public Game.Session.ImperialArenaDeathPreparation? PendingImperialArenaDeath { get; init; }

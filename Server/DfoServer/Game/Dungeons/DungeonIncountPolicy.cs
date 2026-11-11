@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using DfoServer.Game.Characters;
 using DfoServer.GameWorld.Dungeons;
 
@@ -39,6 +40,18 @@ internal static class DungeonIncountPolicy
         int reset = catalog.ResetInfo[row.ResetType];
         var date = BusinessDate(now);
         return reset < 0 ? Key(date) : WeekKey(date, reset);
+    }
+
+    // 进入 dungeon 要记的账号次数：自身（Check）+ [enter add incount dungeon index] 连带副本（只记不拦）。
+    public static ImmutableArray<AccountIncountCharge> AccountCharges(DungeonIncountCatalog catalog, int dungeon, DateTimeOffset now)
+    {
+        var charges = ImmutableArray.CreateBuilder<AccountIncountCharge>();
+        if (catalog.FindAccount(dungeon) is { Limit: > 0 } own)
+            charges.Add(new(dungeon, AccountPeriod(catalog, own, now), own.Limit, true));
+        foreach (int linked in catalog.Linked(dungeon))
+            if (catalog.FindAccount(linked) is { Limit: > 0 } other)
+                charges.Add(new(linked, AccountPeriod(catalog, other, now), other.Limit, false));
+        return charges.ToImmutable();
     }
 
     // 账号行的重置节奏来自 PVF [reset info]：日键或 0..6 任意周起点的周键。

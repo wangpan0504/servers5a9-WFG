@@ -11,8 +11,9 @@ namespace DfoServer;
 
 internal static class SelfTestRunner
 {
-    public static async Task RunCoreAsync()
+    public static async Task RunCoreAsync(string? songPvfPath = null, bool loadSongPvf = true)
     {
+        await PreyGuideWaitingReturnTests.RunCoreAsync();
         ServerDefaultsUpgradeTests.RunCore();
         SaveImportGuardTests.RunCore();
         PreyTeamResourceTests.RunCore();
@@ -20,6 +21,8 @@ internal static class SelfTestRunner
         PreyTeamProtocolTests.RunCore();
         HelperSafetyTests.RunCore();
         WeeklyAttendanceTests.RunCore();
+        AdventurerBenefitTests.RunCore();
+        ReturningAdventurerTests.RunCore();
         MonsterMockBattleTests.RunCore();
         HelperAssetSafetyTests.RunCore();
         await HelperAssetSafetyTests.RunProtocolAsync();
@@ -242,6 +245,8 @@ internal static class SelfTestRunner
         await DevelopmentGmTests.RunCoreAsync();
         LukeRewardRecoveryTests.RunCore();
         LukeResourceCompletionTests.RunCore();
+        RaidSongQuotaTests.RunCore();
+        RaidSongQuotaRepositoryTests.RunCore();
         LukeRewardResultTests.Run();
         AntonRewardDisplayTests.Run();
         DevelopmentEquipmentSlotTests.RunCore();
@@ -451,6 +456,7 @@ internal static class SelfTestRunner
         InventoryWriteTests.Run();
         InventoryBatchTests.RunCore();
         InventoryCoreGrantTests.RunCore();
+        Testing.Inventory.MagicBoxTests.RunRewardRowCore();
         Testing.Inventory.InventoryDiscardTests.RunCore();
         Testing.Inventory.InventoryDurabilityTests.RunCore();
         SkillMaterialTests.Run();
@@ -500,6 +506,8 @@ internal static class SelfTestRunner
         SkillLayoutTests.Run();
         ItemRequestTests.Run();
         ConsumableUseTests.RunCore();
+        DungeonEpicDropBuffTests.RunCore();
+        VariousBuffAssociationTests.RunCore();
         EnhancementPotionTests.RunCore();
         UpgradeChronicleServiceTests.RunCore();
         ChronicleEnchantTests.RunCore();
@@ -522,10 +530,15 @@ internal static class SelfTestRunner
         RaidEntryEventsTests.Run();
         RaidCreateFlowTests.RunCore();
         FiendwarKeyLeaseTests.RunCore();
+        DisasterDungeonTests.RunCore();
+        // 卢克重启子进程在方法开头返回，不会走到这里。完整 --selftest 自己带档案，不再读第二遍。
+        if (loadSongPvf) RaidSongQuotaTests.RunCoreResources(songPvfPath);
     }
 
     public static async Task RunAsync(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters, ItemResources itemResources)
     {
+        AdventurerBenefitTests.RunResources(pvf);
+        ReturningAdventurerTests.RunResources(pvf);
         BattlePassCatalogTests.Run(pvf);
         BattlePassRewardResourceTests.RunResources(DfoServer.GameWorld.BattlePass.BattlePassCatalog.Load(pvf),
             itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, DateTimeOffset.UtcNow);
@@ -539,7 +552,7 @@ internal static class SelfTestRunner
         MarriageShopTests.Run(pvf, itemResources);
         ImperialArenaTests.RunResources(pvf);
         WorldMapHoverTests.RunResources(towns, pvf);
-        await RunCoreAsync();
+        await RunCoreAsync(loadSongPvf: false);
         var sharedQuests = global::DfoServer.Testing.SelfTestCatalogs.Quests(pvf);
         var sharedSkills = SkillLearningCatalog.Load(pvf, itemResources.Contracts.ExpertSkillLevels);
         QuestOrdinaryCompletionTests.RunExpertJob(towns, pvf, characters, itemResources, sharedQuests);
@@ -601,6 +614,7 @@ internal static class SelfTestRunner
         PreyChannelTests.Run(towns, pvf, characters, itemResources);
         PreyTeamResourceTests.Run(pvf);
         PreyTeamResourceTests.RunRewards(pvf, itemResources);
+        RaidSongQuotaTests.RunResources(pvf, itemResources);
         SpecialAreaChannelTests.Run(towns, pvf);
         CharacterCreationTests.Run(towns, characters);
         PvpPrivateCharacterTests.RunResources(towns,pvf,characters,itemResources,sharedSkills);
@@ -696,6 +710,7 @@ internal static class SelfTestRunner
         Testing.Inventory.EpicRoadBoosterTests.RunResources(towns, characters, itemResources, DateTimeOffset.UtcNow);
         AssaultModePacketTests.RunResources(pvf);
         RiftDailyPacketTests.RunResources(pvf);
+        ParticularHellEntryTests.Run(towns, pvf, characters, itemResources, sharedQuests, sharedSkills);
         ParticularHellPartyTests.RunResources(pvf);
         AssaultHuntQuestTests.RunResources(pvf, sharedQuests);
         DungeonGreedGridTests.Run(pvf);
@@ -707,6 +722,7 @@ internal static class SelfTestRunner
         DungeonDropPacketsTests.Run();
         await DungeonDeathProtocolTests.RunAsync(towns, pvf);
         DungeonEntryPlanTests.Run(pvf);
+        DisasterDungeonTests.Run(towns, pvf, characters, itemResources, sharedQuests, sharedSkills);
         GriefTowerClearTests.RunResources(pvf,itemResources.Items,itemResources.EpicPieces);
         TournamentSettlementTests.RunResources(towns,pvf,characters,itemResources);
         MainlineQuestBatchTests.Run(pvf, itemResources);

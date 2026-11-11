@@ -79,6 +79,8 @@ internal sealed class GameConnectionContext(ConnectionContext connection, Accoun
     internal Dictionary<byte, (Guid Instance, int Phase, int Target)> PreyMarkerDisplays { get; } = [];
     internal DfoServer.Network.Projection.PreyBoardingProjection? PreyBoarding { get; set; }
     internal DfoServer.Network.Projection.LukePhaseExitProjection? LukePhaseExit { get; set; }
+    // 只重试本连接已经开过窗的引导终局回候战。断线后的新连接没有这份槽。
+    internal DfoServer.Network.Projection.PreyGuideWaitingRetry PreyGuideWaiting { get; } = new();
     public int Id => connection.Id;
     public IPAddress Peer => connection.Peer;
     public CancellationToken Stop => connection.Stop;

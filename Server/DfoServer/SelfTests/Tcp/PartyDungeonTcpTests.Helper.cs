@@ -36,7 +36,10 @@ internal static partial class PartyDungeonTcpTests
         Set(true, 'a');
         peer.Send(17, Chat($"#95-helper/1 {new string('b', 32)} {peer.Id + 1} hell 0"));
         That(!Drain(peer).Any(p => p.Opcode is 12 or 1709), "错误角色命令不改设置、不广播或伪造回执");
-        group.Open(); peer.Send(16, Coop.Selection(initial, 0, 4, true)); group.ReadEntry(group.All()); group.Load();
+        group.Open(); peer.Send(16, Coop.Selection(initial, 0, 4, true));
+        var initialPackets = group.All();
+        That(!initialPackets[0].Any(p => p.Opcode == 0x7FF0 && p.Body.Length == 96), "首次普通深渊入场不下发柱旁落点");
+        group.ReadEntry(initialPackets); group.Load();
         That(Tickets() == 60, "首次正常入场只扣一份30张门票");
         string cargoNonce = new('e', 32);
         long ticketsBeforeCargo = Tickets();
@@ -78,6 +81,13 @@ internal static partial class PartyDungeonTcpTests
             int start = Array.FindIndex(packets, p => p is { Kind: 0, Opcode: 29 });
             That(ack >= 0 && scene > ack && info > scene && start > info &&
                 packets.Count(p => p is { Kind: 0, Opcode: 29 }) == 1, "真实45依次确认、重建27场景、28地下城、29首图，只有一次加载");
+            int landing = Array.FindIndex(packets, p => p is { Kind: 0, Opcode: 0x7FF0, Body.Length: 96 });
+            That(landing > info && landing < start && packets[landing].Body.AsSpan(0, 4).SequenceEqual("MAI4"u8) &&
+                U32(packets[landing].Body, 8) == U32(packets[info].Body) &&
+                U32(packets[landing].Body, 12) == U32(packets[start].Body, 14) &&
+                U32(packets[landing].Body, 16) == U32(packets[start].Body, 3) &&
+                U32(packets[landing].Body, 80) == 1 && U32(packets[landing].Body, 92) == 0,
+                "轮换MAI4在28后29前，严格绑定同一地下城/地图/seed并指定地面落点");
             group.ReadEntry(rows);
             uint nextDungeon = U32(group.Information);
             var nextMaze = catalog.Get((int)nextDungeon).Mazes.Single(row => row.SourceOrdinal == group.Information[7]);
@@ -105,6 +115,7 @@ internal static partial class PartyDungeonTcpTests
         var ordinary = group.Move((byte)target.X, (byte)target.Y, expect: false)[0];
         That(ordinary.Any(p => p is { Kind: 1, Opcode: 45, Body: [1] }) && ordinary.Any(p => p is { Kind: 0, Opcode: 29 }) &&
             !ordinary.Any(p => p.Opcode is 27 or 28), "明确关闭后恢复普通过门，无总暂停恢复模式");
+        That(!ordinary.Any(p => p.Opcode == 0x7FF0 && p.Body.Length == 96), "同一轮换实例后续普通过门不重放首房落点");
 
         long Tickets() => Convert.ToInt64(fixture.Query("SELECT coalesce(sum(json_extract(item_core,'$.Value')),0) FROM character_inventory_items WHERE character_id=$p0 AND json_extract(item_core,'$.ItemId')=3330", peer.Id)[0][0]);
         long Fatigue() => Convert.ToInt64(fixture.Query("SELECT remaining FROM character_fatigue WHERE character_id=$p0", peer.Id)[0][0]);

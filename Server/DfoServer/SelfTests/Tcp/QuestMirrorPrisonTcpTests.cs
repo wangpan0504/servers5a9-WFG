@@ -67,7 +67,20 @@ internal static class QuestMirrorPrisonTcpTests
                     "基础53654保留真实Boss和三名普通演员");
                 int boss = Enumerable.Range(0,4).Single(at => U32(map,27+22*at) == 107004988);
                 ushort bossKey = U16(map,25+22*boss);
+                // 53662 是本实例尚未支付的新 MapId。首次 37 按逐房规则扣 1 点并只推进本角色 revision；
+                // 返回已支付的 53654 不再扣。导航本身不得写成长、任务、清图、结算，也不得发 31/115。
                 string before = State();
+                long revision = Convert.ToInt64(fixture.Query("SELECT revision FROM characters WHERE id=$p0",peer.Id)[0][0]);
+                var fatigueBefore = fixture.Query("SELECT used,remaining FROM character_fatigue WHERE character_id=$p0",peer.Id)[0];
+                long used = Convert.ToInt64(fatigueBefore[0]), remaining = Convert.ToInt64(fatigueBefore[1]);
+                string body = CharacterBody(), fatigueTail = FatigueTail(), others = Others();
+                string quests = fixture.Snapshot("SELECT * FROM character_active_main_quests ORDER BY character_id,slot");
+                string growthRows = fixture.Snapshot("SELECT * FROM character_dungeon_growth_receipts ORDER BY character_id,event_id");
+                string clears = fixture.Snapshot("SELECT * FROM character_quest_clear_receipts ORDER BY character_id,quest_id");
+                string settlements = fixture.Snapshot("SELECT * FROM character_dungeon_settlement_receipts ORDER BY character_id,instance_id");
+                string completions = fixture.Snapshot("SELECT * FROM character_quest_completion_receipts ORDER BY character_id,quest_id");
+                string inventory = fixture.Snapshot("SELECT * FROM character_inventory_items ORDER BY item_uid");
+                string currency = fixture.Snapshot("SELECT * FROM account_currency_balances ORDER BY account,currency_kind");
                 Move(3,2,1); Load(53662);
                 That(map[18] == 4 && Enumerable.Range(0,4).All(at => map[40+22*at] == 0) &&
                     Enumerable.Range(0,4).Select(at => U32(map,27+22*at)).Order().SequenceEqual(new uint[] { 65018,107003997,107003997,107003997 }),
@@ -77,7 +90,23 @@ internal static class QuestMirrorPrisonTcpTests
                 That(map.Length == 16 && map[0] == 3 && map[1] == 2 && map[2] == 2 && map[13] == 0 &&
                     U32(map,9) == 1 && map[14] == 0 && map[15] == 255,"未清末层返回使用RestoreBase/Cached，不重发演员");
                 FormalDungeonTcpTests.Load(peer); Drain();
-                That(State() == before && enabled == 0 && bossChecks == 0,"演出导航不写成长、任务进度、清图或结算");
+                long revisionNow = Convert.ToInt64(fixture.Query("SELECT revision FROM characters WHERE id=$p0",peer.Id)[0][0]);
+                var fatigueAfter = fixture.Query("SELECT used,remaining FROM character_fatigue WHERE character_id=$p0",peer.Id)[0];
+                long usedNow = Convert.ToInt64(fatigueAfter[0]), remainingNow = Convert.ToInt64(fatigueAfter[1]);
+                That(CharacterBody() == body,"演出导航不改除revision外的角色列");
+                That(fixture.Snapshot("SELECT * FROM character_active_main_quests ORDER BY character_id,slot") == quests,"演出导航不写任务进度");
+                That(fixture.Snapshot("SELECT * FROM character_dungeon_growth_receipts ORDER BY character_id,event_id") == growthRows,"演出导航不写成长回执");
+                That(fixture.Snapshot("SELECT * FROM character_quest_clear_receipts ORDER BY character_id,quest_id") == clears,"演出导航不写清图");
+                That(fixture.Snapshot("SELECT * FROM character_dungeon_settlement_receipts ORDER BY character_id,instance_id") == settlements,"演出导航不写结算");
+                That(fixture.Snapshot("SELECT * FROM character_quest_completion_receipts ORDER BY character_id,quest_id") == completions,"演出导航不写任务完成");
+                That(fixture.Snapshot("SELECT * FROM character_inventory_items ORDER BY item_uid") == inventory,"演出导航不写背包");
+                That(fixture.Snapshot("SELECT * FROM account_currency_balances ORDER BY account,currency_kind") == currency,"演出导航不写货币");
+                That(Others() == others,"演出导航不改其他角色的revision或疲劳");
+                That(revisionNow == revision+1,"演出层53662首次加载只推进本角色revision一次："+revision+"->"+revisionNow);
+                That(usedNow == used+1 && remainingNow == remaining-1 && FatigueTail() == fatigueTail,
+                    "演出层53662首次加载只扣1点房间疲劳，返回已支付基础图不再扣："+used+"/"+remaining+"->"+usedNow+"/"+remainingNow);
+                That(enabled == 0 && bossChecks == 0,"演出导航不发结算许可31或Boss检查115");
+                before = State();
                 peer.Send(34,[34,0,116,13,255,255,1,0,255,255]); peer.Expect(1,34,[0,19,0]); Drain();
                 peer.Send(46,DfoServer.DungeonSettlementProtocolTests.Report(peer.Id,99)); Drain();
                 peer.Send(39,ScriptDeath(layerKey,peer.Id)); Drain();
@@ -123,6 +152,10 @@ internal static class QuestMirrorPrisonTcpTests
                     "重连恢复3444唯一交付及通关回执");
                 string before=State(); peer.Send(39,lastDeath); drain(peer,null); That(State() == before,"重连迟到39不能重放旧Run奖励");
             }
+            string CharacterBody() => fixture.Snapshot("SELECT id,account,slot,name,town,area,x,y,direction,return_town,return_area,return_x,return_y,return_direction,job,grow_type,level,accepted_story_level,gold,experience,inventory_expansion,revive_coins,win_points,gold_carry_limit,auction_gold_limit,cargo_capacity,quest_cycle_day,equipment_slot_flags,emotion,clone_title_item_id,selected_skill_tree,blacklist_count,avatar_expansion,devil_usage,npc_favor,daily_booster_usage,weapon_skin_state,avatar_preset_state,knight_shield_deck,stamina_until,inventory_items_revision FROM characters ORDER BY id");
+            string FatigueTail() => fixture.Snapshot("SELECT character_id,account,maximum,used_maximum,context_auxiliary,selection_auxiliary FROM character_fatigue WHERE character_id=$p0",created.Id);
+            string Others() => fixture.Snapshot("SELECT * FROM characters WHERE id<>$p0 ORDER BY id",created.Id)+
+                fixture.Snapshot("SELECT * FROM character_fatigue WHERE character_id<>$p0 ORDER BY character_id",created.Id);
             string State() => fixture.Snapshot()+fixture.Snapshot("SELECT * FROM character_active_main_quests ORDER BY character_id,slot")+
                 fixture.Snapshot("SELECT * FROM character_dungeon_growth_receipts ORDER BY character_id,event_id")+
                 fixture.Snapshot("SELECT * FROM character_quest_clear_receipts ORDER BY character_id,quest_id")+

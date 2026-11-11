@@ -59,13 +59,11 @@ internal static class AccountMaterialService
             return InventoryResult.Reject();
         var current = before.AccountWallet.Material(itemId);
         current.Validate();
-        int available = Math.Max(0, definition.HoldingLimit - current.Balance);
         bool limitedRaid = raidReward && (definition.WeeklyAccountLimit != 0 || definition.WeeklyCharacterLimit != 0);
         int week = limitedRaid ? RaidWeek(now) : 0;
-        if (limitedRaid && definition.WeeklyAccountLimit != 0)
-            available = Math.Min(available, Math.Max(0, definition.WeeklyAccountLimit - current.EarnedIn(week)));
-        if (limitedRaid && definition.WeeklyCharacterLimit != 0)
-            available = Math.Min(available, Math.Max(0, definition.WeeklyCharacterLimit - current.EarnedBy(character, week)));
+        int available = raidReward
+            ? RaidRemaining(current, character, definition, week)
+            : Math.Max(0, definition.HoldingLimit - current.Balance);
         // 攻坚仍发其他奖励，仅将本材料裁到剩余额度；普通购买/邮件领取保持足额获取或拒绝。
         if (!raidReward && count > available) return InventoryResult.Reject(17);
         int granted = Math.Min(count, available);
@@ -73,5 +71,16 @@ internal static class AccountMaterialService
         if (limitedRaid) next = next.EarnRaid(character, week, granted);
         var after = before with { AccountWallet = before.AccountWallet.SetMaterial(itemId, next) };
         return new(true, 0, new(before, after, "account_material_grant"));
+    }
+
+    // 持有、账号周、角色周取最小剩余。周键不一致时当周已获得视为 0，与 Grant 相同。
+    internal static int RaidRemaining(AccountMaterialBalance current, ushort character, AccountMaterialDefinition definition, int week)
+    {
+        int available = Math.Max(0, definition.HoldingLimit - current.Balance);
+        if (definition.WeeklyAccountLimit != 0)
+            available = Math.Min(available, Math.Max(0, definition.WeeklyAccountLimit - current.EarnedIn(week)));
+        if (definition.WeeklyCharacterLimit != 0)
+            available = Math.Min(available, Math.Max(0, definition.WeeklyCharacterLimit - current.EarnedBy(character, week)));
+        return available;
     }
 }

@@ -115,8 +115,65 @@ internal static class EpicRoad2019SimulatedDropTests
         Reject<InvalidDataException>(() => new EpicRoad2019SimulatedDropPolicy(new DungeonItemDropPool(Array.Empty<ItemTemplate>()), true), "空模拟池拒绝");
         foreach (var bad in new[] { Equipment(1) with { MinimumLevel = 90 }, Equipment(1) with { Rarity = 3 },
             Equipment(1) with { Kind = ItemKind.Material }, Equipment(1) with { StackLimit = 2 } })
+        {
             Reject<InvalidDataException>(() => new EpicRoad2019SimulatedDropPolicy(new DungeonItemDropPool([new DungeonWeightedDropItem(bad, 1)]), true),
                 "模拟池仅接受可创建的95级史诗装备");
+            Reject<InvalidDataException>(() => new EpicRoad2019SimulatedDropPolicy(pool, true,
+                new DungeonItemDropPool([new DungeonWeightedDropItem(bad, 1)])), "隐藏领主池同样只接受可创建的95级史诗装备");
+        }
+        var superGear = Equipment(9510);
+        var otherEpic = Equipment(9509);
+        var rareGear = Equipment(9600) with { Rarity = 3 };
+        var superPool = new DungeonItemDropPool([new DungeonWeightedDropItem(superGear, 4)]);
+        var hiddenOnly = new EpicRoad2019SimulatedDropPolicy(pool, false, superPool);
+        var hiddenMap = new DungeonMap("boss", new(2, 0), EpicRoad2019SimulatedDropPolicy.HiddenBossMapId, "map/hidden-boss.map");
+        var hiddenStart = hiddenMap with { Kind = "map", Id = 400000463, Position = new(0, 0) };
+        var hiddenMaze = new DungeonMaze(0, 3, 1, "", [hiddenStart.Position], [hiddenMap.Position], [hiddenStart, hiddenMap], []);
+        var hiddenEntry = new DungeonEntryPlan(1, 0, 400000098, 0, 0, 0, hiddenMaze, hiddenStart, hiddenMap);
+        var hiddenSource = new DungeonRoomMonster(EpicRoad2019SimulatedDropPolicy.HiddenBossMonsterId,
+            [EpicRoad2019SimulatedDropPolicy.HiddenBossMonsterId, 1], "[fixed]", "[boss]", "monster/alkedo.mob");
+        var hiddenBoss = new DungeonPlannedMonster(0, 10, hiddenSource.MonsterId, 95, hiddenSource) { SpawnType = 3, SourceMap = hiddenMap };
+        That(ReferenceEquals(hiddenOnly.Extend(baseline, entry, monster), baseline), "模拟关闭时普通末房领主不借用隐藏领主奖励");
+        var hiddenPlan = hiddenOnly.Extend(baseline, hiddenEntry, hiddenBoss);
+        That(hiddenPlan.ResourceSource == "pvf-existing;" + EpicRoad2019SimulatedDropPolicy.HiddenRule &&
+            hiddenPlan.Trials is [{ Threshold: 1, ProbabilityDenominator: 1, MinimumCount: 1, MaximumCount: 1 } hiddenTrial] &&
+            hiddenTrial.Items!.Entries.Single().Template.Id == superGear.Id &&
+            hiddenTrial.AllowedEpicEquipmentIds!.SetEquals([superGear.Id]),
+            "活动装配后红腿爱克托固定追加1件超界，不依赖模拟开关");
+        That(hiddenPlan.Generate(_ => 0, DateTimeOffset.UnixEpoch) is [{ Item.ItemId: 9510, Item.Count: 1 }] &&
+            hiddenPlan.Generate(_ => 0, DateTimeOffset.UnixEpoch, epicRoad2019Available: false).IsEmpty,
+            "隐藏领主抽样必出1件，活动关闭后不再追加");
+        var foreign = new DungeonDropGenerationPlan("foreign", [
+            new(1, new DungeonItemDropPool([new DungeonWeightedDropItem(otherEpic, 1)]), 1, 1, ProbabilityDenominator: 1),
+            new(1, new DungeonItemDropPool([new DungeonWeightedDropItem(rareGear, 1)]), 1, 1, ProbabilityDenominator: 1)]);
+        var restricted = hiddenOnly.Extend(foreign, hiddenEntry, hiddenBoss);
+        That(restricted.Trials.All(trial => trial.AllowedEpicEquipmentIds!.SetEquals([superGear.Id])) &&
+            restricted.Generate(_ => 0, DateTimeOffset.UnixEpoch).Select(row => row.Item!.ItemId).SequenceEqual([9600, 9510]),
+            "隐藏领主丢掉其它史诗且不重抽，非史诗装备和超界保底同时保留");
+        That(restricted.Generate(_ => 0, DateTimeOffset.UnixEpoch, epicRoad2019Available: false)
+                .Select(row => row.Item!.ItemId).SequenceEqual([9509, 9600]),
+            "活动关闭后隐藏领主恢复其它史诗，也不再追加超界");
+        var otherTerminal = hiddenMap with { Id = 400000619 };
+        var wrongMap = hiddenBoss with { SourceMap = otherTerminal };
+        That(ReferenceEquals(hiddenOnly.Extend(baseline, hiddenEntry with { BossMap = otherTerminal }, wrongMap), baseline),
+            "红腿模板离开400000465不再套用超界保底");
+        var both = new EpicRoad2019SimulatedDropPolicy(pool, true, superPool);
+        var legacyHidden = new EpicRoad2019SimulatedDropPolicy(pool, true).Extend(baseline, hiddenEntry, hiddenBoss);
+        That(legacyHidden.ResourceSource.EndsWith(EpicRoad2019SimulatedDropPolicy.Rule) &&
+            legacyHidden.Trials.Single().Items!.Entries.All(row => row.Template.Id is 9501 or 9502),
+            "未装配超界池时隐藏领主仍沿旧模拟表，避免静默无奖");
+        var replaced = both.Extend(baseline, hiddenEntry, hiddenBoss);
+        That(replaced.ResourceSource.EndsWith(EpicRoad2019SimulatedDropPolicy.HiddenRule) &&
+            replaced.Trials.Single().Items!.Entries.Single().Template.Id == superGear.Id,
+            "模拟开关开启后隐藏领主只追加超界，不再追加哈林史诗");
+        var normalHard = monster with { Source = source with { MonsterId = 407000596 }, MonsterId = 407000596, SourceMap = hiddenMap };
+        That(both.Extend(baseline, hiddenEntry, normalHard).Trials.Single().Items!.Entries
+                .All(row => row.Template.Id is 9501 or 9502),
+            "同一末图的其它领主在模拟开启时仍用哈林池");
+        var hiddenMaterials = both.Extend(materialPlan, hiddenEntry, hiddenBoss);
+        That(hiddenMaterials.Trials[0] is { Threshold: 6, ProbabilityDenominator: 10 } &&
+            hiddenMaterials.Trials[^1].Items!.Entries.Single().Template.Id == superGear.Id,
+            "模拟开启时隐藏领主仍先把纯材料概率乘三，装备改为超界");
         Console.WriteLine($"PASS {Count - before} 星河裂缝模拟掉落领域断言");
     }
 
@@ -161,8 +218,11 @@ internal static class EpicRoad2019SimulatedDropTests
     public static void RunResources(PvfArchive pvf, ItemResources items)
     {
         int before = Count;
-        var pool = DungeonHellEpicCatalog.Load(pvf).Pool(54, 2, items.Items.Get);
-        var policy = new EpicRoad2019SimulatedDropPolicy(pool, true);
+        var epicTables = DungeonHellEpicCatalog.Load(pvf);
+        var pool = epicTables.Pool(54, 2, items.Items.Get);
+        var superPool = epicTables.Pool(54, 5, items.Items.Get);
+        var superIds = superPool.Entries.Select(row => row.Template.Id).ToHashSet();
+        var policy = new EpicRoad2019SimulatedDropPolicy(pool, true, superPool);
         var catalog = DungeonCatalog.Load(pvf, EpicRoadResourcePaths.Dungeons, EpicRoadResourcePaths.Maps);
         var rooms = DungeonRoomCatalog.Load(pvf);
         var previewPolicy = new DungeonResourceDropPolicy(DungeonDropRuleCatalog.Load(pvf), DungeonItemDropCatalog.Create([]),
@@ -179,8 +239,16 @@ internal static class EpicRoad2019SimulatedDropTests
             var boss = monsters.Single(row => row.IsBoss);
             var preview = previewPolicy.PrepareEpicRoadPreview(catalog.Get(id), boss, 2);
             var simulated = preview.Trials.Single(trial => trial.EpicRoad2019Simulated);
-            That(simulated.Threshold == 1 && simulated.ProbabilityDenominator == (id == 400000097 ? 5 : 1),
-                "活动预览包含正式末房史诗池及真实基础概率");
+            bool hiddenBoss = boss.MonsterId == EpicRoad2019SimulatedDropPolicy.HiddenBossMonsterId;
+            var rewardPool = hiddenBoss ? superPool : pool;
+            That(simulated.Threshold == 1 && simulated.ProbabilityDenominator == (hiddenBoss || id == 400000098 ? 1 : 5) &&
+                simulated.Items!.Entries.All(row => rewardPool.Entries.Any(candidate => candidate.Template.Id == row.Template.Id)),
+                "活动预览包含正式末房史诗池及真实基础概率，隐藏领主改用超界池");
+            if (hiddenBoss)
+                That(boss.SourceMap?.Id == EpicRoad2019SimulatedDropPolicy.HiddenBossMapId &&
+                    preview.Trials.All(trial => trial.AllowedEpicEquipmentIds?.SetEquals(superIds) == true) &&
+                    preview.ResourceSource.Contains(EpicRoad2019SimulatedDropPolicy.HiddenRule),
+                    "红腿爱克托预览只允许区域54列表5，并标记隐藏领主规则");
             That(DungeonDropControlSnapshot.Apply(preview, new(Equipment: 0)).Trials.Single(trial => trial.EpicRoad2019Simulated).Threshold == 0 &&
                 DungeonDropControlSnapshot.Apply(preview, new(Equipment: 2)).Trials.Single(trial => trial.EpicRoad2019Simulated).Threshold == (id == 400000097 ? 2 : 1),
                 "真实活动预览零倍率禁用、两倍只应用一次，百分百基础仍封顶");
@@ -188,7 +256,9 @@ internal static class EpicRoad2019SimulatedDropTests
             var generated = policy.Extend(new("resource-test", []), entry!, boss).WithDisjointRestrictions(entry!.DisjointForbiddenDropRarities)
                 .Generate(_ => 0, DateTimeOffset.UtcNow);
             That(generated is [{ Item.Count: 1, Item.DisjointForbidden: false }] &&
-                pool.Entries.Any(row => row.Template.Id == generated[0].Item!.ItemId), "本服每条末房路线生成一件95史诗且解除来源禁止分解");
+                rewardPool.Entries.Any(row => row.Template.Id == generated[0].Item!.ItemId) &&
+                (!hiddenBoss || superIds.Contains(generated[0].Item!.ItemId)),
+                "本服每条末房路线生成一件95史诗且解除来源禁止分解，隐藏领主只出超界");
         }
         That(seen.SetEquals([407000590, 407000595, 407000596, 407000601]), "真实四个末房领主均覆盖");
         var service = new InventoryDisjointService(items.Items, items.Disjoint, items.GoldLimits, items.EpicPieces);

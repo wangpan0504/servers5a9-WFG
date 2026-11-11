@@ -9,7 +9,7 @@ using static DfoServer.Testing.TestCheck;
 
 namespace DfoServer.Testing;
 
-internal static class CollectBoxTcpTests
+internal static partial class CollectBoxTcpTests
 {
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
@@ -18,8 +18,12 @@ internal static class CollectBoxTcpTests
             entry.BaseExpiration is { } baseline &&
             (entry.MaximumExpiration is null || entry.MaximumExpiration > baseline) &&
             entry.Slots.Any(slot => slot.ItemId > 0 &&
-                entry.Extensions.Any(extension => extension.ItemId != slot.ItemId)))
-            ?? throw new InvalidDataException("当前PVF没有可执行收集与续期TCP回归的宝珠箱");
+                entry.Extensions.Any(extension => extension.ItemId != slot.ItemId)));
+        if (box is null)
+        {
+            await RunPermanentAsync(source, root, resources);
+            return;
+        }
         var slot = box.Slots.First(row => row.ItemId > 0 &&
             box.Extensions.Any(extension => extension.ItemId != row.ItemId));
         var extension = box.Extensions.First(row => row.ItemId != slot.ItemId);

@@ -1,8 +1,8 @@
 namespace DfoServer.Network.Builders;
 
-// 次数形状只给测试对照这版 PVF：魔界裂缝 3，黎明裂缝 2。
+// 魔界裂缝总额度来自专表；黎明裂缝沿既有两次合同。
 // 原版读取器在地图容器指针为0时仍会做32次查找；配套95JP补丁保护空表并恢复黎明已用映射写入。
-// 95JP 客户端支持 1545/1546；本服务仅在黎明裂缝区域或 530 结算上下文发送。
+// 魔界裂缝用832清表/额度，再用833更新已用次数，不依赖95JP跳过的832映射循环。
 internal static class RiftDailyPackets
 {
     public const int ParticularHellLimit = 3;
@@ -11,10 +11,19 @@ internal static class RiftDailyPackets
     public const int ParticularHellTailBytes = 0x104;
     public const int DaybreakTailBytes = 0x104;
 
-    public static byte[] ParticularHell()
+    public static byte[] ParticularHell(uint total = ParticularHellLimit)
     {
         var body = new byte[4 + ParticularHellTailBytes];
-        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(body, ParticularHellLimit);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(body, total);
+        return body;
+    }
+
+    // 023D0570严格读取副本编号及已用次数两个DWORD，调用原生+968表写入器。
+    public static byte[] ParticularHellDungeon(uint dungeon, uint used)
+    {
+        var body = new byte[8];
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(body, dungeon);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(4), used);
         return body;
     }
 

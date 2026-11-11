@@ -396,24 +396,23 @@ internal static class QuestPassiveClearTcpTests
                 U32(map,49) == 68004 && map[54] == 9 && map[62] == 1 &&
                 U32(map,71) == 68004 && map[76] == 9 && map[84] == 1 &&
                 new[] { U16(map,25), U16(map,47), U16(map,69) }.Distinct().Count() == 3 &&
-                enabled == 0 && Scalar() is [[long scalar]] && scalar == (early ? 0 : 1),
-                "真实70487保留友方APC56501及两个独立68004特殊父对象，加载不达成演出或清图");
+                enabled == (early ? 1 : 0) && Scalar() is [[long scalar]] && scalar == (early ? 0 : 1),
+                "真实70487保留独立对象；早到终末在加载后补交清图");
             string saved = State();
-            RejectExit(path[^2],0);
-            RejectExit(path[^1],1);
+            if (!early) { RejectExit(path[^2],0); RejectExit(path[^1],1); }
             if (!early)
             {
                 peer.Send(34,[34,0,18,15,255,255,1,0,255,255]); peer.Expect(1,34,[0,19,0]); Drain();
                 That(State() == saved,"3858未收到演出终末时34拒绝且不写奖励");
             }
-            if (escSkip)
+            if (escSkip || early)
             {
-                peer.Send(33,[33,0,18,15,0,0]); peer.Expect(1,33,[1,18,15,0,0,0,0]); Drain();
+                if (!early) { peer.Send(33,[33,0,18,15,0,0]); peer.Expect(1,33,[1,18,15,0,0,0,0]); Drain(); }
                 That(enabled == 1 && bossChecks == 0 && Scalar() is [[0L]] && fixture.Query(
                     "SELECT acceptance_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=3858",peer.Id)[0][0].Equals(acceptance) &&
                     fixture.Query("SELECT source_type,dungeon_id,map_id,template_id,length(death_events)/16,quest_id FROM character_dungeon_scene_clear_receipts WHERE character_id=$p0",peer.Id)
                     is [["PassiveObject",193L,70487L,69292L,long escDeaths,0L]] && escDeaths == deaths,
-                    "3858在70487按ESC跳过动画只发33时，同时达成原AcceptanceId演出、提交69292场景清图并签发空31");
+                    "3858仅发一次33时，提交原AcceptanceId及69292场景清图并签发空31");
                 saved = State();
                 peer.Send(33,[33,0,18,15,0,0]); peer.Expect(1,33,[1,18,15,0,0,0,0]); Drain();
                 peer.Send(39,passive); Drain();

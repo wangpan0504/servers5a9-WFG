@@ -232,7 +232,7 @@ internal static partial class RaidCombatProjection
     }
 
     internal static void PostState(GameConnectionContext context, AntonRaidBattleView view, RaidActor actor,
-        Func<bool> current, string action)
+        Func<bool> current, string action, bool sceneFollowsQueuedAreaUsers = false)
     {
         if (context.Session.CurrentRaidBattle(actor)?.Kind == RaidKind.Fiendwar)
         {
@@ -279,7 +279,8 @@ internal static partial class RaidCombatProjection
                         context.LukePhaseExit?.ReturnPending(view.Instance) != true;
                 return battle?.Kind != RaidKind.Luke || context.Session.Phase == Game.Session.SessionPhase.Town;
             }
-            if (!SceneReady()) return false;
+            // 引导退场的24已经排在本包之前。入队时副本场景标记仍在，写帧时再由Show复核；场景未卸下则丢弃。
+            if (!sceneFollowsQueuedAreaUsers && !SceneReady()) return false;
             bool completedTeam = view.State == AntonRaidBattleState.Completed &&
                 context.Session.CurrentRaidBattle(actor) is { HasAntonRewards: true } formalAnton &&
                 formalAnton.AntonEligibility(actor.Character, view.Phase) is { Eligible: true, Source: AntonResourceRewards.Source };

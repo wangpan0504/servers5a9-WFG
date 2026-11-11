@@ -4,7 +4,7 @@ using PvfLib;
 namespace DfoServer.GameWorld.Dungeons;
 
 // etc/particularhellparty.etc：每个 [dungeon] 的 [index] 和 [item list] 各自装入副本编号 → 物品 id。
-// 物品 id 只来自文件。触发条件没有证明之前，这份表不进入任何通知。
+// 物品 id 只来自文件；掉落表不直接构造通知。每日次数独立由DungeonIncountCatalog接入。
 internal sealed class ParticularHellPartyCatalog
 {
     public const string Path = "etc/particularhellparty.etc";

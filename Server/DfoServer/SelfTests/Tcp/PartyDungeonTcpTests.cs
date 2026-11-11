@@ -773,7 +773,7 @@ internal static partial class PartyDungeonTcpTests
         {
             var packet = peer.Read();
             if (packet is { Kind: 1, Opcode: 1347 }) { Bytes(packet.Body, [1], "组队TCP屏障"); return rows.ToArray(); }
-            That(packet.Kind == 0 || packet.Opcode is 10 or 11 or 12 or 13 or 14 or 15 or 16 or 29 or 31 or 33 or 34 or 37 or 41 or 43 or 45 or 46 or 69 or 70 or 71 or 72 or 42 or 132 or 905 or 1002 or 1652 or 1573,
+            That(packet.Kind == 0 || packet.Opcode is 10 or 11 or 12 or 13 or 14 or 15 or 16 or 29 or 31 or 33 or 34 or 37 or 41 or 43 or 45 or 46 or 69 or 70 or 71 or 72 or 42 or 132 or 905 or 1002 or 1652 or 1573 or 1734,
                 $"组队批量投影只包含已登记的应答或通知，实际{packet.Kind}/{packet.Opcode}");
             rows.Add(packet);
         }

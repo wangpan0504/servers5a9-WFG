@@ -79,9 +79,23 @@ internal static partial class BattlePassRewardTests
             "terminal batch grants every three-plus-four row at80 and no claimed earlier level");
         That(last.After.ToClaimBytes()[9] == 128 && last.After.ToClaimBytes()[19] == 255,
             "terminal full bitmap keeps previous premium bits and sets both track80 bits");
-        var blocked = role with { Inventory = new(Enumerable.Range(65, 55).Select(slot =>
-            new InventoryItem(slot + 1, new(InventoryListType.Main, (short)slot), new(999001, ItemKind.Consumable, 999))).ToImmutableArray()) };
-        Refuse(blocked, premium, 1, 1, 4, "late batch capacity shortage rolls back all earlier reward grants");
+        var blocked = role with { Inventory = FilledConsumables(55) };
+        var overflow = fixture.Service.Plan(blocked, premium, 1, 1, 4).Plan ??
+            throw new InvalidOperationException("one-slot batch overflow plan missing");
+        That(overflow.Rewards.SequenceEqual(expected) && overflow.After.Claims.SetEquals(expected) &&
+            Totals(overflow.Inventory.After).SequenceEqual(new[] { (999001, 55 * 999), (490705120, 3) }) &&
+            Totals(overflow.Inventory.OverflowItems).SequenceEqual(new[] { (15, 1), (490705101, 3), (490705122, 1) }) &&
+            overflow.Inventory.OverflowMailSender == BattlePassRewardService.OverflowMailSender &&
+            overflow.Inventory.OverflowMailText == BattlePassRewardService.OverflowMailText &&
+            ReferenceEquals(overflow.Inventory.Before, blocked.Inventory),
+            "batch with one free slot keeps the first stack in-bag, mails the rest and records every claim key");
+        var packed = role with { Inventory = FilledConsumables(56) };
+        var mailed = fixture.Service.Plan(packed, premium, 1, 1, 4).Plan ??
+            throw new InvalidOperationException("full-page batch overflow plan missing");
+        That(mailed.Rewards.SequenceEqual(expected) && mailed.After.Claims.SetEquals(expected) &&
+            Totals(mailed.Inventory.After).SequenceEqual(new[] { (999001, 56 * 999) }) &&
+            Totals(mailed.Inventory.OverflowItems).SequenceEqual(new[] { (15, 1), (490705101, 3), (490705120, 3), (490705122, 1) }),
+            "full consumable page claim-all mails every reward and still records every claim key");
         var missing = new Fixture(omitItem: 490705101);
         var absent = missing.Service.Plan(role, missing.State(4, 1), 1, 1, 4);
         That(!absent.Accepted && absent.Plan is null && role.Inventory.Items.IsEmpty,

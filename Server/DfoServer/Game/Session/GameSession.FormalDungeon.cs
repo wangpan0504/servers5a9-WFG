@@ -42,6 +42,8 @@ internal sealed partial class GameSession
         public HashSet<int> FreeTouchedNormalCooldowns { get; } = new();
         public HashSet<int> FreeTouchedNormalEffects { get; } = new();
         public BossSelectionBuff? BossSelectionBuff { get; init; }
+        public ImmutableArray<VariousBuffState> VariousBuffEntryEffects { get; init; } = [];
+        public ImmutableArray<int> PendingVariousEffectApplications { get; set; } = [];
         public long DeathSerial { get; set; }
         public long? AltarRevivalDue { get; set; }
         public long? RevisedBeastDeathDue { get; set; }
@@ -283,6 +285,23 @@ internal sealed partial class GameSession
         GriefTowerAdmission? grief = null;
         uint selectionDungeon = dungeonId;
         if (war is not null) dungeonId = war.Battle.View.ActualDungeon(dungeonId);
+        if (dungeonId == DisasterDungeonPolicy.EntranceId)
+        {
+            var entrance = catalog.Get(DisasterDungeonPolicy.EntranceId);
+            if (questId != 0 || retry is not null || classExperience || hellParty || hellLegend || sealDoor || practice ||
+                !entrance.TryGetDesignatedDifficulty(out byte designated) || difficulty != designated)
+                return RejectFormal("disaster-entrance-mode-conflict");
+            try
+            {
+                // 选图资格仍认5340；队员复用队长已规划的实图，不各自随机。
+                int? sharedDungeon = shared is null ? null : checked((int)shared.Session.PreparedParty(shared).Dungeon.Entry.DungeonId);
+                dungeonId = checked((uint)DisasterDungeonPolicy.SelectPlayable(entrance, draw ?? Random.Shared.Next, sharedDungeon));
+                if (!DisasterDungeonPolicy.IsPlayable(catalog.Get(checked((int)dungeonId))))
+                    return RejectFormal("disaster-route-resource-mismatch");
+            }
+            catch (Exception error) when (error is InvalidDataException or NotSupportedException or FileNotFoundException)
+            { return RejectFormal("disaster-route-resource-unavailable"); }
+        }
         if (dungeonId <= int.MaxValue && catalog.GriefTower.FloorsByDungeon.TryGetValue((int)dungeonId, out var requestedGrief))
         {
             if (difficulty != 0 || retry is not null || classExperience || hellParty || hellLegend || sealDoor || practice)
@@ -724,17 +743,22 @@ internal sealed partial class GameSession
         if (entry.RequiresFatigueOwner && expected.Fatigue is null) return RejectFormal("fatigue-owner-missing");
         // 希望1598只冻结选择；疲劳不足交正式16的错误22恢复选图，不在1598的静默失败分支截断。
         // need fatigue是准入门槛，独立于fatigue value的首区收费，不能因当前两者相等而省略。
-        if (entry.Hope is { } hopeAdmission && debugSettings?.InfiniteFatigue != true &&
+        if (entry.Hope is { } hopeAdmission && !InfiniteFatigue &&
             (expected.Fatigue is not { } hopeFatigue || hopeFatigue.Remaining < hopeAdmission.Catalog.NeedFatigue))
             return RejectFormal("start-fatigue-insufficient:" + hopeAdmission.Catalog.NeedFatigue);
         if (entry.UsesFatigue && FatigueForClient(expected).Remaining == 0) return RejectFormal("fatigue-exhausted");
         // #511 [use fatigue only start dungeon] N：余额（客户端可见值与库内值取小）不足 N 时不进图，不扣到负数。
-        if (entry.StartFatigue > 0 && debugSettings?.InfiniteFatigue != true)
+        if (entry.StartFatigue > 0 && !InfiniteFatigue)
         {
             if (expected.Fatigue is not { } storedFatigue) return RejectFormal("fatigue-owner-missing");
             if (storedFatigue.Remaining < entry.StartFatigue || FatigueForClient(expected).Remaining < entry.StartFatigue)
                 return RejectFormal("start-fatigue-insufficient:" + entry.StartFatigue);
         }
+        // 灾难领域等逐房副本的入场门槛。剩余 0 已在上面返回 fatigue-exhausted。
+        // 图内耗尽后的下一房间仍沿原通用语义，这里不另加拦截。
+        if (DisasterDungeonPolicy.EntryFatigueRejection(entry.MinimumEntryFatigue, InfiniteFatigue,
+                expected.Fatigue?.Remaining, FatigueForClient(expected).Remaining) is { } minimumFatigue)
+            return RejectFormal(minimumFatigue);
         var ordinaryReturn = entry.RaidEntry is not null ? CurrentDungeonSelection?.ReturnPosition ?? formalDungeon?.OrdinaryReturnPosition : entry.IsTrainingRoom || entry.IsClassExperience ? expected.Position :
             entry.IsTutorial ? tutorialReturn : entry.IsOrdinary ? towns.SelectionReturn(expected.Position, expected.CompletedQuests.ToHashSet()) : null;
         if (entry.IsOrdinary && ordinaryReturn is null) return RejectFormal("ordinary-return-location-missing");
@@ -850,9 +874,7 @@ internal sealed partial class GameSession
                         // 伴侣行只进起始房间：客户端会让该AIC跨房间跟随，逐房间重发会每房多出一名并卡清房。
                         companionRows: map == entry.StartMap ? entry.CompanionMapRows : [], companionProfiles: entry.CompanionProfiles,
                         suppressCompanions: entry.IsTagSystem);
-                if (EpicRoad2019MonsterPolicy.Matches(entry))
-                    plan = EpicRoad2019MonsterPolicy.Apply(plan, entry);
-                else if (entry.ChampionPercents.IsEnabled)
+                if (entry.ChampionPercents.IsEnabled)
                     plan = plan.WithChampionRolls(entry.ChampionPercents, entry.Difficulty, draw ?? RandomNumberGenerator.GetInt32,
                         entry.NamedMonsters);
                 // 实验性（未在95客户端实证）：深渊派对房间（[seal door pos] 处换成 [seal door map index] 深渊图）抽波次。
@@ -895,7 +917,7 @@ internal sealed partial class GameSession
             foreach (var monster in plan.Monsters.Where(monster =>
                 monster.HellWave is not null && monster.HellRewardRolls > 0 && monster.Source is null ||
                 monster.IsBlocking && monster.Source is not null &&
-                (entry.EvildomWarMode is not null || prepareMonsterDrops is not null || monster.MonsterId is 1 or 2 && monster.SpawnType == 0 ||
+                (entry.EvildomWarMode is not null || prepareMonsterDrops is not null || DisasterDungeonPolicy.IsRewardStone(entry, monster) || monster.MonsterId is 1 or 2 && monster.SpawnType == 0 ||
                     springTreasure is not null && SpringTreasureDropPolicy.MayDrop(entry, monster))))
             {
                 if (entry.EvildomWarMode is not null && !EvildomWarMonsterDropPolicy.IsThroneBoss(entry, monster))
@@ -906,7 +928,7 @@ internal sealed partial class GameSession
                 {
                     dropGeneration = entry.EvildomWarMode is not null
                         ? EvildomWarMonsterDropPolicy.PrepareBoss(entry, monster, items)
-                        : prepareMonsterDrops?.Invoke(monster);
+                        : DisasterDungeonPolicy.PrepareStoneDrop(entry, monster, items.Get) ?? prepareMonsterDrops?.Invoke(monster);
                 }
                 catch (Exception error) when (error is NotSupportedException or FileNotFoundException) { return RejectFormal("drop-plan-unsupported"); }
                 if ((prepareMonsterDrops is not null || entry.EvildomWarMode is not null) && dropGeneration is null)
@@ -921,7 +943,7 @@ internal sealed partial class GameSession
                     hellRewardPlans[monster.ObjectKey] = rewardGeneration;
                 }
                 if (dropGeneration is not null) dropPlans.Add(monster.ObjectKey, dropGeneration);
-                if (prepareMonsterDrops is null && entry.EvildomWarMode is null && !pools.ContainsKey(monster.MonsterId))
+                if (dropGeneration is null && prepareMonsterDrops is null && entry.EvildomWarMode is null && !pools.ContainsKey(monster.MonsterId))
                     pools.Add(monster.MonsterId, DungeonExplicitDropPolicy.CreatePool("monster/monster.lst", drops.Get(monster.MonsterId), items.Get));
                 // 创建位置是已证资源位置；不将首次受击坐标冒充死亡瞬间位置。
                 // 地面RAW不携带最终库存目的槽，独立对象使用显式临时record slot0。
@@ -1144,8 +1166,8 @@ internal sealed partial class GameSession
                 if (installing.Entry.LostLand is not null && period != cost.Period) return null;
                 entryIncount = new(countKey, period, cost.Incount,
                     AccountCharges(cost.DungeonId), !cost.ChargeOnClear);
-                // 远古双材料与黎明的实际抵料仍按频道扣料槽位投影，保留原包序。
-                if (installing.Entry.IsAncientInfinite || installing.Entry.DungeonId == 530) channelSlots = consumption?.ChangedSlots ?? [];
+                // 远古双材料、魔界与黎明的实际抵料按原频道扣料槽位投影。
+                if (installing.Entry.IsAncientInfinite || installing.Entry.DungeonId is 316 or 530) channelSlots = consumption?.ChangedSlots ?? [];
             }
             else
             {
@@ -1204,8 +1226,15 @@ internal sealed partial class GameSession
             var after = (entryItems?.After ?? before) with { BossSelectionBuff = bossBuff.Remaining == 1 ? null : bossBuff with { Remaining = bossBuff.Remaining - 1 } };
             entryItems = entryItems is null ? new(before, after, "boss_selection_buff_entry") : entryItems.WithAfter(after);
         }
+        var variousEntry = PlanVariousBuffEntry(installing.Entry, (timeProvider ?? TimeProvider.System).GetUtcNow());
+        if (!character.Inventory.VariousBuffs.SequenceEqual(variousEntry.Saved))
+        {
+            var before = entryItems?.Before ?? character.Inventory;
+            var after = (entryItems?.After ?? before) with { VariousBuffs = variousEntry.Saved };
+            entryItems = entryItems is null ? new(before, after, "various_buff_entry") : entryItems.WithAfter(after);
+        }
         int accelerationPercent = CaptureFatigueAcceleration(installing.Entry);
-        ushort entryFatigue = debugSettings?.InfiniteFatigue == true ? (ushort)0 :
+        ushort entryFatigue = InfiniteFatigue ? (ushort)0 :
             DfoServer.Game.PcRoom.FatigueAccelerationRules.Cost(installing.Entry.StartFatigue,
                 accelerationPercent, character.Fatigue?.Remaining ?? 0);
         if (installing.Dazzlement is { } dazzlement &&
@@ -1287,6 +1316,9 @@ internal sealed partial class GameSession
         }
         installing.Run.FreezeFatigueAcceleration(PremiumPcRoom ? accelerationPercent : 0);
         Selected = committed;
+        installing = installing with { VariousBuffEntryEffects = variousEntry.Active };
+        transientVariousBuffs = variousEntry.Transient;
+
         formalDungeon = installing;
         tagEvildomSelection = null;
         imperialArenaSelection = null;
@@ -1351,13 +1383,13 @@ internal sealed partial class GameSession
                 !ReferenceEquals(formalDungeon,dungeon) || dungeon.Run.Snapshot.Identity != identity ||
                 dungeon.Run.HasScriptedTransit && ScriptedNavigationBlocked(dungeon) ||
                 dungeon.Run.HasPendingDeath || dungeon.Run.HasPendingSettlement || identity.Epoch == long.MaxValue) return null;
-            if (dungeon.Entry.Hope is not null && debugSettings?.InfiniteFatigue != true)
+            if (dungeon.Entry.Hope is not null && !InfiniteFatigue)
             {
                 dungeon.HasPendingFatigue = true;
                 Selected = repository.ConsumeOperationHopeAreaFatigue(owner,expected,dungeon.Run,timeProvider ?? TimeProvider.System, energySource);
                 dungeon.HasPendingFatigue = false;
             }
-            if (dungeon.Entry.UsesRoomFatigue && debugSettings?.InfiniteFatigue != true)
+            if (dungeon.Entry.UsesRoomFatigue && !InfiniteFatigue)
             {
                 dungeon.HasPendingFatigue = true;
                 Selected = repository.ConsumeDungeonRoomFatigue(owner, expected, dungeon.Run,timeProvider ?? TimeProvider.System, energySource);
@@ -1445,7 +1477,7 @@ internal sealed partial class GameSession
         if (dungeon.Entry.PartyRoute is null && !Selected.ActiveMainQuests.Any(active => active.QuestId == dungeon.Entry.RouteQuestId && QuestHuntProgress.Bound(active,dungeon.Entry)))
             dungeon.Run.CancelRidable();
         var target = new DungeonPoint(x,y);
-        if (dungeon.Run.HopeCatalog is { } hope && debugSettings?.InfiniteFatigue != true &&
+        if (dungeon.Run.HopeCatalog is { } hope && !InfiniteFatigue &&
             dungeon.Entry.Maze.MapSpecification?.SingleOrDefault(map => map.Position == target) is { } targetMap &&
             hope.Maps.TryGetValue(targetMap.Id,out var area) && !dungeon.Run.HasLoadedHopeArea(area.AreaId) &&
             (Selected.Fatigue is null || Selected.Fatigue.Remaining < hope.FatigueValue)) return null;
@@ -1613,10 +1645,17 @@ internal sealed partial class GameSession
         var reward = frozen.Reward;
         FrozenDungeonGroundDeath? loot = null;
         int appliedEpicPieceBonus = 0;
+        int appliedHellRewardEpicPotionPercent = 0;
+        int appliedDungeonEpicPercent = 0;
+        ImmutableArray<int> appliedDropBuffIds = [];
+        int appliedBossDropPercent = 0;
         if (dungeon.Ground.HasReservation(pending.Death.MonsterKey))
         {
             if (dungeon.DropPlans.TryGetValue(pending.Death.MonsterKey, out var generation))
             {
+                if (DisasterDungeonPolicy.IsRewardStone(dungeon.Entry, pending.Monster) &&
+                    !DisasterDungeonPolicy.CanRewardStone(dungeon.Run, dungeon.Authority, pending))
+                    generation = new(generation.ResourceSource, []);
                 if (dungeon.HellRewardPlans.TryGetValue(pending.Death.MonsterKey, out var rewardPlan) &&
                     dungeon.Run.IsLastLivingHellWaveMember(pending.Death.MonsterKey)) generation = rewardPlan;
                 appliedEpicPieceBonus = generation.AcceptsEpicPieceBonus ? frozen.EpicPieceBonus : 0;
@@ -1643,11 +1682,33 @@ internal sealed partial class GameSession
                         : 0;
                     int epicBonus = EpicDropPotionBonus(Selected, now);
                     var boosted = generation.WithGrowthContract(bonus).WithAntoniumDropBonus(antoniumBonus).WithEpicDropBonus(epicBonus);
+                    int lanternBonus = EpicDropPotionBonus(Selected, now, hellRewardOnly: true);
+                    var lanternPlan = boosted.WithEpicDropBonus(lanternBonus, hellRewardOnly: true);
+                    if (!ReferenceEquals(lanternPlan, boosted)) appliedHellRewardEpicPotionPercent = lanternBonus;
+                    boosted = lanternPlan;
                     if (dungeon.Entry.IsHellLegend)
                         boosted = boosted.WithEpicDropBonus(HellLegendEpicDropPotionBonus(Selected, now),
                             HellLegendEpicDropBuffDefinition.BonusScale);
+                    var compositeBuffs = ActiveCompositeDropBuffs(now.ToUnixTimeMilliseconds());
+                    appliedDropBuffIds = compositeBuffs.Where(buff => DungeonEpicDropBuffPolicy.Applies(buff, dungeon.Entry))
+                        .Select(buff => buff.BuffId).ToImmutableArray();
+                    int matchBonus = compositeBuffs.Sum(buff => DungeonEpicDropBuffPolicy.Bonus(buff, dungeon.Entry));
+                    var matchPlan = boosted.WithEpicDropBonus(matchBonus, DungeonEpicDropBuffPolicy.BonusScale, includeDirectEpic: true);
+                    if (!ReferenceEquals(matchPlan, boosted)) appliedDungeonEpicPercent = matchBonus;
+                    boosted = matchPlan;
                     boosted = boosted.WithEquipmentRarityBonus(frozen.RarityBonus);
                     boosted = boosted.WithEpicPieceBonus(frozen.EpicPieceBonus);
+                    int bossBonus = compositeBuffs.Sum(buff => DungeonEpicDropBuffPolicy.BossBonus(buff, dungeon.Entry, pending.Monster));
+                    var bossPlan = boosted.WithBossDropBonus(bossBonus);
+                    if (!ReferenceEquals(bossPlan, boosted)) appliedBossDropPercent = bossBonus;
+                    boosted = bossPlan;
+                    var usedEffects = compositeBuffs.Where(buff =>
+                        appliedDungeonEpicPercent > 0 && DungeonEpicDropBuffPolicy.Bonus(buff, dungeon.Entry) > 0 ||
+                        appliedBossDropPercent > 0 && DungeonEpicDropBuffPolicy.BossBonus(buff, dungeon.Entry, pending.Monster) > 0)
+                        .Select(buff => buff.BuffId).ToHashSet();
+                    dungeon.PendingVariousEffectApplications = LiveVariousBuffs(now.ToUnixTimeMilliseconds())
+                        .Where(row => row.Lifetime == VariousBuffLifetime.EffectApplications && usedEffects.Contains(row.BuffId))
+                        .Select(row => row.BuffId).ToImmutableArray();
                     bool epicRoadAvailable = dungeon.Entry.DungeonId is not (400000097 or 400000098) ||
                         serverEvents?.Read(Game.Events.ServerEventService.EpicRoadId).Active == true;
                     var ordinary = boosted.Generate(dungeon.Draw, now, epicRoadAvailable);
@@ -1686,7 +1747,12 @@ internal sealed partial class GameSession
             dungeon.PendingSpecialClearReward ??= new(pending, specialClearReward, specialClearReward.Roll(dungeon.Draw));
         var questDrop = dungeon.PendingQuestDrop;
         var specialClear = dungeon.PendingSpecialClearReward;
+        if (!dungeon.PendingVariousEffectApplications.IsEmpty) reward = reward with { AppliedVariousBuffs = dungeon.PendingVariousEffectApplications };
         var committed = CommitDungeonGrowth(SelectionEpoch, Selected, dungeon.Run, pending, reward, growth, loot, questDrop, specialClear);
+        if (!dungeon.PendingVariousEffectApplications.IsEmpty)
+            transientVariousBuffs = VariousBuffPolicy.Consume(transientVariousBuffs, VariousBuffLifetime.EffectApplications,
+                dungeon.PendingVariousEffectApplications.ToHashSet());
+        dungeon.PendingVariousEffectApplications = [];
         if (committed.Commit.CommittedBonuses is { } actualBonuses)
             reward = reward with { Bonuses = actualBonuses, Amount = actualBonuses.Total };
         dungeon.PendingDeathReward = null;
@@ -1726,6 +1792,10 @@ internal sealed partial class GameSession
             Drops = floorDrops,
             EquipmentRarityBonus = frozen.RarityBonus,
             EpicPieceBonus = appliedEpicPieceBonus,
+            HellRewardEpicPotionPercent = appliedHellRewardEpicPotionPercent,
+            DungeonEpicBuffIds = appliedDropBuffIds,
+            DungeonEpicBonusPercent = appliedDungeonEpicPercent,
+            BossDropPercent = appliedBossDropPercent,
             DirectPickup = directPickup,
             GainedExperience = committed.Commit.GainedExperience,
             EquipmentChanges = committed.Commit.EquipmentChanges,
@@ -1887,6 +1957,7 @@ internal sealed partial class GameSession
                 ? snapshot.Identity : dungeon.Run.LastLoadingFact?.Identity,
             PassiveItems = dungeon.Ground.CurrentPassiveItems(),
             MonsterAi = dungeon.Run.CurrentMonsterAi,
+            HelperLanding = dungeon.Run.InitialHelperLanding,
             PartyActors = dungeon.PartyActors,
             GuildMemberships = dungeon.GuildMemberships,
             PartySlot = dungeon.PartySlot,

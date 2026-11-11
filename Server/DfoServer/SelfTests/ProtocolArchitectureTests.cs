@@ -102,7 +102,7 @@ internal static class ProtocolArchitectureTests
             FatigueCommand("infinite-fatigue invalid").StartsWith("ERR ") && fatigueRefreshes == 0,
             "查询和非法疲劳开关不触发在线显示写通知");
         TestCheck.That(FatigueCommand("infinite-fatigue off").StartsWith("OK ") &&
-            !fatigueSettings.InfiniteFatigue && fatigueRefreshes == 1,
+            !fatigueSettings.InfiniteFatigueFor("registry") && fatigueRefreshes == 1,
             "成功关闭疲劳开关通过原在线连接索引请求即时刷新");
         TestCheck.That(ReferenceEquals(directory.Find("registry"), session), "directory retains the actual session");
         TestCheck.That(ReferenceEquals(directory.FindConnection(1)?.Session, session) && memory.Count == 3,

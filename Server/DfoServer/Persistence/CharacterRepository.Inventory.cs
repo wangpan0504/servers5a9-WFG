@@ -307,6 +307,9 @@ internal sealed partial class CharacterRepository
         if (plan.UnlockSkillTree && (plan.Reason != "cash_shop_buy" || plan.CharacterPrecondition is null ||
             !expected.Learning.Initialized || expected.Learning.SelectedTree != -1))
             throw new InvalidOperationException("技能方案只能由商城对未开通角色开通");
+        if (plan.CashShopRename && (plan.Reason != "cash_shop_buy" || plan.CharacterPrecondition is null ||
+            plan.CashShopPayment?.Lines.Count(line => line.Product is { CommodityId: 100902, ItemId: 2682290, Count: 1 }) != 1))
+            throw new InvalidOperationException("商城更名资格必须来自对应商品");
         if (plan.EquipmentSlotFlagsAfter is not null && plan.Reason == "gm_equipment_slot_flags")
         {
             // 开发GM开扩展装备栏：只在原标志上追加辅助装备/魔法石/耳环位，背包不变，不清除也不开放幻化位。
@@ -327,6 +330,9 @@ internal sealed partial class CharacterRepository
                 (expected.EquipmentSlotFlags & flag) != 0 || slots != (expected.EquipmentSlotFlags | flag))
                 throw new InvalidOperationException("库存开栏只能在原角色资格上增加对应幻化位");
         }
+        if (plan.CloneTitleItemIdAfter is { } cloneTitleAfter &&
+            (cloneTitleAfter != 0 || expected.CloneTitleItemId == 0 || plan.CharacterPrecondition is null))
+            throw new InvalidOperationException("库存计划只能在原角色非零克隆称号失效时清零");
         if (plan.After.AccountWallet.Revision != plan.Before.AccountWallet.Revision || plan.After.AccountCargo.Revision != plan.Before.AccountCargo.Revision ||
             plan.After.EpicPieces.Revision != plan.Before.EpicPieces.Revision)
             throw new InvalidOperationException("业务不能修改账号资产版本");
@@ -339,7 +345,8 @@ internal sealed partial class CharacterRepository
     {
         if (current.Id != expected.Id || current.Revision != expected.Revision ||
             !SameInventory(current.Inventory, plan) || plan.CharacterPrecondition?.MatchesIdentity(current) == false ||
-            plan.UnlockSkillTree && !SameLearning(current.Learning, expected.Learning))
+            plan.UnlockSkillTree && !SameLearning(current.Learning, expected.Learning) ||
+            plan.CloneTitleItemIdAfter is not null && current.CloneTitleItemId != expected.CloneTitleItemId)
             throw new InvalidOperationException("角色库存、规划资格或owner/revision已变化");
     }
 
@@ -373,14 +380,25 @@ internal sealed partial class CharacterRepository
             throw new InventoryQualificationExpiredException();
         if (!plan.Changed)
             return current;
+        if (plan.CashShopRename)
+        {
+            if (!DfoServer.Game.Characters.CharacterRenameCard.AllowsMarriage(ReadMarriage(db, transaction, current.Id)))
+                throw new InventoryQualificationExpiredException();
+            using var rename = db.CreateCommand();
+            rename.Transaction = transaction;
+            rename.CommandText = "INSERT OR IGNORE INTO character_rename_pending(character_id,account,source_uid) VALUES($id,$account,0)";
+            rename.Parameters.AddWithValue("$id", current.Id);
+            rename.Parameters.AddWithValue("$account", owner.Account);
+            if (rename.ExecuteNonQuery() != 1) throw new InventoryQualificationExpiredException();
+        }
         CommitGuildHongbaoPurchase(db, transaction, current, plan);
         WritePcRoomClaim(db, transaction, owner.Account, current.Id, plan);
         WriteAccountItemRefills(db, transaction, owner.Account, current.Id, plan.AccountRefillClaims);
         using var command = db.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = """
-            UPDATE characters SET revision=revision+1,gold=$gold,inventory_expansion=$expansion,avatar_expansion=$avatarExpansion,devil_usage=$devil,daily_booster_usage=$dailyBooster,weapon_skin_state=$weaponSkin,avatar_preset_state=$avatarPreset,npc_favor=$npcFavor,stamina_until=$stamina,equipment_slot_flags=$equipmentSlots
-            WHERE id=$id AND account=$account AND revision=$revision AND equipment_slot_flags=$equipmentSlotsBefore;
+            UPDATE characters SET revision=revision+1,gold=$gold,inventory_expansion=$expansion,avatar_expansion=$avatarExpansion,devil_usage=$devil,daily_booster_usage=$dailyBooster,weapon_skin_state=$weaponSkin,avatar_preset_state=$avatarPreset,npc_favor=$npcFavor,stamina_until=$stamina,equipment_slot_flags=$equipmentSlots,clone_title_item_id=$cloneTitle
+            WHERE id=$id AND account=$account AND revision=$revision AND equipment_slot_flags=$equipmentSlotsBefore AND clone_title_item_id=$cloneTitleBefore;
             """;
         command.Parameters.AddWithValue("$id", expected.Id);
         command.Parameters.AddWithValue("$account", owner.Account);
@@ -396,6 +414,8 @@ internal sealed partial class CharacterRepository
         command.Parameters.AddWithValue("$stamina", plan.After.StaminaUntil);
         command.Parameters.AddWithValue("$equipmentSlots", plan.EquipmentSlotFlagsAfter ?? current.EquipmentSlotFlags);
         command.Parameters.AddWithValue("$equipmentSlotsBefore", current.EquipmentSlotFlags);
+        command.Parameters.AddWithValue("$cloneTitle", plan.CloneTitleItemIdAfter ?? current.CloneTitleItemId);
+        command.Parameters.AddWithValue("$cloneTitleBefore", current.CloneTitleItemId);
         if (command.ExecuteNonQuery() != 1)
             throw new InvalidOperationException("Character revision or owner changed");
         if (plan.Before.CubeContract != plan.After.CubeContract)
@@ -464,6 +484,8 @@ internal sealed partial class CharacterRepository
             exp.Parameters.AddWithValue("$permille", bonus.Permille);
             exp.ExecuteNonQuery();
         }
+        if (!plan.Before.VariousBuffs.SequenceEqual(plan.After.VariousBuffs))
+            WriteVariousBuffs(db, transaction, current.Id, owner.Account, inventory.VariousBuffs);
         if (!plan.Before.ConsumableStates.SequenceEqual(plan.After.ConsumableStates))
             WriteConsumableStates(db, transaction, owner.Account, current.Id, inventory.ConsumableStates);
         if (!BossSelectionBuff.Same(plan.Before.BossSelectionBuff, plan.After.BossSelectionBuff))
@@ -489,7 +511,9 @@ internal sealed partial class CharacterRepository
         ApplyBattlePassUndefeatedSongBooster(db, transaction, owner.Account, current.Id, current.Revision, plan);
         // 未参与本次库存操作的任务等进度取事务内实读值，不能用旧expected覆盖在线快照。
         return current with { Revision = current.Revision + 1, Inventory = inventory, ActiveMainQuests = active, Learning = learning,
-            EquipmentSlotFlags = plan.EquipmentSlotFlagsAfter ?? current.EquipmentSlotFlags, SkillSwitchInventory = skillSwitch,
+            EquipmentSlotFlags = plan.EquipmentSlotFlagsAfter ?? current.EquipmentSlotFlags,
+            CloneTitleItemId = plan.CloneTitleItemIdAfter ?? current.CloneTitleItemId,
+            SkillSwitchInventory = skillSwitch,
             ExpBonusUntil = plan.ExpBonus?.Until ?? current.ExpBonusUntil,
             ExpBonusPermille = plan.ExpBonus?.Permille ?? current.ExpBonusPermille };
     }
@@ -517,7 +541,7 @@ internal sealed partial class CharacterRepository
         var right = plan.Before;
         if (ReferenceEquals(left, right))
             return true;
-        if (left.PrivilegeService != right.PrivilegeService || !left.ShieldDeck.Same(right.ShieldDeck) || !left.ServerItems.Same(right.ServerItems) || !BossSelectionBuff.Same(left.BossSelectionBuff, right.BossSelectionBuff) || !left.NpcFavor.SequenceEqual(right.NpcFavor) || !left.ItemMakingSkills.Same(right.ItemMakingSkills) || !left.Skins.Same(right.Skins) || !left.AccountSkins.Same(right.AccountSkins) || !left.ConsumableStates.SequenceEqual(right.ConsumableStates) || left.Gold != right.Gold || left.Expansion != right.Expansion || left.CubeContract != right.CubeContract || left.ReviveCoins != right.ReviveCoins ||
+        if (left.PrivilegeService != right.PrivilegeService || !left.ShieldDeck.Same(right.ShieldDeck) || !left.ServerItems.Same(right.ServerItems) || !BossSelectionBuff.Same(left.BossSelectionBuff, right.BossSelectionBuff) || !left.NpcFavor.SequenceEqual(right.NpcFavor) || !left.ItemMakingSkills.Same(right.ItemMakingSkills) || !left.Skins.Same(right.Skins) || !left.AccountSkins.Same(right.AccountSkins) || !left.VariousBuffs.SequenceEqual(right.VariousBuffs) || !left.ConsumableStates.SequenceEqual(right.ConsumableStates) || left.Gold != right.Gold || left.Expansion != right.Expansion || left.CubeContract != right.CubeContract || left.ReviveCoins != right.ReviveCoins ||
             left.WinPoints != right.WinPoints || left.GoldCarryLimit != right.GoldCarryLimit || left.AuctionGoldLimit != right.AuctionGoldLimit ||
             !left.AccountWallet.Same(right.AccountWallet) || left.StaminaUntil != right.StaminaUntil || !left.DevilUses.SequenceEqual(right.DevilUses) || !DailyBoosterUsage.Same(left.DailyBoosterUses, right.DailyBoosterUses) || left.AvatarExpansion != right.AvatarExpansion || left.CargoCapacity != right.CargoCapacity || left.AccountCargo != right.AccountCargo ||
             !ShopPurchaseCount.Same(left.ShopPurchases, right.ShopPurchases) || !left.EpicPieces.Same(right.EpicPieces) ||
@@ -590,6 +614,7 @@ internal sealed partial class CharacterRepository
             NpcFavor = npcFavor, Skins = weaponSkins, AccountSkins = shared.Skins, AvatarPresets = avatarPresets, ItemMakingSkills = ReadItemMakingSkills(db, transaction, characterId, account),
             ShopPurchases = purchases, EpicPieces = shared.Pieces, DailyBoosterUses = dailyBoosterUses,
             ConsumableStates = ReadConsumableStates(db, transaction, characterId, account),
+            VariousBuffs = ReadVariousBuffs(db, transaction, characterId, account),
             BossSelectionBuff = ReadBossSelectionBuff(db, transaction, characterId, account),
             ShieldDeck = ReadKnightShieldDeck(db, transaction, characterId, account),
             PrivilegeService = ReadPrivilegeService(db, transaction, characterId, account),

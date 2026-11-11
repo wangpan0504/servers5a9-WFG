@@ -443,6 +443,8 @@ internal static class QuestCompletionRepositoryTests
             => inner.CommitDungeonSettlement(owner, expected, run, prepared, catalog, cardInventory, mailCardItem,premiumDelivery, grantLuckyStar, luckyStarLimit, recommendedClear);
         public Character ReserveDungeonAttempt(AccountOwners.Lease owner, Character expected, uint nextObjectKey,
             DfoServer.Game.Dungeons.WeeklyDungeonEntry? weekly = null) => inner.ReserveDungeonAttempt(owner, expected, nextObjectKey, weekly);
+        public DfoServer.Game.Dungeons.DungeonQuotaResetResult ResetDungeonLimits(AccountOwners.Lease owner) =>
+            inner.ResetDungeonLimits(owner);
         public DfoServer.Game.Dungeons.DungeonEntryResetResult ResetDungeonEntries(AccountOwners.Lease owner) =>
             inner.ResetDungeonEntries(owner);
         public DfoServer.Game.Dungeons.RewardLimitResetResult ResetRewardLimits(AccountOwners.Lease owner) =>
