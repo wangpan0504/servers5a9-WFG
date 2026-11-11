@@ -62,9 +62,9 @@ internal static class AvatarCapacityTcpTests
             peer.Select();
             var mileage = MileageBefore(fixture, ExpectedCashMileage(product));
             peer.Send(64, Purchase());
-            That(peer.Expect(1, 64).Body[0] == 1, "装扮扩展购买成功");
             var avatar = peer.Expect(0, 13).Body;
-            That(avatar[0] == 1 && U16(avatar, 1) == 112, "提交后立即同步扩展112即总217格");
+            That(avatar[0] == 1 && U16(avatar, 1) == 112, "购买确认前同步扩展112即总217格，原生重筛读取新容量");
+            That(peer.Expect(1, 64).Body[0] == 1, "装扮扩展购买成功");
             That(U32(peer.Expect(0, 53).Body, 1) == 1_000_000 - product.CeraPrice, "按资源价格扣款");
             MileageAfter(peer, fixture, mileage);
             peer.Barrier(); string committed = State();
