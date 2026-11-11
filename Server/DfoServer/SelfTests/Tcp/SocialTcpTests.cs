@@ -11,10 +11,29 @@ internal static class SocialTcpTests
 {
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
+        AccountFriendGroupTests.RunCore();
         int before = Count;
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "social"), resources: resources);
         await fixture.StartAsync();
         ushort alphaId;
+        string[] alphaNames = ["一二三四五", "Team B", "!", "好友"];
+        string[] betaNames = ["Raid", "Farm", "Trade", "伙伴"];
+        byte[] alphaIcons = [7, 0, 4, 2], betaIcons = [1, 6, 3, 5];
+        byte[] GroupRequest(byte[] icons, string[] names) => Build(w =>
+        {
+            w.Write(new byte[] { 0x91, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x72 });
+            w.Write(icons);
+            foreach (string name in names)
+            {
+                byte[] bytes = CharacterName.Encoding.GetBytes(name);
+                w.Write(bytes); w.Write(new byte[11 - bytes.Length]);
+            }
+        });
+        byte[] GroupInfo(byte[] icons, string[] names) => Build(w =>
+        {
+            for (int i = 0; i < 4; i++) { w.Write(icons[i]); WriteName(w, names[i]); }
+        });
+        byte[] alphaGroups = GroupInfo(alphaIcons, alphaNames), betaGroups = GroupInfo(betaIcons, betaNames);
         using (var alpha = Open(fixture, "sociala"))
         using (var beta = Open(fixture, "socialb"))
         {
@@ -30,6 +49,11 @@ internal static class SocialTcpTests
             alpha.Send(1684);
             alpha.Expect(0, 1702, Build(w => { for (byte group = 0; group < 4; group++) { w.Write(group); WriteName(w, ""); } }));
             Refresh(alpha, 0);
+            alpha.Send(1683, GroupRequest(alphaIcons, alphaNames)); alpha.Expect(1, 1683, [1]);
+            That(fixture.Query("SELECT slot,icon,name FROM account_social_groups WHERE account='sociala' ORDER BY slot") is
+                [[0L, 7L, "一二三四五"], [1L, 0L, "Team B"], [2L, 4L, "!"], [3L, 2L, "好友"]],
+                "1683真实分派提交四组后才ACK01，10B名称保持完整");
+            alpha.Send(1684); alpha.Expect(0, 1702, alphaGroups); Refresh(alpha, 0);
             alpha.Send(120); alpha.Expect(1, 120, [1, 0]);
             alpha.Send(290, Build(w => { w.Write(beta.Id); w.Write((byte)2); WriteName(w, "SocialB"); }));
             alpha.Expect(1, 290, [1]);
@@ -87,6 +111,10 @@ internal static class SocialTcpTests
             beta.Send(1684);
             beta.Expect(0, 1702, Build(w => { for (byte group = 0; group < 4; group++) { w.Write(group); WriteName(w, ""); } }));
             Refresh(beta, 0, Request(false, "TeamA"));
+            beta.Send(1683, GroupRequest(betaIcons, betaNames)); beta.Expect(1, 1683, [1]);
+            beta.Send(1684); beta.Expect(0, 1702, betaGroups); Refresh(beta, 0, Request(false, "TeamA"));
+            alpha.Send(1684); alpha.Expect(0, 1702, alphaGroups); Refresh(alpha, 1, Request(true, "TeamB"));
+            That(fixture.Query("SELECT count(*) FROM account_social_groups") is [[8L]], "两个账号各自保存四组，回放互不覆盖");
             That(fixture.Query("SELECT count(*) FROM account_social_links") is [[0L]], "申请仅保存pending");
             beta.Send(1440, Build(w => { WriteName(w, "TeamA"); w.Write((byte)4); WriteName(w, "队友"); }));
             beta.Expect(1, 1440, Build(w => { w.Write((byte)1); WriteName(w, "TeamA"); w.Write((byte)4); WriteName(w, "队友"); }));
@@ -123,6 +151,7 @@ internal static class SocialTcpTests
                 beta.Expect(1, 7, [1]); beta.Expect(0, 2);
                 Refresh(alpha, 1, accountOnline: false, characterOnline: false, accountAdventure: "TeamB");
                 beta.Select(slot);
+                Bytes(beta.AccountFriendGroups, betaGroups, "换角登录1702恢复账号四组，不退回默认或其他账号配置");
                 Refresh(alpha, 1, characterOnline: slot == 0, accountAdventure: "TeamB",
                     accountCharacter: slot == 0 ? "SocialB" : "SocialBAlt");
                 That(slot == 0 ? beta.Id == original : beta.Id != original,
@@ -133,10 +162,30 @@ internal static class SocialTcpTests
                 "换角不新增账号好友边，双方始终各一条冒险团关系");
         }
         VerifyPartyDirectory(fixture);
+        using (var rejected = Open(fixture, "groupsreject"))
+        {
+            rejected.Create("GroupsReject"); rejected.Select();
+            rejected.Send(1683, GroupRequest(betaIcons, betaNames)); rejected.Expect(1, 1683, [1]);
+            Execute("CREATE TRIGGER fail_group_packet BEFORE INSERT ON account_social_groups WHEN NEW.account='groupsreject' AND NEW.slot=3 BEGIN SELECT RAISE(ABORT,'fixture'); END");
+            rejected.Send(1683, GroupRequest(alphaIcons, alphaNames)); rejected.Closed();
+            That(fixture.Query("SELECT name FROM account_social_groups WHERE account='groupsreject' ORDER BY slot") is
+                [["Raid"], ["Farm"], ["Trade"], ["伙伴"]], "1683晚期SQL异常整笔回滚且不发成功ACK");
+            Execute("DROP TRIGGER fail_group_packet");
+        }
+        using (var rejected = Open(fixture, "groupsreject"))
+        {
+            rejected.Select(); Bytes(rejected.AccountFriendGroups, betaGroups, "存储异常后重连仍回放原持久四组");
+            rejected.Send(1683, new byte[48]); rejected.Closed();
+            That(fixture.Query("SELECT count(*) FROM account_social_groups WHERE account='groupsreject'") is [[4L]],
+                "截断1683沿原非法包路径关闭，不误ACK或修改已存配置");
+        }
         await fixture.StopAsync(); await fixture.StartAsync("social-reopen", isolatedProcess: true);
         using (var alpha = Open(fixture, "sociala"))
         {
             alpha.Select();
+            Bytes(alpha.AccountFriendGroups, alphaGroups, "独立进程冷启动后1702恢复实际名称与图标");
+            alpha.Send(1684); alpha.Expect(0, 1702, alphaGroups);
+            Refresh(alpha, 1, accountOnline: false, characterOnline: false);
             That(alpha.Id == alphaId && U32(alpha.CharacterFriends, 4) == 1 && alpha.AccountFriends[0] == 1,
                 "冷启动后登录恢复角色好友和账号好友");
             VerifyAccountPresence(alpha.AccountFriends, false, "TeamB", "SocialB");

@@ -144,7 +144,7 @@ internal static class ServerRuntime
         var owners = new AccountOwners(gameCache);
         var online = new OnlineSessionDirectory(gameCache);
         var social = new Game.Social.SocialService(repository, online);
-        var socialProjection = new SocialProjection(social);
+        var socialProjection = new SocialProjection(social, repository);
         var parties = new Game.Party.PartyService(repository, clock, gameCache, guideStore: repository);
         var trades = new Game.Trade.TradeRegistry();
         var tradeHandler = new TradeHandler(trades, online, itemResources.Items, itemResources.GoldLimits, log);

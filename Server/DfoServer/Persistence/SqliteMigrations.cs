@@ -386,6 +386,7 @@ internal static class SqliteMigrations
         new(205, "商城自动更名资格来源", static (db, tx) => ReplaceTableConstraint(db, tx, "character_rename_pending",
             "CHECK(source_uid>0)", "CHECK(source_uid>=0)")),
         new(206, "回归账本与已发布本地205兼容", UpgradeReturningAdventurer206),
+        new(207, "账号冒险团四组名称与图标", SocialSchema.UpgradeGroups),
     ];
 
     static void UpgradeReturningAdventurer206(SqliteConnection db, SqliteTransaction tx)
@@ -2662,7 +2663,8 @@ internal static class SqliteMigrations
             if (query.ExecuteScalar() is not string actual || NormalizeTable(actual, table) != NormalizeTable(expected, table))
                 throw new InvalidDataException("社交表的约束或外键不是已确认结构: " + table);
         }
-        foreach (var (table,expected) in new[] { ("character_quest_completion_receipts",QuestCompletionSchemaV180),
+        foreach (var (table,expected) in new[] { (SocialSchema.GroupsTable,SocialSchema.GroupsSql),
+            ("character_quest_completion_receipts",QuestCompletionSchemaV180),
             ("character_epic_wishes",EpicWishSchema.Definition),
             ("account_battle_pass_deluxe_orders",BattlePassDeluxeSchema.Definition),
             ("character_privilege_service",PrivilegeServiceSchema.Definition),
@@ -2808,6 +2810,7 @@ internal static class SqliteMigrations
         "SELECT owner_id,target_id,kind,created,memo FROM character_social_links LIMIT 0",
         "SELECT owner_account,target_account,created,memo,group_id FROM account_social_links LIMIT 0",
         "SELECT source_account,target_account,message,created,memo,group_id FROM account_social_requests LIMIT 0",
+        "SELECT account,slot,icon,name FROM account_social_groups LIMIT 0",
         "SELECT character_id,account,source_acceptance_id,source_quest_id,source_revision,target_level,rule_version,status,proof FROM character_quest_stage_witnesses LIMIT 0",
         "SELECT character_id,account,source_acceptance_id,trigger_acceptance_id,target_level,before_experience,after_experience,amount,revision FROM character_quest_stage_claims LIMIT 0",
         "SELECT character_id,account,ground_key,instance_id,task_attempt,epoch,picked_core,gold_amount,destination_slot,item_uid,after_core,currency_kind,amount,after_balance,account_revision,revision FROM character_dungeon_passive_pickups LIMIT 0",

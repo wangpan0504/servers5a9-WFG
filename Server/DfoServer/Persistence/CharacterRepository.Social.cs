@@ -5,6 +5,51 @@ namespace DfoServer.Persistence;
 
 internal sealed partial class CharacterRepository : ISocialStore
 {
+    public AccountFriendGroup[] AccountGroups(SocialActor actor) => actor.Execute(() =>
+    {
+        using var db = database.Open();
+        using var query = db.CreateCommand();
+        query.CommandText = "SELECT slot,icon,name FROM account_social_groups WHERE account=$account ORDER BY slot";
+        query.Parameters.AddWithValue("$account", actor.Owner.Account);
+        var groups = new List<AccountFriendGroup>(4);
+        using var row = query.ExecuteReader();
+        while (row.Read())
+        {
+            if (row.GetInt32(0) != groups.Count) throw new InvalidDataException("冒险团分组槽位不连续");
+            groups.Add(new(checked((byte)row.GetInt32(1)), row.GetString(2)));
+        }
+        if (groups.Count == 0) return AccountFriendGroup.Defaults();
+        var result = groups.ToArray();
+        if (!AccountFriendGroup.Valid(result)) throw new InvalidDataException("冒险团分组存档非法或不完整");
+        return result;
+    });
+    public void SaveAccountGroups(SocialActor actor, AccountFriendGroup[] groups)
+    {
+        // 防止调用方在校验与事务之间替换数组元素；记录本身不可变。
+        groups = groups.ToArray();
+        if (!AccountFriendGroup.Valid(groups)) throw new InvalidDataException("冒险团分组存档输入非法");
+        actor.Execute(() =>
+        {
+            using var db = database.Open();
+            using var write = db.BeginWrite("CharacterRepository.SaveAccountGroups");
+            using var tx = write.Transaction;
+            using var command = db.CreateCommand(); command.Transaction = tx;
+            command.Parameters.AddWithValue("$account", actor.Owner.Account);
+            command.CommandText = "DELETE FROM account_social_groups WHERE account=$account";
+            command.ExecuteNonQuery();
+            var slot = command.Parameters.Add("$slot", SqliteType.Integer);
+            var icon = command.Parameters.Add("$icon", SqliteType.Integer);
+            var name = command.Parameters.Add("$name", SqliteType.Text);
+            command.CommandText = "INSERT INTO account_social_groups(account,slot,icon,name) VALUES($account,$slot,$icon,$name)";
+            for (int i = 0; i < groups.Length; i++)
+            {
+                slot.Value = i; icon.Value = groups[i].Icon; name.Value = groups[i].Name;
+                if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("冒险团分组提交失败");
+            }
+            tx.Commit();
+            return true;
+        });
+    }
     const string SocialPersonColumns = "c.account,c.id,c.name,c.level,c.job,c.grow_type,COALESCE(a.name,''),COALESCE(a.level,1)";
     const string AccountPersonColumns = "x.account_id,COALESCE(c.id,0),COALESCE(c.name,''),COALESCE(c.level,1),COALESCE(c.job,0),COALESCE(c.grow_type,0),COALESCE(a.name,''),COALESCE(a.level,1)";
     static SocialPerson ReadSocialPerson(SqliteDataReader row) => new(row.GetString(0), checked((ushort)row.GetInt32(1)),

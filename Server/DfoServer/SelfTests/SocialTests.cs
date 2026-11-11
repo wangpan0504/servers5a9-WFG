@@ -17,6 +17,7 @@ internal static class SocialTests
 {
     public static void RunCore()
     {
+        AccountFriendGroupTests.RunCore();
         int before = Count;
         var friend = new SocialRow(new(new("b", 42, "RoleB", 75, 1, 2, "TeamB", 8), DateTimeOffset.UnixEpoch, "memo", 3),
             2, 10, true);
