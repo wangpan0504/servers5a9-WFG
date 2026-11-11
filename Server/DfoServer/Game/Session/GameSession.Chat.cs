@@ -2,6 +2,7 @@ using DfoServer.Game.Chat;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
+using DfoServer.GameWorld.Items;
 
 namespace DfoServer.Game.Session;
 
@@ -161,4 +162,35 @@ internal sealed partial class GameSession
             return InventoryResult.Reject();
         return InventoryDeleteService.Plan(character.Inventory, position, expectedItemId, 1);
     }, requireTown: false, effectItem: new(InventoryListType.Main, (short)slot));
+
+    /// <summary>1120是无限道具，只读复验源槽与原使用门禁，不创建扣除计划、审计或库存提交。</summary>
+    public bool CanUseOfficialChatMegaphone(ushort slot)
+    {
+        if (slot > short.MaxValue || items is null || !ChatService.AllowsOfficialMegaphone(ChannelEntry)) return false;
+        var sourceSlot = new InventorySlot(InventoryListType.Main, (short)slot);
+        var capture = CaptureInventoryPlan(requireTown: false, allowSettlement: false, usedItem: sourceSlot);
+        if (capture is null) return false;
+        ItemTemplate template;
+        StackableUseRules rules;
+        try
+        {
+            template = items.Get(ChatService.OfficialMegaphoneItemId);
+            rules = items.StackableUseRules(ChatService.OfficialMegaphoneItemId);
+        }
+        catch (Exception error) when (error is InvalidDataException or NotSupportedException or KeyNotFoundException)
+        {
+            return false;
+        }
+        return owner.Execute(() =>
+        {
+            var character = capture.Character;
+            var source = character.Inventory.Find(sourceSlot);
+            return InventoryPlanIsCurrent(capture, requireTown: false, usedItem: sourceSlot) &&
+                ChatService.AllowsOfficialMegaphone(ChannelEntry) &&
+                source is { Core.ItemId: ChatService.OfficialMegaphoneItemId, Core.Count: > 0, Core.EquipmentLockId: 0 } &&
+                (!source.IsExpired((timeProvider ?? TimeProvider.System).GetUtcNow().ToUnixTimeSeconds()) || template.UsableExpired) &&
+                template.AllowsActivation(character.Level, character.Job) && (!template.RequiresPcRoom || PremiumPcRoom) &&
+                rules.Check(CurrentStackableUseContext(character)) == StackableUseRejection.None;
+        });
+    }
 }

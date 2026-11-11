@@ -12,7 +12,8 @@ internal enum ChatKind : byte
     Guild,
     Whisper,
     ServerMegaphone,
-    ChannelMegaphone
+    ChannelMegaphone,
+    OfficialMegaphone
 }
 
 /// <summary>

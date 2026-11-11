@@ -6,7 +6,28 @@ namespace DfoServer.GameWorld.Channels;
 
 internal sealed record ChannelDefinition(int Number, string NameReference, int Type, string Group);
 internal readonly record struct ChannelIdentity(byte ServerIndex, byte Number);
-internal sealed record ChannelEntry(ChannelIdentity Identity, int Type, string Group);
+internal sealed record ChannelEntry(ChannelIdentity Identity, int Type, string Group)
+{
+    // CHANNEL_EVILDOM_WAR：ARAD 频道类型名表 03EFBF1D 写入 0x36。
+    const int EvildomWarType = 0x36;
+    // 0233EF02原样写入0x40，028FA2F0独立判断英雄频道，不能替换为普通战役0x36。
+    const int EvildomWarChallengeType = 0x40;
+    // CHANNEL_FIEND_WAR：超时空之战频道 39 [fiendwar]。
+    const int FiendWarType = 0x2D;
+    // CHANNEL_PREY_RAID：普雷频道 42 [prey]。选角前 03B55580 经 02330DF0 读 +0x1010，cmp 0x32 → 名册 +0x494（tail[41]），为 0 弹 1099 / dstr 32116；
+    // RaidModeSelectWindow 014C0D40 按 +0x1010-0x20 跳表，0x32 → 信息框下标 2；ACK LOGIN 处理器的 03EF95B0 改写列表不含 0x32，原样写入。
+    const int PreyRaidType = 0x32;
+    const int AntonRaidType = 0x17;
+    const int LukeRaidType = 0x20;
+    // 再战魔界：028FA250按+1010==0x35选择双角色UI和9608/400000095；该字段由ACK LOGIN类型写入。
+    const int EvildomGatheringType = 0x35;
+    // CHANNEL_DPL_PVE：03EFBF5E登记0x37，moveDPLPVEChannel经016EA08B选择该类型；ACK LOGIN保留真实模式。
+    const int DplPveType = 0x37;
+
+    // LOGIN实际发送的模式与依赖客户端当前模式的业务共用此映射，未接入的类型保持普通0。
+    public byte LoginType => Type is 40 or 4 or 5 or 8 or 13 or 24 or 22 or 39 or AntonRaidType or LukeRaidType or EvildomWarType or EvildomWarChallengeType or FiendWarType or PreyRaidType or EvildomGatheringType or DplPveType
+        ? (byte)Type : (byte)0;
+}
 internal sealed record ChannelEndpoint(ChannelEntry Entry, int Port);
 
 internal sealed partial class ChannelCatalog
