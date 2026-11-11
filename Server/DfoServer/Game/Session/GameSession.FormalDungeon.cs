@@ -874,9 +874,7 @@ internal sealed partial class GameSession
                         // 伴侣行只进起始房间：客户端会让该AIC跨房间跟随，逐房间重发会每房多出一名并卡清房。
                         companionRows: map == entry.StartMap ? entry.CompanionMapRows : [], companionProfiles: entry.CompanionProfiles,
                         suppressCompanions: entry.IsTagSystem);
-                if (EpicRoad2019MonsterPolicy.Matches(entry))
-                    plan = EpicRoad2019MonsterPolicy.Apply(plan, entry);
-                else if (entry.ChampionPercents.IsEnabled)
+                if (entry.ChampionPercents.IsEnabled)
                     plan = plan.WithChampionRolls(entry.ChampionPercents, entry.Difficulty, draw ?? RandomNumberGenerator.GetInt32,
                         entry.NamedMonsters);
                 // 实验性（未在95客户端实证）：深渊派对房间（[seal door pos] 处换成 [seal door map index] 深渊图）抽波次。

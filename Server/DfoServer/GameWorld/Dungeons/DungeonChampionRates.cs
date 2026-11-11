@@ -9,10 +9,10 @@ internal readonly record struct DungeonChampionRates(int Difficulty0, int Diffic
     };
 
     // [champion] 后四项是难度 0–3 的出现百分比；首项语义未闭合，不冒充词条ID或数量。
-    // 只开放普通副本资源；特殊玩法继续使用自己的演员合同。
-    public static DungeonChampionRates For(DungeonDefinition dungeon)
+    // 普通卢克及持有正式团本准入的路线复用资源概率；其他特殊玩法仍保持隔离。
+    public static DungeonChampionRates For(DungeonDefinition dungeon, bool raidAdmission = false)
     {
-        if (dungeon.IsRaid || dungeon.IsTutorial || dungeon.IsClassExperience || dungeon.IsTournament ||
+        if (dungeon.IsRaid && !dungeon.IsOrdinaryLuke && !raidAdmission || dungeon.IsTutorial || dungeon.IsClassExperience || dungeon.IsTournament ||
             dungeon.Id == 5000 || dungeon.AltarKind != 0 || dungeon.IsDespairTower || dungeon.RequiresGriefEntryContract ||
             dungeon.Path.StartsWith("dungeon/towers/", StringComparison.OrdinalIgnoreCase) ||
             dungeon.DungeonType?.Trim() is not (null or "" or "dungeon") || dungeon.RequiresCosmoEntryContract ||

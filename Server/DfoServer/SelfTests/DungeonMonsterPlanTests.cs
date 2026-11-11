@@ -9,7 +9,7 @@ namespace DfoServer;
 
 internal static class DungeonMonsterPlanTests
 {
-    static void VerifyChampionRolls(DungeonRoomMonster source)
+    internal static void VerifyChampionRolls(DungeonRoomMonster source)
     {
         var map = new DungeonMap("map", new(0, 0), 1, "map/champion-fixture.map");
         var boss = source with { RankKind = "[boss]" };
