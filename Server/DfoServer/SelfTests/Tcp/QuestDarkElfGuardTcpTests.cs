@@ -70,7 +70,12 @@ internal static class QuestDarkElfGuardTcpTests
                     Move(point,0);
                 }
                 That(U32(map,14) == 70138 && enabled == 0 && bossChecks == 0,"基础70138不冒充终末清图或开放结算");
+                // 70172、70173、70174 都是尚未支付的新 MapId。每次首次 37 扣 1 点并只推进本角色 revision。
                 string beforeLayers = State();
+                long revision = Convert.ToInt64(fixture.Query("SELECT revision FROM characters WHERE id=$p0",peer.Id)[0][0]);
+                var fatigueBefore = fixture.Query("SELECT used,remaining FROM character_fatigue WHERE character_id=$p0",peer.Id)[0];
+                long used = Convert.ToInt64(fatigueBefore[0]), remaining = Convert.ToInt64(fatigueBefore[1]);
+                string body = CharacterBody(), stable = Stable(), fatigueTail = FatigueTail();
                 for (int index = 0; index < 2; index++)
                 {
                     Move(boss,1);
@@ -79,14 +84,26 @@ internal static class QuestDarkElfGuardTcpTests
                             { IsOnStartMap:true, ActorId:null, CinematicId:var movie } && movie == 427+index,
                         "真实演出层仍有存活演员，按原ON START MAP合同换下层，不先伪造清怪");
                 }
-                That(State() == beforeLayers,"70172到70173的导航不写死亡、经验、清图、任务或资产");
+                long revisionNow = Convert.ToInt64(fixture.Query("SELECT revision FROM characters WHERE id=$p0",peer.Id)[0][0]);
+                var fatigueAfter = fixture.Query("SELECT used,remaining FROM character_fatigue WHERE character_id=$p0",peer.Id)[0];
+                long usedNow = Convert.ToInt64(fatigueAfter[0]), remainingNow = Convert.ToInt64(fatigueAfter[1]);
+                That(CharacterBody() == body && Stable() == stable,"70172到70173的导航不写死亡、经验、清图、任务或资产");
+                That(revisionNow == revision+2 && usedNow == used+2 && remainingNow == remaining-2 && FatigueTail() == fatigueTail &&
+                    enabled == 0 && bossChecks == 0,
+                    "70172与70173两次首次加载各扣1点房间疲劳并各推进一次revision，不发31/115："+revision+"->"+revisionNow+" "+used+"/"+remaining+"->"+usedNow+"/"+remainingNow);
                 if (finish)
                 {
                     Move(boss,1);
                     var enemies = Enemies();
                     That(U32(map,14) == 70174 && enemies.Length == 1 && U32(map,enemies[0]+8) == 70216 && map[enemies[0]+13] == 3,
                         "末层完整下发70216脚本Boss与非阻挡友方演员");
-                    That(State() == beforeLayers && enabled == 0 && bossChecks == 0,"演出换层不因DESTROY声明提前签发死亡或完成任务");
+                    revisionNow = Convert.ToInt64(fixture.Query("SELECT revision FROM characters WHERE id=$p0",peer.Id)[0][0]);
+                    fatigueAfter = fixture.Query("SELECT used,remaining FROM character_fatigue WHERE character_id=$p0",peer.Id)[0];
+                    usedNow = Convert.ToInt64(fatigueAfter[0]); remainingNow = Convert.ToInt64(fatigueAfter[1]);
+                    That(CharacterBody() == body && Stable() == stable && revisionNow == revision+3 && usedNow == used+3 &&
+                        remainingNow == remaining-3 && FatigueTail() == fatigueTail && enabled == 0 && bossChecks == 0,
+                        "进入70174只再扣1点；DESTROY不签发死亡、经验、清图或任务，不发31/115："+revision+"->"+revisionNow+" "+used+"/"+remaining+"->"+usedNow+"/"+remainingNow);
+                    beforeLayers = State();
                     peer.Send(34,[34,0,193,12,255,255,1,0,255,255]); peer.Expect(1,34,[0,19,0]); Drain();
                     byte[] report = DfoServer.DungeonSettlementProtocolTests.Report(peer.Id,99);
                     peer.Send(46,report); Drain();
@@ -139,6 +156,16 @@ internal static class QuestDarkElfGuardTcpTests
                     That(State() == saved,"回城重连后的旧末层39不能再次提交");
                 }
             }
+            string CharacterBody() => fixture.Snapshot("SELECT id,account,slot,name,town,area,x,y,direction,return_town,return_area,return_x,return_y,return_direction,job,grow_type,level,accepted_story_level,gold,experience,inventory_expansion,revive_coins,win_points,gold_carry_limit,auction_gold_limit,cargo_capacity,quest_cycle_day,equipment_slot_flags,emotion,clone_title_item_id,selected_skill_tree,blacklist_count,avatar_expansion,devil_usage,npc_favor,daily_booster_usage,weapon_skin_state,avatar_preset_state,knight_shield_deck,stamina_until,inventory_items_revision FROM characters WHERE id=$p0",created.Id);
+            string FatigueTail() => fixture.Snapshot("SELECT character_id,account,maximum,used_maximum,context_auxiliary,selection_auxiliary FROM character_fatigue WHERE character_id=$p0",created.Id);
+            string Stable() => fixture.Snapshot("SELECT * FROM character_active_main_quests WHERE character_id=$p0 ORDER BY slot",created.Id)+
+                fixture.Snapshot("SELECT * FROM character_quest_clear_receipts WHERE character_id=$p0",created.Id)+
+                fixture.Snapshot("SELECT * FROM character_dungeon_growth_receipts WHERE character_id=$p0 ORDER BY combat_sequence",created.Id)+
+                fixture.Snapshot("SELECT * FROM character_dungeon_settlement_receipts WHERE character_id=$p0",created.Id)+
+                fixture.Snapshot("SELECT * FROM character_quest_completion_receipts WHERE character_id=$p0 ORDER BY quest_id",created.Id)+
+                fixture.Snapshot("SELECT * FROM character_inventory_items WHERE character_id=$p0 ORDER BY item_uid",created.Id)+
+                fixture.Snapshot("SELECT * FROM character_inventory_slots WHERE character_id=$p0 ORDER BY list_type,slot_index",created.Id)+
+                fixture.Snapshot("SELECT * FROM account_currency_balances WHERE account=$p0 ORDER BY currency_kind",account);
             string State() => fixture.Snapshot("SELECT * FROM characters WHERE id=$p0",created.Id)+
                 fixture.Snapshot("SELECT * FROM character_active_main_quests WHERE character_id=$p0 ORDER BY slot",created.Id)+
                 fixture.Snapshot("SELECT * FROM character_quest_clear_receipts WHERE character_id=$p0",created.Id)+
