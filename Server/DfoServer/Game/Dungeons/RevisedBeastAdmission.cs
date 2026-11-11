@@ -14,7 +14,7 @@ internal readonly record struct RevisedBeastAdmission(bool Accepted, RevisedBeas
     public static RevisedBeastAdmission Check(ChannelEntry? channel, Character character, int dungeonId, byte difficulty, DateTimeOffset now)
     {
         if (!BeastChannel.IsEntry(channel)) return new(false, default, "channel");
-        if (character.Level < 90 || !character.CompletedQuests.Contains(RevisedBeastSelection.EntryQuest))
+        if (!BeastChannel.Eligible(character.Level, character.CompletedQuests.Contains(RevisedBeastSelection.EntryQuest)))
             return new(false, default, "qualification");
         if (!RevisedBeastSelection.IsDaily(dungeonId, now)) return new(false, default, "rotation");
         if (!RevisedBeastSelection.IsDifficulty(difficulty)) return new(false, default, "difficulty");
