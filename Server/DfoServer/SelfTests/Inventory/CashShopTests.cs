@@ -97,6 +97,7 @@ internal static partial class CashShopTests
         }
         That(CashShopPackets.Failure().SequenceEqual(new byte[] { 0, 0, 0 }), "商城失败包完整3字节，u16错误码为0");
         VerifyBuyRestrictionCore();
+        VerifyRenamePurchaseCore();
         var capped = InventorySnapshot.Empty with { ReviveCoins = int.MaxValue - 6 };
         That(InventoryCashShopService.CanGrantCurrencies(capped, [new(1, 3), new(42, 3)], 100_000) &&
             !InventoryCashShopService.CanGrantCurrencies(capped, [new(1, 3), new(42, 4)], 100_000),
@@ -122,6 +123,39 @@ internal static partial class CashShopTests
             That(rejected, "未知商城调试参数不能开启放宽");
         }
         Console.WriteLine($"PASS {Count - checks} 商城期限、失败包与调试命令核心断言");
+    }
+
+    static void VerifyRenamePurchaseCore()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "s5a9-rename-purchase-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var repository = new CharacterRepository(Path.Combine(root, "game.db"));
+            using var owner = new AccountOwners().Acquire("rename-purchase", () => { });
+            var role = repository.Create(owner, new("PurchaseCore", new(1, 0, 1, 1), null) { Level = 30 });
+            role = repository.CommitInventory(owner, role, new(role.Inventory,
+                CurrencyWallet.Set(role.Inventory, CurrencyKind.Cera, 100), "seed"));
+            var product = new CashShopProduct(100902, 2682290, 1, 40, "item");
+            InventoryPlan Plan(Character character)
+            {
+                var before = character.Inventory;
+                var after = CurrencyWallet.Set(before, CurrencyKind.Cera, CurrencyWallet.Get(before, CurrencyKind.Cera) - 40);
+                var fact = CashShopPaymentFact.Capture(before, before, after, after, [new(product, false)], 40, 0, 0,
+                    DateTimeOffset.UtcNow, TimeProvider.System);
+                return new(before, after, "cash_shop_buy", new(character, requireMarriageState: true))
+                    { CashShopRename = true, CashShopPayment = fact };
+            }
+            role = repository.CommitInventory(owner, role, Plan(role));
+            That(repository.ListRoster(owner).Single().RenamePending &&
+                CurrencyWallet.Get(role.Inventory, CurrencyKind.Cera) == 60, "商城资格与点券同事务提交");
+            Reject<InventoryQualificationExpiredException>(() => repository.CommitInventory(owner, role, Plan(role)),
+                "已有资格拒绝商城重复购买");
+            var unchanged = repository.LoadCharacter(owner, role.Slot);
+            That(unchanged.Revision == role.Revision && CurrencyWallet.Get(unchanged.Inventory, CurrencyKind.Cera) == 60,
+                "重复资格拒绝后保留点券及角色版本");
+        }
+        finally { Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools(); TestFiles.DeleteDirectory(root, true); }
     }
 
     static void VerifyMarriagePurchases(Character character, ItemResources resources)
@@ -338,7 +372,7 @@ internal static partial class CashShopTests
     static void VerifyBuyRestrictionCore()
     {
         var parsed = CashShopCatalog.Parse(
-            "[item]\n100902 2660698 1 0 0 100 0 0 0\n102401 2600028 1 0 0 200 0 0 0\n105515 490704503 1 0 0 300 0 0 0\n" +
+            "[item]\n100902 2682290 1 0 0 100 0 0 0\n102401 2600028 1 0 0 200 0 0 0\n105515 490704503 1 0 0 300 0 0 0\n" +
             "[buy restrict item]\n1 100902 90 1 0\n4 102401 1 1 0\n7 105515 0 1 1\n[/buy restrict item]");
         That(parsed.BuyRestrictions.Count == 3 &&
             parsed.BuyRestrictions[100902] is { RestrictId: 1, PeriodCode: 90, Maximum: 1, AccountWide: false } &&
@@ -441,10 +475,24 @@ internal static partial class CashShopTests
             "账号月度商城限购(2次)跨角色累计拦截并在下月1日06:00重置");
 
         // 角色90天限购(100902 角色更名卡)。
-        current = InventoryService.Commit(repository, owner, current, service.Buy(current, new(0, [new(100902, 0)]), out _, beforeReset));
+        current = sibling;
+        var renameRequest = new CashShopPurchaseRequest(0, [new(100902, 0)]);
+        That(!service.Buy(current with { Level = 29 }, renameRequest, out _, beforeReset).Accepted,
+            "商城更名按模板最低等级拒绝低级角色");
+        var renamePlan = service.Buy(current, renameRequest, out _, beforeReset);
+        That(renamePlan.Accepted && renamePlan.Plan!.CashShopRename &&
+            !renamePlan.Plan.After.Items.Any(item => item.Core.ItemId == 2682290), "商城更名不发放无动作物品");
+        current = InventoryService.Commit(repository, owner, current, renamePlan);
+        That(repository.ListRoster(owner).Single(row => row.Id == current.Id).RenamePending,
+            "商城付款与待改名资格共同提交");
         That(service.Buy(current, new(0, [new(100902, 0)]), out _, beforeReset.AddDays(89)) is { Accepted: false, RejectReason: "cash_shop_purchase_limit" } &&
-            service.Buy(current, new(0, [new(100902, 0)]), out _, beforeReset.AddDays(90)).Accepted,
-            "角色90天商城限购在89天内拦截、满90天后放行");
+            service.Buy(current, renameRequest, out _, beforeReset.AddDays(90)).Accepted,
+            "角色90天商城限购在89天内拦截、满90天后可规划");
+        var repeated = service.Buy(current, renameRequest, out _, beforeReset.AddDays(90));
+        Reject<InventoryQualificationExpiredException>(() => InventoryService.Commit(repository, owner, current, repeated),
+            "已有待改名资格不得重复扣款");
+        That(repository.LoadCharacter(owner, current.Slot).Revision == current.Revision,
+            "资格冲突整笔回滚角色版本与费用");
     }
 
     static void VerifyAuctionCouponPurchases(Character character, ItemResources resources)

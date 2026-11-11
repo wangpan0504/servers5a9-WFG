@@ -111,6 +111,16 @@ internal static class InventoryMoveService
                 if (item is { ExpireTime: > 0 })
                     qualificationExpiresAt = qualificationExpiresAt is null ? item.ExpireTime : Math.Min(qualificationExpiresAt.Value, item.ExpireTime);
         }
+        // 不增加快捷栏装备数量；直接替换以及旧多件记录的移位、卸下仍可恢复。
+        bool AddsQuickEquipment(InventoryItem item, InventorySlot from, InventorySlot to, InventoryItem? replaced) =>
+            !QuickSlotEquipmentRules.IsQuickSlot(from) && QuickSlotEquipmentRules.IsQuickSlot(to) &&
+            item.Core.Kind == ItemKind.Equipment && catalog.Get(item.Core.ItemId).IsQuickSlotEquipment &&
+            !(replaced is { Core.Kind: ItemKind.Equipment } && catalog.Get(replaced.Core.ItemId).IsQuickSlotEquipment) &&
+            before.Items.Any(other => QuickSlotEquipmentRules.IsQuickSlot(other.Position) &&
+                other.Core.Kind == ItemKind.Equipment && catalog.Get(other.Core.ItemId).IsQuickSlotEquipment);
+        if (AddsQuickEquipment(source, sourceSlot, destinationSlot, destination) ||
+            destination is not null && AddsQuickEquipment(destination, destinationSlot, sourceSlot, source))
+            return InventoryResult.Reject(CannotMoveItem);
         int count = InventoryStackRuleService.NormalizeMoveCount(source.Core, request.Count);
         if (count <= 0 || !AllowsAt(destinationSlot, source.Core) ||
             sourceSlot.List != destinationSlot.List && !InventoryCargoService.AllowsInsert(source.Core, destinationSlot.List, catalog.Get(source.Core.ItemId)))

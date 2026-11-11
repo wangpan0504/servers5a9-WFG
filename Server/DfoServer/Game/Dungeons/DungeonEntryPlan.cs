@@ -810,8 +810,8 @@ internal sealed record DungeonEntryPlan(
             ExperienceWeight = dungeonId is 400000097 or 400000098 &&
                 EpicRoadResourcePaths.Dungeons.GetValueOrDefault(checked((int)dungeonId)) == definition.Path ? 1 : experienceWeight,
             NamedMonsters = DungeonKillExperienceCatalog.GetNamedMonsters(definition),
-            ChampionPercents = practice || raid is not null || tagEvildom is not null || hope is not null
-                ? default : DungeonChampionRates.For(definition),
+            ChampionPercents = practice || tagEvildom is not null || hope is not null
+                ? default : DungeonChampionRates.For(definition, raidAdmission: raid is not null),
             IndividualMapMovement = definition.IndividualMapMovement,
             IsQuestReplay = isReplay,
             IsAncientInfinite = definition.IsAncientInfinite,

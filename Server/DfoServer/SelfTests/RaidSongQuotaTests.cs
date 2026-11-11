@@ -37,6 +37,11 @@ internal static class RaidSongQuotaTests
         That(SongCount(preyFull[0]) == 0 && SongCount(preyFull[1]) == 0 && Pupil(preyFull[0]) == 5 && Pupil(preyFull[1]) == 5, "普雷账号周满额只去掉不渝之咏");
         That(SongCount(preyPart[0]) == 40 && SongCount(preyPart[1]) == 40 && Pupil(preyPart[0]) == 5 && Pupil(preyPart[1]) == 5, "普雷部分余额两阶段各自按当时剩余计算，不预扣一阶段");
         That(SongCount(preyOpen[0]) == 50 && SongCount(preyOpen[1]) == 150 && Pupil(preyOpen[1]) == 5, "普雷未满保持50和150");
+        var guideOpen = Clip([Prey(0, 30), Prey(1, 90)], Held(0, 0, 0));
+        var guidePart = Clip([Prey(0, 30), Prey(1, 90)], Held(1280, 1280, 1280));
+        That(SongCount(guideOpen[0]) == 30 && SongCount(guideOpen[1]) == 90 &&
+            SongCount(guidePart[0]) == 20 && SongCount(guidePart[1]) == 20 && Pupil(guidePart[1]) == 5,
+            "引导两阶段使用同一额度裁剪且不影响黑瞳石");
         That(PreyGuideRewards.ValidDisplay(preyFull[0].Offers[0]) && PreyGuideRewards.ValidDisplay(preyPart[0].Offers[0]), "数量0和部分数量都仍是合法普雷展示");
         var zero = new LukeRewardResultSpec(0, (uint)RaidSongQuota.ItemId, 0, 0, 0, 0);
         That(zero.Matches(new InventoryReward(RaidSongQuota.ItemId, 0)), "不渝之咏数量0与展示一致");

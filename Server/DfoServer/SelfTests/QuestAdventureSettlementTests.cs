@@ -119,6 +119,61 @@ internal static class QuestAdventureSettlementTests
             That(f.Session.ReturnFromFormalDungeon() is not null && !f.Session.CanPublishDungeonSettlement(enabled.Value.Receipt),
                 "回城后旧实例结算回执失效");
         }
+        DungeonRoomCatalogTests.RunMonsterFollowers();
+        QuestProtectedMapTests.Run(towns,pvf,characters,items,quests,skills,growth);
+        foreach (uint request in new uint[] {7909,0}) HerbaQuest(request);
         Console.WriteLine($"PASS {Count-checks} 冒险任务难度、普通敌对APC结算及交付回归（非实机）");
+
+        void HerbaQuest(uint request)
+        {
+            var quest = quests.Get(7909);
+            That(quest is { Condition: "[clear map]", IntData: [655628], DungeonIndex: 92 },
+                "悬崖上的花绑定真实7909、雾都赫伊斯及末层655628");
+            var entrance = MiddleQuestEntryTests.Entrance(towns,quest,92);
+            using var f = new QuestSceneTests.Fixture(towns,characters,skills,growth,quests,false,93,
+                entrance.Completed,position:entrance.Position);
+            That(f.Session.ChangeQuest(7909,QuestLifecycleAction.Accept,quests,items.Items,items.GoldLimits,items.EpicPieces)?.Commit is not null,
+                "悬崖上的花沿真实前置7908接取，不预置完成");
+            var opening = f.Session.EnterFormalDungeon(92,request,0,dungeons,rooms);
+            That(opening is not null && opening.Entry.BossMap.Id == 655628 && opening.Entry.BaseBossMap.Id == 655627,
+                "任务保留基础Boss格及显式通关末层："+f.Session.LastFormalDungeonRejection);
+            var loaded = f.Session.CompleteFormalDungeonLoading()!;
+            var herba = loaded.Monsters.Monsters.Single(row => row.MonsterId == 109008616);
+            That(loaded.Snapshot.CurrentMap.Id == 655624 && herba is { AiCharacter: null, IsFriendly: true, CanReportDeath: false, Team: 0, Source.FollowType: "follow" },
+                "首房真实赫尔巴是monster类型友方，不伪装为APC或敌人");
+            foreach (var point in new[] { (X:1,Y:1), (X:1,Y:0), (X:2,Y:0) })
+            {
+                foreach (var enemy in loaded.Monsters.Monsters.Where(row => row.IsBlocking))
+                    That(f.Session.ObserveFormalDungeonScriptedDeath(new(enemy.ObjectKey,0x22,true,new string('A',64)),kills,growth).Outcome == DungeonRunOutcome.Accepted,
+                        "沿任务真实路线清除当前房间阻挡敌人");
+                That(f.Session.MoveFormalDungeon((byte)point.X,(byte)point.Y) is not null,"按真实拓扑前进至剧情Boss格");
+                loaded = f.Session.CompleteFormalDungeonLoading()!;
+                That(loaded.Monsters.Monsters.All(row => row.MonsterId != herba.MonsterId),
+                    "赫尔巴沿首房原key随行，后续地图不重复生成演员");
+            }
+            That(loaded.Snapshot.CurrentMap.Id == 655627 && loaded.Monsters.Room.CinematicLayerReturn is { CinematicId: 4246, IsOnStartMap: true } &&
+                f.Session.Phase == SessionPhase.Dungeon && f.Session.EnableFormalDungeonSettlement() is null,
+                "基础Boss格保留4246进图演出导航，不提前清图结算");
+            That(f.Session.MoveFormalDungeon(2,0,1) is not null,"4246按原kind1导航至655628");
+            loaded = f.Session.CompleteFormalDungeonLoading()!;
+            That(loaded.Snapshot.CurrentMap.Id == 655628 && loaded.Monsters.Monsters.Single(row => row.IsBoss).MonsterId == 63821 &&
+                f.Session.EnableFormalDungeonSettlement() is null,"末层保留真实dummy Boss，不从演出存在推定完成");
+            var before = f.Read();
+            var retirement = f.Session.ObserveFormalDungeonScriptedDeath(new(herba.ObjectKey,0x22,true,new string('B',64)),kills,growth);
+            That(retirement is { Outcome: DungeonRunOutcome.Accepted, Receipt: not null, Reward: null } && retirement.ReportedTarget == herba &&
+                QuestCompletionRepositoryTests.Same(before,f.Read()),"4247销毁已发布随行赫尔巴只退场，无击杀、经验或任务奖励："+
+                $"outcome={retirement.Outcome},receipt={retirement.Receipt is not null},target={retirement.ReportedTarget?.MonsterId}");
+            var replay = f.Session.ObserveFormalDungeonScriptedDeath(new(herba.ObjectKey,0x22,true,new string('B',64)),kills,growth);
+            That(replay.Reward is null && replay.ClearFact is null && QuestCompletionRepositoryTests.Same(before,f.Read()),
+                "随行赫尔巴重复退场不产生击杀、清图或持久奖励");
+            var boss = loaded.Monsters.Monsters.Single(row => row.IsBoss);
+            var death = f.Session.ObserveFormalDungeonScriptedDeath(new(boss.ObjectKey,0x22,true,new string('C',64)),kills,growth);
+            That(death.ClearFact?.ClearMap?.Id == 655628 && f.Session.Phase == SessionPhase.Settlement,
+                "4247实际报告终末63821死亡后，原事务才签发655628清图");
+            That(f.Session.FinishQuest(7909,ushort.MaxValue,quests,parameters,items.Items,items.GoldLimits,items.EpicPieces,growth).Receipt is not null &&
+                f.Read().CompletedQuests.Contains(7909) && QuestEligibility.Candidates(f.Read(),quests).Contains(7910),
+                "悬崖上的花凭真实清图交付并解锁后继7910");
+            That(f.Session.ReturnFromFormalDungeon() is not null,"任务完成沿原返回流程退出，不部署或启动客户端");
+        }
     }
 }

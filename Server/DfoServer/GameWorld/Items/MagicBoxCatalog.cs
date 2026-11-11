@@ -17,6 +17,14 @@ internal sealed record MagicBoxDefinition(ImmutableArray<MagicBoxPool> Pools, in
 internal sealed class MagicBoxCatalog(PvfArchive archive, IReadOnlyDictionary<int, string> stackable)
 {
     readonly ConcurrentDictionary<int, MagicBoxDefinition> definitions = new();
+    readonly ConcurrentDictionary<int, BoosterUsePlacesDefinition> usePlaces = new();
+
+    string? PathFor(int id) => stackable.TryGetValue(id, out string? path) ? path :
+        id == 2682272 ? "ect/chn_random/chn_blessed_box.stk" : null;
+
+    public BoosterUsePlacesDefinition UsePlaces(int itemId) => usePlaces.GetOrAdd(itemId, id =>
+        PathFor(id) is { } path ? BoosterCatalog.ParseUsePlaces(StackableFile.ReadActionUsablePlaces(
+            archive.ReadTokens("stackable/" + path), archive.ResolveString)) : new(PendingRule: "非随机盒源物品"));
 
     // 核心自测注入单奖池。已放入的定义不会再读 PVF。
     internal static MagicBoxCatalog ForTests(int itemId, MagicBoxDefinition definition)
@@ -30,8 +38,7 @@ internal sealed class MagicBoxCatalog(PvfArchive archive, IReadOnlyDictionary<in
     {
         // 赛丽亚幸运盒在部分资源索引中没有出现在 stackable.lst，但其脚本仍
         // 由客户端按该物品号直接使用；保留 PVF 中的真实脚本路径作为索引回退。
-        if (!stackable.TryGetValue(id, out string? path) && id == 2682272)
-            path = "ect/chn_random/chn_blessed_box.stk";
+        string? path = PathFor(id);
         return path is null ? new([], 0, 0, "非随机盒物品") : Parse(archive.ReadText("stackable/" + path));
     });
 

@@ -208,7 +208,7 @@ internal sealed partial class GameSession
                 throw new InvalidOperationException("Stale skill layout state");
             if (!result.Success)
                 return result;
-            // 同槽请求只确认原事实；没有布局变化不申请writer或递增revision。
+            // 同槽或缔造者双空换栏只确认原事实；没有布局变化不申请writer或递增revision。
             if (!ReferenceEquals(result.State, ReadSkillLearning(character)))
                 Selected = CommitActiveSkills(character, result.State!,layout:true);
             return result with { State = ReadSkillLearning(Selected!), Receipt = new(Selected, owner.Generation, SelectionEpoch) { Phase = Phase } };
