@@ -42,7 +42,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
     Strongway2019Projection? strongwayProjection = null,
     Strongway2019RewardProjection? strongwayRewards = null,
     DfoServer.Game.Raids.AntonRaidStart? raidStart = null,
-    Func<Exception,bool>? altarProjectionBusy = null) : IGameCommandModule
+    Func<Exception,bool>? altarProjectionBusy = null, SecretShopService? secretShop = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -582,6 +582,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         if (receipt.Snapshot.Phase == SinglePlayerDungeonPhase.Settlement)
             await EnableSettlementAsync(context);
         await PublishEpicPieceShopAsync(context, prepare: false);
+        await PublishSecretShopAsync(context, prepare: false);
         if(receipt.BattlePassMissionClock is {} loadingClock) await BattlePassMissionProjection.RefreshAsync(context,loadingClock.GetUtcNow());
         return CommandResult.Handled;
     }

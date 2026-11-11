@@ -715,6 +715,7 @@ internal static class TcpRegressionTests
         ("item-daily-expire", ItemDailyExpireTcpTests.RunAsync),
         ("epic-book", EpicBookTcpTests.RunAsync),
         ("epic-piece-drops", FormalDungeonTcpTests.RunEpicPiecesAsync),
+        ("secret-shop", FormalDungeonTcpTests.RunSecretShopAsync),
         ("material-exchange", MaterialExchangeTcpTests.RunAsync),
         ("recipe-craft", RecipeCraftTcpTests.RunAsync),
         ("upgrade-chronicle", UpgradeChronicleTcpTests.RunAsync),

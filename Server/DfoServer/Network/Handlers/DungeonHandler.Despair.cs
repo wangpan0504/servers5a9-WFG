@@ -10,6 +10,7 @@ internal sealed partial class DungeonHandler
 {
     async Task EnableSettlementAsync(GameConnectionContext context, ushort? reportedBossKey = null)
     {
+        await PublishSecretShopAsync(context, prepare: true);
         if (context.Session.FormalEnteredDungeonId is not (>= 11008 and <= 11107))
         {
             var change = await DungeonSettlementProjection.EnableAsync(context, reportedBossKey);
