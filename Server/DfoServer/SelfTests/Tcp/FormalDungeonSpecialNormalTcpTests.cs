@@ -529,16 +529,26 @@ internal static partial class FormalDungeonTcpTests
             "灵魂之冢即使开启王富贵和光兵，起点真实29仍无额外AI演员");
         byte[] info = peer.Expect(0,1488).Body;
         byte[] data = peer.Expect(0,1487).Body;
-        byte[] timeout = peer.Expect(0,1486).Body;
         That(info.Length == 4 + 9 * 25 && BinaryPrimitives.ReadInt32LittleEndian(info) == 25 &&
             info.AsSpan(4 + 12 * 9, 9).ToArray().All(value => value == 0),
             "1488 包含25格并保留空起点，避免后半名单坐标错位");
-        That(timeout.Length == 8 && U32(timeout,0) is >= 100 and <= 120 && U32(timeout,4) == 1,
-            "1486 在原生地图与名单初始化后启动120秒倒计时");
         That(data.Length == 9 && data[0] == 0 && BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(1)) == 0 &&
             BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(5)) is >= 100000 and <= 120000,
             "1487 入场 rank/score 为 0，剩余毫秒取自 120 秒时限");
-        Load(peer);
+        // 屏障证明入场未提前发1486，不能用29已发送冒充客户端地图已安装。
+        peer.Barrier();
+        peer.Send(37,new byte[8]);
+        peer.Expect(1,37,[1]);
+        peer.Expect(0,30,new byte[5]);
+        byte[] timeout = peer.Expect(0,1486).Body;
+        That(timeout.Length == 8 && U32(timeout,0) is >= 100 and <= 120 && U32(timeout,4) == 1 &&
+            U32(timeout,0) * 1000 <= U32(data,5) + 999,
+            "1486在首次真实加载完成后启动，仍取同实例权威剩余秒数，不补回加载耗时");
+        peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),1]);
+        peer.ExpectOptionalFatigue();
+        peer.Barrier();
+        peer.Send(37,new byte[8]);
+        peer.Barrier();
         int score = 0;
         var seen = new HashSet<int>();
         foreach (var point in new[] { (X:1,Y:2), (X:0,Y:2) })
@@ -559,6 +569,7 @@ internal static partial class FormalDungeonTcpTests
                 "真实生成怪物与原生按房间坐标查表的ID和灵魂类别一致");
             That(seen.Add(id),"不同战斗房不重复分配同一计分怪");
             Load(peer);
+            // 普通Load严格期待30后直接3；过房不得再次插入1486重启原生计时。
             QuestLifecycleTcpTests.DrainNotifications(peer);
             var report = Death(U16(battleMap,25),peer.Id,battleMap[31]);
             peer.Send(39,report);

@@ -448,9 +448,6 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
                     "formal_boss_rush_info", Guard);
                 await context.Notify(NotiPacketType.BOSS_RUSH_DATA, BossRushPackets.Data(rush.Hud.Rank, rush.Hud.Score, rush.Hud.RemainMilliseconds),
                     "formal_boss_rush_data", Guard);
-                await context.Notify(NotiPacketType.DUNGEON_TIMEOUT_TIME,
-                    BossRushPackets.Timeout(Math.Max(1, (rush.Hud.RemainMilliseconds + 999) / 1000)),
-                    "formal_boss_rush_timeout", Guard);
             }
         }
         if (DungeonPackets.HellPartyMonsterInfo(receipt.Monsters) is { } hellInfo)
@@ -548,6 +545,11 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         bool Guard() => published = context.Session.CanPublishFormalDungeon(receipt);
         await context.Reply(CmdPacketType.FINISH_LOADING, [1], "formal_loading_ack", Guard);
         await context.Notify(NotiPacketType.FINISH_LOADING, DungeonPackets.LoadingNotice(), "formal_loading_notice", Guard);
+        // 1486按当前地图虚函数启动计时；进图29之后仍可能未安装地图，必须等真实37完成。
+        if (receipt.BossRushStart is { } rush)
+            await context.Notify(NotiPacketType.DUNGEON_TIMEOUT_TIME,
+                BossRushPackets.Timeout(Math.Max(1, (rush.RemainMilliseconds + 999) / 1000)),
+                "formal_boss_rush_timeout", Guard);
         await DungeonPotionProjection.LoadedAsync(context, Guard);
         await context.Notify(NotiPacketType.USER_STATE, DungeonPackets.DungeonPlayerState(receipt.Character.Id), "formal_player_state", Guard);
         RaidCombatProjection.PostPreyDungeonTime(context, receipt);
