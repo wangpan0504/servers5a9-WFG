@@ -14,6 +14,7 @@ internal static class MagicBoxTcpTests
 {
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
+        Inventory.MagicBoxTests.RunRewardRowCore();
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "magic-box"), resources: resources);
         var repository = new CharacterRepository(fixture.Database);
         using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))

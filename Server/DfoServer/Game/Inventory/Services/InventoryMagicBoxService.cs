@@ -164,15 +164,16 @@ internal sealed class InventoryMagicBoxService(ItemCatalog catalog, MagicBoxCata
                     continue;
                 }
                 var template = catalog.Get(pair.Key);
-                var item = after.Items.FirstOrDefault(candidate => candidate.Core.ItemId == pair.Key &&
-                    candidate.Position.List == ItemSlotBoundService.List(template.Kind));
-                if (item is null)
+                var list = template.AccountCommonItem ? InventoryListType.AccountCommon : ItemSlotBoundService.List(template.Kind);
+                // 一行只能写一个槽。取扣费后数量增加或新出现的槽里槽号最小的一个；
+                // 数量仍是本次获得总量。全部进溢出邮件时没有这种槽，保持 -1，结果窗不展示该行。
+                var landed = FirstLanded(paid, after, pair.Key, list);
+                if (landed is null)
                 {
-                    // 物品已原子转入溢出邮箱；结果窗只展示实际落袋实例。
                     result.Add(new(pair.Key, pair.Value, -1, 0, template.Kind == ItemKind.Equipment));
                     continue;
                 }
-                result.Add(new(pair.Key, pair.Value, item.Position.Index, item.Core.Durability, template.Kind == ItemKind.Equipment));
+                result.Add(new(pair.Key, pair.Value, landed.Position.Index, landed.Core.Durability, template.Kind == ItemKind.Equipment));
             }
             return result;
         }
@@ -204,5 +205,25 @@ internal sealed class InventoryMagicBoxService(ItemCatalog catalog, MagicBoxCata
             new(character, deadline, Clock, requirePosition: true), overflowItems: grant.Plan.OverflowItems)
         { RequiredEvent = luckEvent is null ? null : new(luckEvent.Schedule, Clock, luckEvent.Active) };
         return new(true, 0, plan);
+    }
+
+    // 对照开箱扣费后的 paid 与发放提交后的 after。未变化的同编号首堆不是本次落点。
+    static InventoryItem? FirstLanded(InventorySnapshot paid, InventorySnapshot after, int itemId, InventoryListType list)
+    {
+        var before = new Dictionary<short, int>();
+        foreach (var item in paid.Items)
+            if (item.Position.List == list && item.Core.ItemId == itemId)
+                before[item.Position.Index] = item.Core.Count;
+        InventoryItem? chosen = null;
+        foreach (var item in after.Items)
+        {
+            if (item.Position.List != list || item.Core.ItemId != itemId)
+                continue;
+            if (before.TryGetValue(item.Position.Index, out int count) && item.Core.Count <= count)
+                continue;
+            if (chosen is null || item.Position.Index < chosen.Position.Index)
+                chosen = item;
+        }
+        return chosen;
     }
 }

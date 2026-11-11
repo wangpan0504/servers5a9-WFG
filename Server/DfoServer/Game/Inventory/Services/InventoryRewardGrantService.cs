@@ -390,8 +390,10 @@ internal static class InventoryRewardGrantService
                 new(InventoryListType.Main, ItemSlotBoundService.QuickSlotStart), template.Kind);
             if (prototype.IsStackable)
             {
-                // 自动发放只向首个兼容堆叠完整入库，不能靠拆成新格绕过该次入库上限。
-                if (!allowOverflowMail && !splitLegacyRune && remaining > template.StackLimit)
+                // 默认发放只向首个兼容堆完整入库，不能靠拆到后续堆或新格绕过该次上限。
+                // 溢出邮件与旧符文拆堆则按槽号跳过已满堆，把余量补进所有仍有容量的兼容堆，再占新格。
+                bool spill = allowOverflowMail || splitLegacyRune;
+                if (!spill && remaining > template.StackLimit)
                     return false;
                 // 索引只缩小候选范围，完整属性兼容仍由同一个堆叠规则决定。
                 if (stacks is null)
@@ -410,40 +412,63 @@ internal static class InventoryRewardGrantService
                     foreach (var slots in stacks.Values)
                         slots.Sort();
                 }
-                InventoryItem? item = null;
                 int stackLists = pickupQuickSlots && list != InventoryListType.Main ? 2 : 1;
-                for (int pass = 0; item is null && pass < stackLists; pass++)
+                if (spill)
                 {
-                    var stackList = stackLists == 2 && pass == 0 ? InventoryListType.Main : list;
-                    if (stacks.TryGetValue((stackList, prototype.ItemId), out var candidates))
+                    for (int pass = 0; remaining > 0 && pass < stackLists; pass++)
+                    {
+                        var stackList = stackLists == 2 && pass == 0 ? InventoryListType.Main : list;
+                        if (!stacks.TryGetValue((stackList, prototype.ItemId), out var candidates))
+                            continue;
                         foreach (short candidate in candidates)
                         {
-                            var current = planned[new(stackList, candidate)];
+                            if (remaining == 0)
+                                break;
+                            var position = new InventorySlot(stackList, candidate);
+                            var current = planned[position];
                             // 装载槽也是list46真实资产，但不属于自动入包可合堆的背包分页。
                             if (current.Position.List == InventoryListType.Talisman && current.Position.Index >= 210)
                                 continue;
-                            if (InventoryStackRuleService.CanShareStack(prototype, current.Core))
-                            {
-                                item = current;
-                                break;
-                            }
+                            if (!InventoryStackRuleService.CanShareStack(prototype, current.Core))
+                                continue;
+                            int space = template.StackLimit - current.Core.Count;
+                            if (space <= 0)
+                                continue;
+                            int moved = Math.Min(space, remaining);
+                            planned[position] = current with { Core = current.Core with { Value = checked(current.Core.Value + moved) } };
+                            remaining -= moved;
                         }
+                    }
                 }
-                if (item is not null)
+                else
                 {
-                    if (InventoryStackRuleService.CanMerge(prototype, item.Core, remaining, template.StackLimit))
+                    InventoryItem? item = null;
+                    for (int pass = 0; item is null && pass < stackLists; pass++)
                     {
-                        planned[item.Position] = item with { Core = item.Core with { Value = checked(item.Core.Value + remaining) } };
-                        remaining = 0;
+                        var stackList = stackLists == 2 && pass == 0 ? InventoryListType.Main : list;
+                        if (stacks.TryGetValue((stackList, prototype.ItemId), out var candidates))
+                            foreach (short candidate in candidates)
+                            {
+                                var current = planned[new(stackList, candidate)];
+                                if (current.Position.List == InventoryListType.Talisman && current.Position.Index >= 210)
+                                    continue;
+                                if (InventoryStackRuleService.CanShareStack(prototype, current.Core))
+                                {
+                                    item = current;
+                                    break;
+                                }
+                            }
                     }
-                    else if (allowOverflowMail || splitLegacyRune)
+                    if (item is not null)
                     {
-                        int moved = Math.Min(Math.Max(0, template.StackLimit - item.Core.Count), remaining);
-                        planned[item.Position] = item with { Core = item.Core with { Value = checked(item.Core.Value + moved) } };
-                        remaining -= moved;
+                        if (InventoryStackRuleService.CanMerge(prototype, item.Core, remaining, template.StackLimit))
+                        {
+                            planned[item.Position] = item with { Core = item.Core with { Value = checked(item.Core.Value + remaining) } };
+                            remaining = 0;
+                        }
+                        else
+                            return false;
                     }
-                    else
-                        return false;
                 }
             }
 
