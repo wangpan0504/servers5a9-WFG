@@ -95,8 +95,10 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
         bool seriaLuck = events?.Read(ServerEventService.SeriaLuckId).Active ?? true;
         bool hongbao = events?.Read(ServerEventService.GuildHongbaoId).Active ?? true;
         bool jonathan = events?.Read(ServerEventService.JonathanVisibilityId).Active ?? true;
+        bool weeklyDungeon = events?.Read(ServerEventService.WeeklyDungeonVisibilityId).Active ?? true;
         // 关闭只阻止新购买和新发放；保留原入口供已付费红包领取、退款和查询。
         if (jonathan) openEvents = [JonathanVisibleEvent, .. openEvents];
+        if (weeklyDungeon) openEvents = [.. openEvents, ServerEventService.WeeklyDungeonVisibilityId];
         openEvents = [GuildHongbaoPackets.OpenEvent, .. openEvents];
         bool nolanVisible = events?.Read(ServerEventService.NolanVisibilityId).Active == true;
         if (nolanVisible)
@@ -136,6 +138,7 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
         List<ushort> activeEvents = [];
         if (endless) activeEvents.Add(Game.Events.EndlessAdventurePolicy.EventId);
         if (jonathan) activeEvents.Add(JonathanVisibleEvent);
+        if (weeklyDungeon) activeEvents.Add(ServerEventService.WeeklyDungeonVisibilityId);
         if (onlineEnabled) activeEvents.Add(ServerEventService.PcRoomTimePointId);
         if (attendanceEnabled) activeEvents.Add(ServerEventService.DailyAttendanceId);
         if (weeklyEnabled) activeEvents.Add(ServerEventService.WeeklyAttendanceId);

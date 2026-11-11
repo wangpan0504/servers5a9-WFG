@@ -42,7 +42,7 @@ internal static partial class GmEventTcpTests
             }
             var ids = new List<ushort>();
             int count = reader.ReadUInt16();
-            That(count is >= 14 and <= 16, "全部默认活动目录有界且保留活动页");
+            That(count is >= 15 and <= 17, "全部默认活动目录有界且保留活动页和猫咪显示事件");
             for (int index = 0; index < count; index++)
             {
                 ushort id = reader.ReadUInt16(); ids.Add(id);
@@ -58,10 +58,10 @@ internal static partial class GmEventTcpTests
                     content.Contains("[show_item_index] 1 490011740", StringComparison.Ordinal),
                     "默认活动共存保留疲劳商店原生路由及真实材料登记");
             }
-            ushort[] expected = [2037, 2378, 2395, 282, 2449, 414, 181, 333, 2532, 266, 228, 2370, 2208, 2520,
+            ushort[] expected = [2037, 2378, 2395, 282, 2449, 414, 181, 333, 2514, 2532, 266, 228, 2370, 2208, 2520,
                 .. fixture.Options.EpicRoad2019Enabled ? (ushort[])[10005] : [], .. ids.Contains(10999) ? (ushort[])[10999] : [], 2257];
             That(ids.SequenceEqual(expected), "全部默认活动目录逐项保留，不被谋略战或活动页替换");
-            ushort[] active = [2037, 2257, 2395, 228, 2370, 2208, 2532, 2520];
+            ushort[] active = [2037, 2257, 2395, 2514, 228, 2370, 2208, 2532, 2520];
             That(reader.ReadByte() == active.Length, "全部默认活动状态项数完整");
             foreach (ushort id in active)
             {

@@ -4,7 +4,7 @@ internal sealed record ServerEventSchedule(ushort EventId, long Revision = 0, lo
     long? EndsAt = null, bool? OverrideActive = null)
 {
     public bool IsActive(DateTimeOffset now) => OverrideActive ??
-        (EventId is ServerEventService.NolanVisibilityId or ServerEventService.JonathanVisibilityId ||
+        (EventId is ServerEventService.NolanVisibilityId or ServerEventService.JonathanVisibilityId or ServerEventService.WeeklyDungeonVisibilityId ||
          StartsAt is { } start && EndsAt is { } end && now.ToUnixTimeSeconds() >= start && now.ToUnixTimeSeconds() < end ||
          ServerEventService.DefaultActive(EventId) && StartsAt is null && EndsAt is null);
 
@@ -78,6 +78,7 @@ internal sealed class ServerEventService(IServerEventStore store, TimeProvider? 
     public const ushort SeriaLuckId = 2037;
     public const ushort GuildHongbaoId = 2378;
     public const ushort JonathanVisibilityId = 2395;
+    public const ushort WeeklyDungeonVisibilityId = 2514;
     public static bool DefaultActive(ushort id) => IsRegistered(id);
     long promotionRevision;
     public long PromotionRevision => Interlocked.Read(ref promotionRevision);
