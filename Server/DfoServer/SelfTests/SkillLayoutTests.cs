@@ -58,6 +58,41 @@ internal static class SkillLayoutTests
         TestCheck.That(SkillLayout.Move(0, source, new(0, 0, 1, -1, 0), (_, _) => throw new KeyNotFoundException()).Failure == SkillLearningFailure.MissingSkill,
             "缺资源类型不猜快捷栏资格");
 
+        var creator = source with { Trees = Array.AsReadOnly<CharacterSkillTree>([
+            source.Trees[0] with { Skills = Array.AsReadOnly<LearnedSkill>([new(6, 5, 1), new(1, 6, 2)]) },
+            source.Trees[1] with { Skills = Array.AsReadOnly<LearnedSkill>([new(8, 5, 3)]) }]) };
+        SkillLayoutResult CreatorMove(byte from, byte to, byte context = 0) =>
+            SkillLayout.Move(10, creator, new(context, from, to, -1, 0), Resolve);
+        TestCheck.That(CreatorMove(0, 6).State!.Trees[0].Skills.Single(skill => skill.Id == 5) == new LearnedSkill(0, 5, 1),
+            "缔造者逐槽换栏允许上排空源，将下排真实绑定换回上排");
+        TestCheck.That(CreatorMove(1, 7).State!.Trees[0].Skills.Single(skill => skill.Id == 6) == new LearnedSkill(7, 6, 2),
+            "缔造者逐槽换栏继续支持下排空目标");
+        TestCheck.That(CreatorMove(2, 8, context: 1).State!.Trees[1].Skills.Single() == new LearnedSkill(2, 5, 3),
+            "缔造者换栏只移动请求context的真实绑定");
+        TestCheck.That(CreatorMove(3, 9).Success && ReferenceEquals(CreatorMove(3, 9).State, creator),
+            "缔造者双空对应槽确认原事实，不制造持久化变化");
+        TestCheck.That(CreatorMove(2, 9).Failure == SkillLearningFailure.MissingSkill &&
+            CreatorMove(7, 1).Failure == SkillLearningFailure.MissingSkill &&
+            SkillLayout.Move(9, creator, new(0, 0, 6, -1, 0), Resolve).Failure == SkillLearningFailure.MissingSkill,
+            "空源例外仅为缔造者原生上排到对应下排，不扩到其他槽或职业");
+        TestCheck.That(SkillLayout.Move(10, creator, new(0, 0, 6, -1, 0), (_, _) => throw new KeyNotFoundException())
+            .Failure == SkillLearningFailure.MissingSkill, "缔造者空源交换仍核目标技能资源");
+        var invalidCreator = creator with { Trees = Array.AsReadOnly<CharacterSkillTree>([
+            creator.Trees[0] with { Skills = Array.AsReadOnly<LearnedSkill>([new(6, 7, 1)]) }, creator.Trees[1]]) };
+        TestCheck.That(SkillLayout.Move(10, invalidCreator, new(0, 0, 6, -1, 0), Resolve).Failure == SkillLearningFailure.Unsupported,
+            "缔造者空源交换不得把旧被动绑定移入上排快捷栏");
+        var rowSwap = creator;
+        for (byte slot = 0; slot < 6; slot++)
+        {
+            var change = SkillLayout.Move(10, rowSwap, new(0, slot, (byte)(slot + 6), -1, 0), Resolve);
+            TestCheck.That(change.Success, "缔造者原生六组连续换栏均有成功回执 " + slot);
+            rowSwap = change.State!;
+        }
+        TestCheck.That(rowSwap.Trees[0].Skills.SequenceEqual(new LearnedSkill[] { new(0, 5, 1), new(7, 6, 2) }) &&
+            rowSwap.Trees[1].Skills.SequenceEqual(creator.Trees[1].Skills) &&
+            rowSwap.Experience == creator.Experience && rowSwap.Trees[0].Sp == creator.Trees[0].Sp,
+            "缔造者六组交换保留另一树、等级与余额，仅改变真实绑定槽位");
+
         byte[] wire = [0, 0, 6, 255, 255, 255, 255, 0, 0x28, 0x25, 0x86, 0xAC];
         var parsed = SkillRequests.ParseSlotChange(wire);
         TestCheck.That(parsed.Context == 0 && parsed.From == 0 && parsed.To == 6 && parsed.ContextIndex == -1 && parsed.Mode == 0 &&

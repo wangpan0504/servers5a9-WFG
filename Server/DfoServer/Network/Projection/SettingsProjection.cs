@@ -42,8 +42,9 @@ internal sealed class SettingsProjection(ClientSettingsService settings, DfoServ
                 receipt.Settings.QuickChat0, receipt.Settings.QuickChat1), "account_settings_initialize", CanSend);
         if (!receipt.Settings.CharacterOptions.IsDefault)
             await context.Notify(NotiPacketType.CHARACTER_OPTION, SettingsPackets.CharacterOptions(receipt.Settings.CharacterOptions), "character_settings_initialize", CanSend);
-        if (!receipt.Settings.Hotkeys.IsDefault)
-            await context.Notify(NotiPacketType.HOTKEY_OPTION, SettingsPackets.Hotkeys(receipt.HotkeyProfile, receipt.Settings.Hotkeys), "account_hotkeys_initialize", CanSend);
+        await context.Notify(NotiPacketType.HOTKEY_OPTION, receipt.Settings.Hotkeys.IsDefault
+            ? SettingsPackets.HotkeysInitialization(receipt.HotkeyProfile)
+            : SettingsPackets.Hotkeys(receipt.HotkeyProfile, receipt.Settings.Hotkeys), "account_hotkeys_initialize", CanSend);
         if (!receipt.Settings.GameOptions.IsDefault)
             await context.Notify(NotiPacketType.CHARAC_INVISIBLE_FALGS, SettingsPackets.Visibility(receipt.CharacterId, receipt.VisibilityFlags), "character_visibility_initialize", CanSend);
     }
