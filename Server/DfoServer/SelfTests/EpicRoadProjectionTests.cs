@@ -63,8 +63,8 @@ internal static class EpicRoadProjectionTests
                 if (!delivered.Writer.TryWrite(body.ToArray())) throw new InvalidOperationException("测试活动队列已满");
             });
             var context = new GameConnectionContext(new(1, IPAddress.Loopback, stream, stop), owner, session, sender);
-            async Task Expect(bool epic, bool shop, bool nolan = true) =>
-                AssertEvents(await delivered.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5)), epic, shop, nolan);
+            async Task Expect(bool epic, bool shop, bool nolan = true, bool weeklyDungeon = true) =>
+                AssertEvents(await delivered.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5)), epic, shop, nolan, weeklyDungeon);
 
             // 截住发送泵，验证旧选角的整表投影在真正写帧前失效。
             var held = sender.Send(0, 2, [1], "epic_event_held");
@@ -80,6 +80,12 @@ internal static class EpicRoadProjectionTests
             await sender.DrainAsync();
             That(eventCount == 0, "旧epoch排队的108整表不覆盖重新选角后的活动目录");
 
+            await town.ServerEventsAsync(context);
+            await Expect(false, true);
+            events.Override(ServerEventService.WeeklyDungeonVisibilityId, false);
+            await town.ServerEventsAsync(context);
+            await Expect(false, true, weeklyDungeon: false);
+            events.Override(ServerEventService.WeeklyDungeonVisibilityId, true);
             await town.ServerEventsAsync(context);
             await Expect(false, true);
             events.Override(ServerEventService.EpicRoadId, true);
@@ -140,7 +146,7 @@ internal static class EpicRoadProjectionTests
         Console.WriteLine($"PASS {Count - before} 星河裂缝完整活动投影、独立时段与选角失效断言");
     }
 
-    static void AssertEvents(byte[] compressed, bool epic, bool shop, bool nolan)
+    static void AssertEvents(byte[] compressed, bool epic, bool shop, bool nolan, bool weeklyDungeon)
     {
         using var source = new MemoryStream(compressed);
         using var zlib = new ZLibStream(source, CompressionMode.Decompress);
@@ -149,7 +155,7 @@ internal static class EpicRoadProjectionTests
         using var expected = new MemoryStream();
         using (var writer = new BinaryWriter(expected, System.Text.Encoding.UTF8, true))
         {
-            ushort[] ids = [2037, 2378, 2395, 333, .. nolan ? new ushort[] { 2532 } : [],
+            ushort[] ids = [2037, 2378, 2395, 333, .. weeklyDungeon ? new ushort[] { 2514 } : [], .. nolan ? new ushort[] { 2532 } : [],
                 .. shop ? new ushort[] { 266 } : [], .. epic ? new ushort[] { 10005 } : []];
             writer.Write((ushort)ids.Length);
             foreach (ushort id in ids)
@@ -160,13 +166,18 @@ internal static class EpicRoadProjectionTests
                 writer.Write(0u);
                 writer.Write((byte)0);
             }
-            writer.Write((byte)2);
+            writer.Write((byte)(weeklyDungeon ? 3 : 2));
             writer.Write((ushort)2037);
             writer.Write(8u);
             for (int index = 1; index < 12; index++) writer.Write(0u);
             writer.Write((ushort)2395);
             for (int index = 0; index < 12; index++) writer.Write(0u);
+            if (weeklyDungeon)
+            {
+                writer.Write((ushort)2514);
+                for (int index = 0; index < 12; index++) writer.Write(0u);
+            }
         }
-        Bytes(actual.ToArray(), expected.ToArray(), "108保留完整活动目录与2037/2395尾表；10005只加目录，不猜数值块");
+        Bytes(actual.ToArray(), expected.ToArray(), "108保留完整活动目录与2037/2395/2514尾表；10005只加目录，不猜数值块");
     }
 }
