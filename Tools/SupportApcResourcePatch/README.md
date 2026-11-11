@@ -6,6 +6,16 @@
 
 ## 命令
 
+现行两女平衡使用 `prepare-support-balanced-tiers current.pvf verified-overdrive-report.json new-output`，
+专项验证为测试项目 `--balanced-tiers current.pvf verified-overdrive-report.json new-output`。
+它核对134个专用模板、实际装备和已验证的装备加级，保留学习/被动/装备/AI/KEY，替换旧主BUFF保底加值，
+以奶爸同档基础力智4950/7750/14750、三攻850/1250/2350重算原生百分比修正；
+觉醒以奶爸有效40级及体精5350/6400/8650、原生分母750为同档基准，修正两女一觉的力智列。
+配套客户端须校准两女实际适用智力7500/9000/11000，避免后续被动和装备重复提高施法属性。
+小魔女按偏爱之前平衡；偏爱、圣歌及装备原生追加效果继续另算，不预先从基础奶量扣除。
+报告列出的是同档基础公式结果，装备触发、持续技能叠加和游戏最终面板仍须实机验收。
+历史 `prepare-support-effective-tiers` 用于旧输入迁移，不得在平衡后的候选上重叠应用。
+
 ```text
 SupportApcResourcePatch inspect base.pvf --ids
 SupportApcResourcePatch audit-migration historical-before.pvf historical-after.pvf current.pvf audit.json
