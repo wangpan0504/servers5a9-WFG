@@ -1,6 +1,12 @@
 using System.Text.Json;
 using PvfLib;
 
+if (args is ["--damage", var damagePvf, var damageOutput])
+{
+    SupportDamageTests.Run(damagePvf, damageOutput);
+    return;
+}
+
 if (args is ["--opening", var openingPvf, var openingOutput])
 {
     SupportOpeningTests.Run(openingPvf, openingOutput);

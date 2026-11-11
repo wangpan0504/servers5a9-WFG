@@ -20,8 +20,8 @@ internal static class SupportBehaviorTests
             Check(replay.Run() == -1, "All sufficient buffs without enemy must stay idle");
             if (definition.Id is 74990 or 19973)
             {
-                int first = definition.Id == 74990 ? 14 : 330;
-                int second = definition.Id == 74990 ? 21 : 335;
+                int first = definition.Id == 74990 ? 14 : 335;
+                int second = definition.Id == 74990 ? 21 : 330;
                 int heal = definition.Id == 74990 ? 3 : 367;
                 replay.Hp = 20; replay.Buffs.Remove(first); replay.Buffs.Remove(second);
                 Check(replay.Run() == ordinals[first], "Opening first buff preempts low-health healing");
