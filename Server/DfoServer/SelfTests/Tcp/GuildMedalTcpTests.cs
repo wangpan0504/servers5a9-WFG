@@ -126,6 +126,71 @@ internal static class GuildMedalTcpTests
             fixture.Query("SELECT json_extract(item_core,'$.Value') FROM character_inventory_items " +
             "WHERE json_extract(item_core,'$.ItemId')=490011648") is [[long coins]] && coins == 100 - cost,
             "reconnect keeps committed medal upgrade level and guild coin deduction");
+        using (var peer = Open(fixture))
+        {
+            peer.Select();
+            peer.Send(19, Move(38, 1, 100380044, 38, 48, 100380044));
+            peer.Expect(1, 19, MoveAck(38, 1, 38, 48));
+            peer.Barrier(packet => That(packet.Opcode is not (13 or 14 or 1681), "勋章同容器互换只回ACK，不标记新物品"));
+            // 发放时 90000×2 在 49、90032×2 在 51。镶嵌各消耗一枚后两格仍各剩一枚，且模板不同，走互换而不是合堆。
+            var gems = fixture.Query("""
+                SELECT s.slot_index, s.item_uid, json_extract(i.item_core,'$.ItemId'), json_extract(i.item_core,'$.Value')
+                FROM character_inventory_slots s JOIN character_inventory_items i USING(item_uid)
+                WHERE s.character_id=$p0 AND s.list_type=38 AND s.slot_index IN (49, 51)
+                ORDER BY s.slot_index
+                """, peer.Id);
+            That(gems.Length == 2 &&
+                Convert.ToInt32(gems[0][0]) == 49 && Convert.ToInt32(gems[0][2]) == 90000 && Convert.ToInt32(gems[0][3]) == 1 &&
+                Convert.ToInt32(gems[1][0]) == 51 && Convert.ToInt32(gems[1][2]) == 90032 && Convert.ToInt32(gems[1][3]) == 1,
+                "镶嵌后49号90000与51号90032各剩一枚，两格都占用，直接互换");
+            long uid49 = Convert.ToInt64(gems[0][1]);
+            long uid51 = Convert.ToInt64(gems[1][1]);
+            That(uid49 != uid51, "两枚守护珠是不同实例");
+            peer.Send(19, Move(38, 49, 90000, 38, 51, 90032));
+            peer.Expect(1, 19, MoveAck(38, 49, 38, 51));
+            peer.Barrier(packet => That(packet.Opcode is not (13 or 14 or 1681), "守护珠同容器互换只回ACK，不标记新物品"));
+            var swapped = fixture.Query("""
+                SELECT s.slot_index, s.item_uid, json_extract(i.item_core,'$.ItemId'), json_extract(i.item_core,'$.Value')
+                FROM character_inventory_slots s JOIN character_inventory_items i USING(item_uid)
+                WHERE s.character_id=$p0 AND s.list_type=38 AND s.slot_index IN (49, 51)
+                ORDER BY s.slot_index
+                """, peer.Id);
+            That(swapped.Length == 2 &&
+                Convert.ToInt32(swapped[0][0]) == 49 && Convert.ToInt64(swapped[0][1]) == uid51 &&
+                Convert.ToInt32(swapped[0][2]) == 90032 && Convert.ToInt32(swapped[0][3]) == 1 &&
+                Convert.ToInt32(swapped[1][0]) == 51 && Convert.ToInt64(swapped[1][1]) == uid49 &&
+                Convert.ToInt32(swapped[1][2]) == 90000 && Convert.ToInt32(swapped[1][3]) == 1,
+                "守护珠互换后槽位对调，UID与数量不变");
+            peer.Send(19, Move(38, 51, 90000, 38, 90, 0));
+            peer.Expect(1, 19, MoveAck(38, 51, 38, 90));
+            peer.Barrier(packet => That(packet.Opcode is not (13 or 14 or 1681), "守护珠同容器移位只回ACK，不标记新物品"));
+            short gemTarget = 90;
+            That(fixture.Query("""
+                SELECT s.slot_index, json_extract(i.item_core,'$.ItemId'), json_extract(i.item_core,'$.Value')
+                FROM character_inventory_slots s JOIN character_inventory_items i USING(item_uid)
+                WHERE s.character_id=$p0 AND i.item_uid=$p1
+                """, peer.Id, uid49) is [[90L, 90000L, 1L]] &&
+                fixture.Query("SELECT count(*) FROM character_inventory_slots WHERE character_id=$p0 AND list_type=38 AND slot_index=51", peer.Id) is [[0L]],
+                "守护珠整堆移到空槽90后仍是原UID和数量，51号空出");
+            peer.Send(19, Move(38, 48, 100380044, 38, 40, 0));
+            peer.Expect(1, 19, MoveAck(38, 48, 38, 40));
+            peer.Barrier(packet => That(packet.Opcode is not (13 or 14 or 1681), "勋章移位到高位空槽只回ACK"));
+            peer.Send(20, Convert.FromHexString("060000001026180C2000"));
+            peer.Expect(1, 20, [1, 4, 0, 0, 0, 8, 38, 16, 0]);
+            var medals = peer.Expect(0, 13).Body;
+            That(medals[0] == 38 && medals.Length == 3 + 123 * U16(medals, 1) &&
+                Enumerable.Range(0, U16(medals, 1)).Count(index => U16(medals, 3 + index * 123) < 49 &&
+                    U32(medals, 3 + index * 123 + 2) == 100380044) == 2 &&
+                !Enumerable.Range(0, U16(medals, 1)).Any(index => U16(medals, 3 + index * 123) == 40),
+                "勋章整理用NOTI13把两枚紧凑回页首，不发14/1681新物品标记");
+            peer.Barrier(packet => That(packet.Opcode is not (14 or 1681), "勋章整理之后不再补差量"));
+            peer.Send(20, Convert.FromHexString("060000001026180D2000"));
+            peer.Expect(1, 20, [1, 4, 0, 0, 0, 8, 38, 16, 0]);
+            var beads = peer.Expect(0, 13).Body;
+            That(beads[0] == 38 && !Enumerable.Range(0, U16(beads, 1)).Any(index => U16(beads, 3 + index * 123) == gemTarget),
+                "守护珠整理用NOTI13收回高位空槽，不发14/1681新物品标记");
+            peer.Barrier(packet => That(packet.Opcode is not (14 or 1681), "守护珠整理之后不再补差量"));
+        }
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0,
             "medal TCP fixture remains consistent after rejection, faults and reconnect");
         That(fixture.Query("SELECT item_uid,item_core FROM character_inventory_items WHERE item_uid=$p0", cappedUid)

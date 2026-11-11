@@ -329,8 +329,12 @@ internal static class SkillSwitchInventoryTcpTests
                 int deltaCount = 0, equipmentCount = 0, actorCount = 0, creatureDetails = 0;
                 peer.Barrier(packet =>
                 {
-                    That(packet.Opcode is 2 or 14 or 105 or 1372 or 1449 or 1599 or 1681,
-                        "普通穿脱只发布库存、外观及登记同步，不发送全量库存或未知窗口通知");
+                    That(packet.Opcode is 2 or 13 or 14 or 105 or 1372 or 1449 or 1599 or 1681,
+                        "普通穿脱只发布库存、外观及登记同步，不发送未知窗口通知");
+                    if (packet.Opcode == 13)
+                        That(packet.Body[0] is 0 or 1 or 7, "登记中的穿脱只全量重载本次包裹，跳过新物品标记");
+                    if (packet.Opcode is 14 or 1681 && packet.Body.Length > 0 && packet.Body[0] is 0 or 1 or 7)
+                        That(false, "包裹侧不再用14/1681回填已有物品");
                     if (packet.Opcode == 2 && packet.Body[0] == 1)
                         closingPlayers++;
                     if (packet.Opcode == 2 && packet.Body[0] == 0)

@@ -104,6 +104,7 @@ internal sealed partial class InventoryProjection(CharacterStatComputer stats, T
             await context.Notify(NotiPacketType.CREATURE_ITEM_LIST, InventoryPackets.Creatures(current.Inventory), "creature_details_committed", CanSend);
         // 开盒确认后客户端会立即读取完整容器。仅发送增量会让结果窗读取到旧槽位，
         // 双倍或十连奖励随后显示为加载中；普通背包操作仍沿用增量协议。
+        var quietReloaded = new List<InventoryListType>();
         if (plan.Reason == "magic_box_open")
         {
             await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.Full(current.Inventory), "inventory_committed_full_list", CanSend);
@@ -147,6 +148,27 @@ internal sealed partial class InventoryProjection(CharacterStatComputer stats, T
             if (DfoServer.Game.Titles.TitleBookService.IsBook(list))
             {
                 await context.Notify(NotiPacketType.TITLE_BOOK_LIST, TitlePackets.Book(current.Inventory, (byte)list - 18), "title_book_committed", CanSend);
+                continue;
+            }
+            // 整理，以及 Main/Avatar/Pet 穿脱替换：这些格子里已是玩家自己的物品。
+            // NOTI14/1681 走 029CFDD0(...,1,1)，且 1681 不置 062CF69C，020C5630 会把每格标成新物品。
+            // NOTI13 在 023BDDF0 置位该标志，新建条目改为 (...,1,0)，黄框不再出现。
+            // 029CEA20 只对 0/1/7/12/38/46 做这个标记；个人仓库已在上面走 NOTI13，账号公共栏不在资格内。
+            if (QuietExistingReload(plan.Reason, list, suppressMoveNoticeList))
+            {
+                // Main 全量可能留下快捷栏 3–8 的旧对象，耗尽的快捷格仍要先发空 NOTI14。整理不动快捷栏。
+                if (list == InventoryListType.Main && list == suppressMoveNoticeList)
+                {
+                    var emptiedQuick = slots.Where(slot => slot is { List: InventoryListType.Main, Index: >= 3 and <= 8 } &&
+                        receipt.Index.Find(slot) is null).ToArray();
+                    if (emptiedQuick.Length != 0)
+                        await context.Notify(NotiPacketType.UPDATE_ITEM_LIST,
+                            InventoryPackets.Delta(current.Inventory, list, emptiedQuick, index: receipt.Index),
+                            "inventory_quick_slot_cleared", CanSend);
+                }
+                await context.Notify(NotiPacketType.ITEM_LIST, QuietList(context, current.Inventory, list),
+                    "inventory_quiet_reload", CanSend);
+                quietReloaded.Add(list);
                 continue;
             }
             bool suppressNotice = plan.Reason == "sort_item" || suppressMainNotice && list == InventoryListType.Main || list == suppressMoveNoticeList;
@@ -237,12 +259,13 @@ internal sealed partial class InventoryProjection(CharacterStatComputer stats, T
             });
         }
         // 全量重载会重建未变化的图标，锁通知必须覆盖同一批容器中的全部实例。
-        bool reloadLocks = reloadPersonalCargo || rebuildMoveList || mainExpansionChanged || plan.Before.AvatarExpansion != current.Inventory.AvatarExpansion ||
-            plan.Reason is "magic_box_open" or "rune_box_open";
+        bool reloadLocks = reloadPersonalCargo || rebuildMoveList || quietReloaded.Count != 0 || mainExpansionChanged ||
+            plan.Before.AvatarExpansion != current.Inventory.AvatarExpansion || plan.Reason is "magic_box_open" or "rune_box_open";
         var lockSlots = reloadLocks ? changedSlots.Concat(current.Inventory.Items.Where(item =>
             plan.Reason == "magic_box_open" && item.Position.List is (InventoryListType.Main or InventoryListType.PersonalCargo or
                 InventoryListType.AccountCargo or InventoryListType.Avatar or InventoryListType.Pet or InventoryListType.GuildMedal or InventoryListType.Talisman or InventoryListType.AccountCommon) ||
             rebuildMoveList && item.Position.List == silentMoveList ||
+            quietReloaded.Contains(item.Position.List) ||
             (mainExpansionChanged || plan.Reason == "rune_box_open") && item.Position.List == InventoryListType.Main ||
             plan.Before.AvatarExpansion != current.Inventory.AvatarExpansion && item.Position.List == InventoryListType.Avatar ||
             plan.Reason == "rune_box_open" && item.Position.List == InventoryListType.Talisman ||
@@ -304,6 +327,17 @@ internal sealed partial class InventoryProjection(CharacterStatComputer stats, T
         if (receipt.PreviousQuests is { } previous && !previous.SequenceEqual(current.ActiveMainQuests))
             await QuestProjection.ProgressAsync(context,previous,current,CanSend,"inventory_quest_conditions");
         await SkillSwitchInventoryProjection.RefreshInventoryAsync(context, receipt, plan.Before);
+
+        static bool QuietExistingReload(string reason, InventoryListType list, InventoryListType? suppressMoveNoticeList) =>
+            (reason == "sort_item" || list == suppressMoveNoticeList) &&
+            list is InventoryListType.Main or InventoryListType.Avatar or InventoryListType.Pet or
+                InventoryListType.AccountCargo or InventoryListType.GuildMedal or InventoryListType.Talisman;
+        byte[] QuietList(GameConnectionContext connection, InventorySnapshot inventory, InventoryListType list) => list switch
+        {
+            InventoryListType.Main => InventoryPackets.Full(inventory),
+            InventoryListType.AccountCargo => CargoPackets.Full(inventory, list),
+            _ => town.SpecialFull(connection, inventory, list)
+        };
         if (creatures is not null && !inPlaceCreature && receipt.Phase == SessionPhase.Town && changedSlots.Contains(creatureSlot))
             await creatures.QuestsChangedAsync(context, plan.Before, current, CanSend);
     }
