@@ -82,7 +82,7 @@ internal sealed partial class QuestCompletionHandler(QuestCatalog quests, QuestR
         bool expertJob = commit.ExpertJobType is not null;
         if (expertJob)
             await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(character, context.Session.ReadPvpGrade(character), context.Channel,
-                adventureName: context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom, returningAdventurerType: context.Session.ReturningAdventurerType),
+                adventureName: context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom, returningAdventurerType: context.Session.ReturningAdventurerType, marriage: context.MarriageAppearance),
                 "quest_expert_job_actor", Guard);
         if (profession)
             await SkillProjection.PublishAsync(context, character, "quest_profession_skills", "quest_profession_combo", Guard);

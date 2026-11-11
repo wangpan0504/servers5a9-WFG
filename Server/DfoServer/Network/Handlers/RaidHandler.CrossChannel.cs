@@ -20,7 +20,7 @@ internal sealed partial class RaidHandler
             var target = online.FindReadyCharacter(locator.Character)?.CaptureRaidActor(registry);
             if (target is null || target.Channel.ServerIndex != locator.Server) continue;
             var invitation = registry.InviteCross(actor, target, parsed.Coins, parsed.AntiMagic);
-            if (invitation is not null && RaidCrossChannelProjection.Request(online, registry, invitation, lukeStart is not null))
+            if (invitation is not null && RaidCrossChannelProjection.Request(online, registry, invitation, lukeStart is not null, context.MarriageAppearance))
                 delivered++;
         }
         log.Write("raid_cross_request", new { Connection = context.Id, Self = actor.Character,
@@ -39,7 +39,7 @@ internal sealed partial class RaidHandler
         var applicant = online.FindReadyCharacter(parsed.Character)?.CaptureRaidActor(registry);
         RaidCrossTransfer? transfer = applicant is not null && applicant.Channel.ServerIndex == parsed.Server &&
             applicant.Channel.Number == parsed.Channel ? registry.AcceptCross(actor, applicant) : null;
-        bool delivered = transfer is not null && RaidCrossChannelProjection.Response(online, registry, transfer, lukeStart is not null);
+        bool delivered = transfer is not null && RaidCrossChannelProjection.Response(online, registry, transfer, lukeStart is not null, context.MarriageAppearance);
         log.Write("raid_cross_response", new { Connection = context.Id, Self = actor.Character,
             Target = parsed.Character, Delivered = delivered, Raid = transfer?.Party.Key });
         await context.Reply(CmdPacketType.RAID_OTHER_CHANNEL_RESPONSE_JOIN,

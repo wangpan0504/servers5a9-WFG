@@ -73,7 +73,7 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
                 ExpertJobPackets.CloseStoreNotice(character.Id), "expert_job_store_closed");
         await SkillProjection.PublishAsync(context, character, "expert_job_giveup_skills", "expert_job_giveup_combo", Guard);
         await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(character, context.Session.ReadPvpGrade(character), context.Channel,
-            adventureName: context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom, returningAdventurerType: context.Session.ReturningAdventurerType),
+            adventureName: context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom, returningAdventurerType: context.Session.ReturningAdventurerType, marriage: context.MarriageAppearance),
             "expert_job_giveup_actor", Guard);
         await context.Reply(CmdPacketType.GIVEUP_EXPERT_JOB, ExpertJobPackets.GiveUpSuccess(result.FinalGold, result.GiveUpState),
             "expert_job_giveup_committed", Guard);
@@ -120,7 +120,7 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
             RefreshOpenStore(context, craftedReceipt.Character);
             await inventory.RefreshAsync(context, crafted);
             await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(craftedReceipt.Character, context.Session.ReadPvpGrade(craftedReceipt.Character), context.Channel,
-                sceneState: ActorSceneState(craftedReceipt.Phase), adventureName: context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom, returningAdventurerType: context.Session.ReturningAdventurerType),
+                sceneState: ActorSceneState(craftedReceipt.Phase), adventureName: context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom, returningAdventurerType: context.Session.ReturningAdventurerType, marriage: context.MarriageAppearance),
                 "expert_job_compound_actor", Crafted);
             await NotifyInfo(context, craftedReceipt.Character, Crafted, "expert_job_compound_info", current);
             await context.Reply(CmdPacketType.COMPOUND_ITEM_BY_EXPERT_JOB,
@@ -178,7 +178,7 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
         RefreshOpenStore(context, craftedReceipt.Character);
         await inventory.RefreshAsync(context, committed);
         await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(craftedReceipt.Character, context.Session.ReadPvpGrade(craftedReceipt.Character), context.Channel,
-            sceneState: ActorSceneState(craftedReceipt.Phase), adventureName: context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom, returningAdventurerType: context.Session.ReturningAdventurerType),
+            sceneState: ActorSceneState(craftedReceipt.Phase), adventureName: context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom, returningAdventurerType: context.Session.ReturningAdventurerType, marriage: context.MarriageAppearance),
             "expert_job_enchant_actor", Crafted);
         await NotifyInfo(context, craftedReceipt.Character, Crafted, "expert_job_enchant_info", current);
         var priorRarities = scripts.LearnedRarities(scripts.LearnedRecipes(current!.ExpertJobType,
@@ -236,7 +236,7 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
         acknowledged.Add(new((InventoryListType)parsed.TargetList, parsed.TargetSlot));
         await inventory.RefreshAsync(context, committed, acknowledgedSlots: acknowledged);
         await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(craftedReceipt.Character, context.Session.ReadPvpGrade(craftedReceipt.Character), context.Channel,
-            sceneState: ActorSceneState(craftedReceipt.Phase), adventureName: context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom, returningAdventurerType: context.Session.ReturningAdventurerType),
+            sceneState: ActorSceneState(craftedReceipt.Phase), adventureName: context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom, returningAdventurerType: context.Session.ReturningAdventurerType, marriage: context.MarriageAppearance),
             "expert_job_extract_actor", Crafted);
         await NotifyInfo(context, craftedReceipt.Character, Crafted, "expert_job_extract_info", current);
         return CommandResult.Handled;
@@ -294,7 +294,7 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
         // gain exp允许抽到0；只有熟练度实际改变才重装Actor，避免批量分解重复重建角色。
         if (receipt.Character.ExpertJobExperience != current.ExpertJobExperience)
             await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(receipt.Character, context.Session.ReadPvpGrade(receipt.Character), context.Channel,
-                sceneState: ActorSceneState(receipt.Phase), adventureName: context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom, returningAdventurerType: context.Session.ReturningAdventurerType), "expert_job_disjoint_actor", Current);
+                sceneState: ActorSceneState(receipt.Phase), adventureName: context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom, returningAdventurerType: context.Session.ReturningAdventurerType, marriage: context.MarriageAppearance), "expert_job_disjoint_actor", Current);
         // 0236FDB0已将ACK235尾部耐久写入当前机器及本人副职业；不用205再次初始化窗口。
         log.Write("expert_job_disjoint", new { Connection = context.Id, Character = current.Id, Accepted = true,
             Rule = "pvf-disjointer-v1", request.SourceSlot, SourceItem = current.Inventory.Find(new(InventoryListType.Main, (short)request.SourceSlot))?.Core.ItemId,
@@ -557,7 +557,7 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
         RefreshOpenStore(context, receipt.Character);
         await inventory.RefreshAsync(context, committed);
         await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(receipt.Character, context.Session.ReadPvpGrade(receipt.Character), context.Channel,
-            sceneState: ActorSceneState(receipt.Phase), adventureName: context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom, returningAdventurerType: context.Session.ReturningAdventurerType),
+            sceneState: ActorSceneState(receipt.Phase), adventureName: context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom, returningAdventurerType: context.Session.ReturningAdventurerType, marriage: context.MarriageAppearance),
             "expert_job_machine_actor", Guard);
         await NotifyInfo(context, receipt.Character, Guard, "expert_job_machine_info");
         byte[] body = opcode switch

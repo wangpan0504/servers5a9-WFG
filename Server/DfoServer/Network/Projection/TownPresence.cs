@@ -12,6 +12,7 @@ namespace DfoServer.Network.Projection;
 internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = default, TimeProvider? clock = null,
     GameDebugSettings? debugSettings = null, ExpertJobStoreBoard? expertStores = null, MarriageAppearance? marriage = null)
 {
+    internal MarriageAppearance? MarriageAppearance => marriage;
     sealed record Scene(ChannelIdentity Channel, byte Town, byte Area, string Map, string? RoomAccount);
     sealed class Member(AccountOwners.Lease owner, GameConnectionSender sender, Scene scene, Character character, long serial, string adventureName)
     {
@@ -64,7 +65,7 @@ internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = 
     {
         var c = source.Character;
         return new(TownPackets.Actor(c, source.PvpGrade, source.Channel, (clock ?? TimeProvider.System).GetUtcNow().ToUnixTimeSeconds(), source.AdventureName,
-            premiumPcRoom: debugSettings?.PremiumPcRoom == true, returningAdventurerType: debugSettings?.AdventurerBenefits?.ReturningUntil(source.Owner.Account, (clock ?? TimeProvider.System).GetUtcNow().ToUnixTimeSeconds()) > 0 ? (ushort)1 : (ushort)0), TownPackets.ActorState(c.Id),
+            premiumPcRoom: debugSettings?.PremiumPcRoom == true, returningAdventurerType: debugSettings?.AdventurerBenefits?.ReturningUntil(source.Owner.Account, (clock ?? TimeProvider.System).GetUtcNow().ToUnixTimeSeconds()) > 0 ? (ushort)1 : (ushort)0, marriage: marriage), TownPackets.ActorState(c.Id),
             TownPackets.Position(c, false, source.ScaledSpeed), TownPackets.Position(c, true));
     }
     RemoteTownActor Projection(Member source, Member target, Bodies bodies) =>

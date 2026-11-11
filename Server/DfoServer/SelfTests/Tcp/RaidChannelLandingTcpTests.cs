@@ -135,7 +135,8 @@ internal static partial class RaidChannelLandingTcpTests
     // exit：入城后在赛丽亚房间发 CMD 1426 出门，核对 1379 携带的出门城镇与出门后城镇都是该频道地区。
     delegate void ChannelSwitch(byte channel, bool land, byte? town, string label, byte area = 0, byte? exit = null);
 
-    static ChannelSwitch Switcher(TcpTestFixture fixture, TcpTestResources resources, Dictionary<byte, int> endpoints, Character character)
+    static ChannelSwitch Switcher(TcpTestFixture fixture, TcpTestResources resources, Dictionary<byte, int> endpoints, Character character,
+        uint? marriageScore = null)
     {
         var completed = DfoServer.Game.Quests.QuestEligibility.Completed(character);
         Location Position()
@@ -162,6 +163,9 @@ internal static partial class RaidChannelLandingTcpTests
             var actor = packets.Single(packet => packet is { Kind: 0, Opcode: 2 } && packet.Body[0] == 0).Body;
             That(actor[3] == 2 && actor[4] == channel && U16(actor, 121) == character.Id,
                 "换频道后本人Actor绑定目标频道，位置快照保留不代表仍在旧频道");
+            if (marriageScore is { } score)
+                That(actor[28] == 4 && actor[29] == 1 && U32(actor, 30) == score && U32(peer.MarriageRoom, 0) == 1,
+                    "进出团队频道及同类型重连同时保留已婚、婚戒、Actor装饰分及真实家具输入");
             var row = fixture.Query("SELECT town,area,x,y FROM characters WHERE id=$p0", character.Id)[0];
             byte t = (byte)(long)row[0]!, a = (byte)(long)row[1]!;
             ushort x = (ushort)(long)row[2]!, y = (ushort)(long)row[3]!;

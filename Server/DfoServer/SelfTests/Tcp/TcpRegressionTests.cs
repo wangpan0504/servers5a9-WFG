@@ -182,6 +182,7 @@ internal static class TcpRegressionTests
         ("marriage", MarriageTcpTests.RunAsync),
         ("marriage-wedding", MarriageWeddingTcpTests.RunAsync),
         ("marriage-home", MarriageHomeTcpTests.RunAsync),
+        ("marriage-channel", RaidChannelLandingTcpTests.RunMarriageAsync),
         ("marriage-dungeon", PartyDungeonTcpTests.RunMarriageAsync),
         ("tutorial", TutorialTcpTests.RunAsync),
         ("channel-entry", ChannelEntryTcpTests.RunAsync),
