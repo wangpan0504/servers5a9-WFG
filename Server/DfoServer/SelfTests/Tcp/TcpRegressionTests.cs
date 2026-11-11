@@ -758,6 +758,7 @@ internal static class TcpRegressionTests
         ("xian-village-door", RaidChannelLandingTcpTests.RunXianDoorAsync),
         ("presence", TownPresenceTcpTests.RunAsync),
         ("gm-events", GmEventTcpTests.RunAsync),
+        ("server-event-publication", (_, _, resources) => global::DfoServer.TownTravelPublicationTests.RunServerEventPublicationAsync(resources)),
         ("gm-web-accept", GmWebAcceptTcpTests.RunAsync)
     ];
 
