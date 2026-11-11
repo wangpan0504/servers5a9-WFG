@@ -127,7 +127,7 @@ internal sealed partial class CharacterRepository
                 !DailyBoosterUsage.Same(current.Inventory.DailyBoosterUses, ancient.Before))
                 throw new InvalidOperationException("远古奖励进度的角色快照已变化");
         }
-        var result = reward.TotalExperience == 0 && run.Entry.DisableMonsterAndClearExperience
+        var result = reward.TotalExperience == 0 && run.Entry.AllowsZeroClearExperience
             ? CharacterGrowthPlan.WithoutExperience(expected, catalog) : CharacterGrowthPlan.AddExperience(expected, reward.TotalExperience, catalog);
         if (!result.Success)
             throw new InvalidDataException("通关成长候选被拒绝: " + result.Failure);

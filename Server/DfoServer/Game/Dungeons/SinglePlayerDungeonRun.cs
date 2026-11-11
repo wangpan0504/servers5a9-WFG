@@ -1032,7 +1032,7 @@ internal sealed partial class SinglePlayerDungeonRun
         ArgumentNullException.ThrowIfNull(fact);
         ArgumentNullException.ThrowIfNull(reward);
         if (entry.LostLand is not null || tagEvildom is not null || entry.IsPractice || entry.DungeonId is >= 11008 and <= 11107 || !ReferenceEquals(ClearFact, fact) || fact.Identity != identity || Phase != SinglePlayerDungeonPhase.Settlement ||
-            HasPendingDeath || reportBody.IsEmpty || reportBody.Length > 4096 || reward.TotalExperience == 0 && !entry.IsTutorial && !entry.DisableMonsterAndClearExperience ||
+            HasPendingDeath || reportBody.IsEmpty || reportBody.Length > 4096 || reward.TotalExperience == 0 && !entry.AllowsZeroClearExperience ||
             entry.DisableMonsterAndClearExperience && reward.TotalExperience != 0 ||
             (ulong)reward.BaseExperience + reward.RankExperience + reward.ExtraExperience != reward.TotalExperience || reward.RankBonusIndex is < -1 or > 4 ||
             string.IsNullOrWhiteSpace(reward.RuleId) || reward.RuleId.Length > 128 ||
