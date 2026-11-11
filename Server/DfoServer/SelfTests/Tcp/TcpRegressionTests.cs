@@ -134,6 +134,7 @@ internal static class TcpRegressionTests
             await QuestCompletionPublicationTests.RunStageAsync(resources);
             await QuestLifecycleTcpTests.RunStageAsync(options,root,resources);
         }),
+        ("quest-catalog-resources", (_, _, resources) => { QuestCatalogTests.Run(resources.Archive); return Task.CompletedTask; }),
         ("quest-live-progress", QuestLifecycleTcpTests.RunLiveProgressAsync),
         ("settings-snapshot-rules", (_, _, _) => { ClientSettingsSnapshotsTests.Run(); return Task.CompletedTask; }),
         ("equipment-power-rules", (_, _, _) => { EquipmentPowerScoreTests.RunCore(); return Task.CompletedTask; }),
@@ -211,6 +212,12 @@ internal static class TcpRegressionTests
         ("growup-change", GrowUpChangeTcpTests.RunAsync),
         ("stadium-quest", MetroQuestEntryTcpTests.RunStadiumAsync),
         ("titles", TitleTcpTests.RunAsync),
+        ("collectbox-rules", (_, _, resources) =>
+        {
+            CollectBoxTests.RunCore();
+            CollectBoxTests.RunResources(resources.Towns, resources.ItemResources);
+            return Task.CompletedTask;
+        }),
         ("collectbox", CollectBoxTcpTests.RunAsync),
         ("epic-production", EpicProductionTcpTests.RunAsync),
         ("epic-production-rules", (_, _, resources) =>
