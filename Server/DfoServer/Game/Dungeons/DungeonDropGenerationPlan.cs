@@ -31,6 +31,8 @@ internal sealed record DungeonDropTrial(int Threshold, DungeonItemDropPool? Item
     public bool ExcludeLegacyHellLowEquipment { get; init; }
     // 仅正式深渊碎片骰登记。入场预留上界，死亡时才把本人冻结增量变为实际次数。
     public int EpicPieceBonusCapacity { get; init; }
+    // 非空时，活动有效期间命中的史诗装备必须属于该集合；集合外冻结为空，不重抽。
+    public ImmutableHashSet<int>? AllowedEpicEquipmentIds { get; init; }
     public DungeonDropTrial WithChanceBonus(long numerator, long denominator) => this with
     {
         Threshold = (int)Math.Min(ProbabilityDenominator, (long)Threshold * numerator / denominator),
@@ -389,6 +391,10 @@ internal sealed class DungeonDropGenerationPlan
                 if (expiresAt > 0 && expiresAt <= now.ToUnixTimeSeconds())
                     continue;
             }
+            // 活动关闭后不再限制，让原史诗候选恢复；开启时集合外史诗只作废这一次命中。
+            if (epicRoad2019Available && trial.AllowedEpicEquipmentIds is { } allowedEpics &&
+                template is { Kind: ItemKind.Equipment, Rarity: 4 } && !allowedEpics.Contains(template.Id))
+                continue;
             if (template.Kind == ItemKind.Equipment)
             {
                 for (int index = 0; index < count; index++)

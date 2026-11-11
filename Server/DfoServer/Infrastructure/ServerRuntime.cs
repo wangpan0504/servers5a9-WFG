@@ -706,8 +706,9 @@ internal static class ServerRuntime
                 new SleepyHollowMaterialDropPolicy(SleepyHollowRewardCatalog.Load(dungeonCatalog, rooms), itemResources.Items.Get),hopeRewards,dimensionRewards,dropControl.Settings,legacyHell,riftEpics,
                 regional: new PandemoniumRegionalDropPolicy(dungeonCatalog.Get, itemResources.Items.Get, specialDrops),
                 assaultMaterials: new AssaultMaterialDropPolicy(assaultMode, itemResources.Items.Get),
-                epicRoadSimulated: epicRoad2019Enabled && options.EpicRoad2019SimulatedDropsEnabled
-                    ? new EpicRoad2019SimulatedDropPolicy(dawnEpicPool, true) : null,
+                epicRoadSimulated: epicRoad2019Enabled
+                    ? new EpicRoad2019SimulatedDropPolicy(dawnEpicPool, options.EpicRoad2019SimulatedDropsEnabled, harlemEpics.Super
+                        ?? throw new InvalidDataException("超星河隐藏领主缺少 area54/list5 超界史诗池")) : null,
                 tayberrs: tayberrsDrops, carbonCrystal: new CarbonCrystalDropPolicy(itemResources.Items.Get));
             dropControl.Inspect = new DungeonDropInspection(dungeonCatalog, rooms, resourceDrops, dropControl.Settings).Query;
             passiveDrops = new(dungeonCatalog.Get, itemResources.Items.Get, DungeonDropRuleCatalog.LoadObjects(pvf), dropCandidates, amplificationDrops,
@@ -741,6 +742,7 @@ internal static class ServerRuntime
             log.Write("dungeon_drop_policy", new { Rule = DungeonResourceDropPolicy.Rule,
                 EpicRoadSimulatedEnabled = epicRoad2019Enabled && options.EpicRoad2019SimulatedDropsEnabled,
                 EpicRoadSimulatedRule = EpicRoad2019SimulatedDropPolicy.Rule,
+                EpicRoadHiddenBossRule = epicRoad2019Enabled ? EpicRoad2019SimulatedDropPolicy.HiddenRule : null,
                 EquipmentWeights = "current_pvf_creation_rate", Retained = DungeonResourceDropPolicy.RetainedFields,
                 RegionalMaterialRule = PandemoniumRegionalDropPolicy.Rule, RegionalCardSource = DungeonSpecialDropCatalog.CardPath,
                 SleepyHollowMaterialRule = SleepyHollowMaterialDropPolicy.Rule,
