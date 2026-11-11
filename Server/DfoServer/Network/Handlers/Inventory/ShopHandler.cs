@@ -22,7 +22,8 @@ internal sealed class ShopHandler(InventoryShopService shop, InventoryCashShopSe
     ServerLog log, MarriageShopService? marriageShop = null, MarriageProjection? marriageProjection = null, CashShopPromotionService? promotions = null,
     PromotionPageProjection? promotionPage = null, TownProjection? nativePromotionTown = null,
     ServerEventService? serverEvents = null, NpcShopCatalog? strongwayShops = null,
-    Func<GameConnectionContext, BattlePassMissionState, InventoryCommitReceipt, Task>? battlePassCertificateChanged = null) : IGameCommandModule
+    Func<GameConnectionContext, BattlePassMissionState, InventoryCommitReceipt, Task>? battlePassCertificateChanged = null,
+    TownProjection? renameTown = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -149,6 +150,8 @@ internal sealed class ShopHandler(InventoryShopService shop, InventoryCashShopSe
                 promotion.Progress.Scope == CashShopPromotionPageService.Scope && context.Session.CanPublishInventory(published))
                 await nativePromotionTown.ServerEventsAsync(context, () => context.Session.CanPublishInventory(published),
                     minimumPromotionRevision: promotion.Progress.Revision);
+            if (result.Plan?.CashShopRename == true && renameTown is not null)
+                await renameTown.ReturnToSelectionAsync(context, () => context.Session.CanPublishInventory(published));
         }
         catch (DbException error) when (promotion is not null || result.Plan?.CashShopPayment is { Cera: > 0 })
         {

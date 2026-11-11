@@ -307,6 +307,9 @@ internal sealed partial class CharacterRepository
         if (plan.UnlockSkillTree && (plan.Reason != "cash_shop_buy" || plan.CharacterPrecondition is null ||
             !expected.Learning.Initialized || expected.Learning.SelectedTree != -1))
             throw new InvalidOperationException("技能方案只能由商城对未开通角色开通");
+        if (plan.CashShopRename && (plan.Reason != "cash_shop_buy" || plan.CharacterPrecondition is null ||
+            plan.CashShopPayment?.Lines.Count(line => line.Product is { CommodityId: 100902, ItemId: 2682290, Count: 1 }) != 1))
+            throw new InvalidOperationException("商城更名资格必须来自对应商品");
         if (plan.EquipmentSlotFlagsAfter is not null && plan.Reason == "gm_equipment_slot_flags")
         {
             // 开发GM开扩展装备栏：只在原标志上追加辅助装备/魔法石/耳环位，背包不变，不清除也不开放幻化位。
@@ -377,6 +380,17 @@ internal sealed partial class CharacterRepository
             throw new InventoryQualificationExpiredException();
         if (!plan.Changed)
             return current;
+        if (plan.CashShopRename)
+        {
+            if (!DfoServer.Game.Characters.CharacterRenameCard.AllowsMarriage(ReadMarriage(db, transaction, current.Id)))
+                throw new InventoryQualificationExpiredException();
+            using var rename = db.CreateCommand();
+            rename.Transaction = transaction;
+            rename.CommandText = "INSERT OR IGNORE INTO character_rename_pending(character_id,account,source_uid) VALUES($id,$account,0)";
+            rename.Parameters.AddWithValue("$id", current.Id);
+            rename.Parameters.AddWithValue("$account", owner.Account);
+            if (rename.ExecuteNonQuery() != 1) throw new InventoryQualificationExpiredException();
+        }
         CommitGuildHongbaoPurchase(db, transaction, current, plan);
         WritePcRoomClaim(db, transaction, owner.Account, current.Id, plan);
         WriteAccountItemRefills(db, transaction, owner.Account, current.Id, plan.AccountRefillClaims);
