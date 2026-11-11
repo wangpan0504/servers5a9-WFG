@@ -394,12 +394,20 @@ internal sealed partial class GameSession
                 !capture.Binding.Battle.CanClaimRaidReward(capture.Binding.Actor, view.Phase, automaticLuke)) return null;
             var commit = store.CommitRaidReward(owner, capture.Character, capture.Prepared, inventory, now);
             if (commit is null) return null;
+            var prepared = capture.Prepared;
+            var offer = capture.Offer;
+            if (!commit.SettledGrants.IsDefault && !commit.SettledGrants.SequenceEqual(prepared.Grants))
+            {
+                prepared = prepared with { Grants = commit.SettledGrants };
+                offer = RaidSongQuota.ApplyGrants(offer, commit.SettledGrants);
+                capture.Binding.Battle.ApplySettledSongOffer(capture.Binding.Actor, prepared.Phase, offer);
+            }
             Selected = commit.Character;
             var result = granted with { Plan = new(capture.Character.Inventory, commit.Character.Inventory, "raid_reward"),
                 Receipt = new(commit.Character, owner.Generation, SelectionEpoch)
                 { Phase = Phase, DungeonIdentity = formalDungeon?.Run.Snapshot.Identity, PreviousQuests = capture.Character.ActiveMainQuests,
                     PreviousSkillSwitchInventory = capture.Character.SkillSwitchInventory } };
-            var receipt = new RaidRewardReceipt(capture.Prepared, capture.Offer, commit, result, owner.Generation, SelectionEpoch);
+            var receipt = new RaidRewardReceipt(prepared, offer, commit, result, owner.Generation, SelectionEpoch);
             capture.Binding.Receipts[(capture.Prepared.Phase, kind)] = receipt;
             capture.Binding.Pending.Remove((capture.Prepared.Phase, kind));
             capture.Binding.Battle.RecordLukeRewardReceipt(capture.Binding.Actor, receipt);

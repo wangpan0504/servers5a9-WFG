@@ -13,6 +13,7 @@ internal sealed class FiendwarRewards(FiendwarScript definition, ItemCatalog ite
     internal const string Source = "fiendwar-cn95-resource-v1;weighted-squad=1;per-character=1;privilege=entitled";
     internal static readonly RaidWeeklyCycle Cycle = new(DayOfWeek.Tuesday, new(6, 0), TimeSpan.FromHours(8));
     readonly RaidRewardContainers containers = new(definition.Script, items, boosters);
+    internal AccountMaterialDefinition? UndefeatedSongLimit => RaidSongQuota.Limit(items);
 
     readonly FiendwarRewards? guide = guideDefinition is null ? null : new(guideDefinition, items, boosters);
     internal LukeRaidCompletionPolicy CreateGuide(bool pcroom, bool privilege = false, decimal epicMultiplier = 1) => guide?.Create(pcroom, privilege, epicMultiplier: epicMultiplier) ??

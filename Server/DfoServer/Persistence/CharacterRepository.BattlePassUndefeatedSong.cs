@@ -8,11 +8,11 @@ namespace DfoServer.Persistence;
 internal sealed partial class CharacterRepository
 {
     void ApplyBattlePassUndefeatedSong(SqliteConnection db, SqliteTransaction tx, string account,
-        PreparedRaidReward prepared, InventoryPlan inventory, DateTimeOffset now)
+        PreparedRaidReward prepared, InventoryPlan inventory, DateTimeOffset now, int? settledSong = null)
     {
         if (battlePassMissionPolicy is not { } policy ||
             !ActiveBattlePassMissions(db, tx, policy, now).Any(row => BattlePassUndefeatedSongSource.Matches(row.Key.Category, row.Definition))) return;
-        int acquired = BattlePassUndefeatedSongSource.DirectAmount(prepared, inventory, now);
+        int acquired = settledSong ?? BattlePassUndefeatedSongSource.DirectAmount(prepared, inventory, now);
         if (acquired == 0) return;
         using var command = db.CreateCommand(); command.Transaction = tx;
         command.Parameters.AddWithValue("$account", account); command.Parameters.AddWithValue("$season", policy.SeasonKey);

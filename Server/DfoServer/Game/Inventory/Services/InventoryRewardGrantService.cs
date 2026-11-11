@@ -4,6 +4,7 @@ using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Items;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Currency;
+using DfoServer.Game.Raids;
 
 namespace DfoServer.Game.Inventory.Services;
 
@@ -132,6 +133,8 @@ internal static class InventoryRewardGrantService
         for (int rewardIndex = 0; rewardIndex < rewards.Count; rewardIndex++)
         {
             var reward = rewards[rewardIndex];
+            // 满额不渝之咏保留数量 0 的牌面行，不因此拒绝同批的其他奖励。
+            if (raidReward && reward.ItemId == RaidSongQuota.ItemId && reward.Count == 0) continue;
             if (reward.Count <= 0 || reward.Upgrade > 31 || reward.Refinement > 127 ||
                 reward.EnchantUpgrade != 0 && (!catalog.TryGet(reward.ItemId, out var card) || !card.IsMonsterCard))
                 return InventoryResult.Reject();

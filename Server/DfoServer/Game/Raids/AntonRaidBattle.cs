@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using DfoServer.Game.Dungeons;
+using DfoServer.GameWorld.Items;
 using DfoServer.GameWorld.Raids;
 
 namespace DfoServer.Game.Raids;
@@ -225,7 +226,8 @@ internal sealed partial class AntonRaidBattle
         Random? preyRandom = null, FiendwarScript? fiendwar = null, FiendwarPacing? fiendwarPacing = null,
         ImmutableDictionary<ushort, ImmutableArray<RaidPhaseRewardPolicy>>? memberRewards = null, int fiendwarRoute = 0,
         LukeCardSetCatalog? lukeCards = null, ImmutableArray<LukeRaidMazeChoice> lukeMazes = default,
-        Random? fiendwarMazeRandom = null, LukeChannelCardSelection? lukeChannelCards = null, bool preyGuide = true, decimal epicMultiplier = 1)
+        Random? fiendwarMazeRandom = null, LukeChannelCardSelection? lukeChannelCards = null, bool preyGuide = true, decimal epicMultiplier = 1,
+        AccountMaterialDefinition? undefeatedSongLimit = null)
     {
         if (pacing is not null && kind != RaidKind.Luke) throw new InvalidDataException("卢克统一节奏不能应用于其它团本");
         script = pacing?.Adapt(script) ?? script;
@@ -235,6 +237,7 @@ internal sealed partial class AntonRaidBattle
         lukeFlow = flow;
         lukeResourceRewards = lukeRewards;
         this.epicMultiplier = epicMultiplier;
+        this.undefeatedSongLimit = undefeatedSongLimit;
         this.script = script;
         if (!script.Issues.IsEmpty || script.Phases.IsEmpty || script.Phases.Length > sbyte.MaxValue ||
             script.Symbols.Count > byte.MaxValue || script.Phases.Any(p => p.Dungeons.Length > byte.MaxValue))

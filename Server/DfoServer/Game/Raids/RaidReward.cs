@@ -38,7 +38,11 @@ internal sealed record PreparedRaidReward(Guid Instance, int Phase, byte Kind, b
 {
     public RaidKind RaidType { get; init; } = RaidKind.Anton;
 }
-internal sealed record RaidRewardCommit(Character Character, bool Duplicate, ImmutableArray<uint> MailIds);
+internal sealed record RaidRewardCommit(Character Character, bool Duplicate, ImmutableArray<uint> MailIds)
+{
+    // 事务内按数据库余额再裁后的实际发放。缺省表示与冻结 Grants 相同。
+    public ImmutableArray<InventoryReward> SettledGrants { get; init; }
+}
 internal sealed record RaidRewardReceipt(PreparedRaidReward Prepared, RaidRewardOffer Offer, RaidRewardCommit Commit,
     InventoryResult Inventory, long Generation, long Epoch);
 
