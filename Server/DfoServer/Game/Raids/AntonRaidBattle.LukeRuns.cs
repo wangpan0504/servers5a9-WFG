@@ -16,6 +16,7 @@ internal sealed partial class AntonRaidBattle
         public byte Squad { get; } = squad;
         public ushort? PreyPartyId { get; init; }
         public ushort? PreySoloCharacter { get; init; }
+        public int? PreyArea { get; init; }
         public long Generation { get; } = generation;
         public int? MazeOrdinal { get; init; }
         public HashSet<int> KilledMonitorTargets { get; } = [];
@@ -102,7 +103,8 @@ internal sealed partial class AntonRaidBattle
                         identity.PreySoloCharacter is { } character ? run.PreySoloCharacter == character : run.Squad == identity.Squad)) ||
                     battle.Kind == RaidKind.Luke && battle.dungeonRuns.Values.Any(run => run.Phase == identity.Phase &&
                         run.Dungeon == dungeon && run.Generation != battle.current.DungeonGenerations.GetValueOrDefault(checked((int)dungeon))) ||
-                    battle.Kind is RaidKind.Luke or RaidKind.Prey && battle.dungeonRuns.Values.Count(run => run.Phase == identity.Phase && run.Dungeon == dungeon) >=
+                    battle.Kind is RaidKind.Luke or RaidKind.Prey && battle.dungeonRuns.Values.Count(run => run.Phase == identity.Phase && run.Dungeon == dungeon &&
+                        (landing is null || run.PreyArea is null || run.PreyArea == landing.Arrival.FromArea)) >=
                         battle.script.Phases[identity.Phase].Dungeons.Single(row => row.Id == dungeon).PartyMax ||
                     actors.Any(actor => battle.dungeonRuns.Values.Any(run => !ReferenceEquals(run, replacing) && run.Active.Contains(actor.Actor)))) return null;
                 if (battle.UsesLukeRoute(identity.Phase)
@@ -112,7 +114,8 @@ internal sealed partial class AntonRaidBattle
                     battle.current.DungeonGenerations.GetValueOrDefault(checked((int)dungeon)), actors)
                     { Objects = objects, Route = route, RevivalLimit = coinLimit, MazeOrdinal = mazeOrdinal,
                         PreyTimeLimitSeconds = battle.Kind == RaidKind.Prey && !battle.PreyGuide && timeLimitSeconds is > 0 ? timeLimitSeconds : null,
-                        PreyPartyId = identity.PreyPartyId, PreySoloCharacter = identity.PreySoloCharacter };
+                        PreyPartyId = identity.PreyPartyId, PreySoloCharacter = identity.PreySoloCharacter,
+                        PreyArea = landing?.Arrival.FromArea };
                 if (!battle.ReserveFiendwarEncounter(run)) return null;
                 if (!battle.dungeonRuns.TryAdd(run.Id, run)) return null;
                 return new(battle, run, landing, replacing);

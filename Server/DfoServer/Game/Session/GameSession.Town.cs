@@ -35,7 +35,9 @@ internal sealed partial class GameSession
                 npcTownVisit is { } visit && visit.Epoch == SelectionEpoch ? visit.Visit : null,
                 raidRegistry?.FindCurrent(this, SelectionEpoch) is { Type: 2, Guide: false, Started: null },
                 raidRegistry?.FindCurrent(this, SelectionEpoch) is { Type: 2, Guide: true, Started: null },
-                raidCombat is { Actor.IsCurrent: true, Battle.Kind: Game.Raids.RaidKind.Fiendwar }, HasPreyTeamTownAccess)
+                raidCombat is { Actor.IsCurrent: true, Battle.Kind: Game.Raids.RaidKind.Fiendwar },
+                HasPreyTeamTownAccess || HasPreyPreparationBoardingAccess &&
+                    request is { Town: 59, Area: 3, PreviousTown: 59, PreviousArea: 2, Movement: 5, PathKind: 0, TargetNpc: 0 })
             : TownTravelPlan.Reject("not-ready")));
         return receipt is not null;
     }
@@ -64,7 +66,8 @@ internal sealed partial class GameSession
         }
         if (plan.Position is { Town: 59, Area: >= 2 and <= 5 } preyTarget &&
             (ChannelEntry?.Type != 50 || raidRegistry?.FindCurrent(this, SelectionEpoch) is not { Type: 3 } ||
-                preyTarget.Area >= 3 && !HasPreyTeamTownAccess))
+                preyTarget.Area >= 3 && !HasPreyTeamTownAccess &&
+                    !(preyTarget.Area == 3 && HasPreyPreparationBoardingAccess)))
         {
             TravelReason = "prey-raid-required";
             return null;

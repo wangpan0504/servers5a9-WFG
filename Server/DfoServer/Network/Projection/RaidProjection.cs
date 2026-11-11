@@ -61,7 +61,8 @@ internal static class RaidProjection
     }
 
         internal static byte DisplayState(RaidParty party, AntonRaidBattleView? view, GameConnectionContext? recipient = null) =>
-        party is { Type: 3, Guide: false } && view is { PhaseExpired: true } ? (byte)6 :
+        party is { Type: 3, Guide: false } && view is { PhaseExpired: true } ?
+            recipient?.LukePhaseExit?.ReturnPending(view.Instance) == true ? (byte)3 : (byte)6 :
         party is { Type: 3 } && view is { State: AntonRaidBattleState.Fighting } &&
             (view.Phase == 0 && view.Symbols.GetValueOrDefault("[prepare raid]") != 1 ||
                 recipient?.PreyBoardingPending(view.Instance) == true) ? (byte)1 :
@@ -149,7 +150,6 @@ internal static class RaidProjection
         if (party.Type == (byte)RaidKind.Prey && receipt.Battle is { } preyInitial &&
             recipient.Session.CurrentRaidBattle(recipient) is { } preyBattle)
         {
-            context.Sender.Post(0, (ushort)NotiPacketType.PREY_RAID, RaidCombatPackets.PreyStatus(1), "prey_started", Guard);
             RaidCombatProjection.PostPreySnapshot(context, preyBattle, preyInitial,
                 () => Guard() && recipient.Session.CanPublishRaidBattle(recipient, preyInitial));
         }

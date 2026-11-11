@@ -446,6 +446,11 @@ internal static partial class FiendwarRaidTcpTests
                 peer.Send(659, [1]);
                 That(Drain(peer).Any(row => row is { Kind: 1, Opcode: 659, Body: [1] }),
                     "每个真实Present成员沿659一确认演出结束");
+                That(movieCards.Contains(peer.Id) && movieChoices.Contains((peer.Id, 1)) && movieChoices.Contains((peer.Id, 0)),
+                    "本人真实电影结束立即收到两类牌面，不等待其余成员或20秒备用期限");
+                if (count == 4 && peer == peers[0])
+                    That(peers.Skip(1).All(other => !movieCards.Contains(other.Id)),
+                        "首名成员开牌不会冒充其他三名成员的电影确认");
             }
             foreach (var peer in peers) Drain(peer);
             That(peers.All(peer => movieCards.Contains(peer.Id) && movieChoices.Contains((peer.Id, 1)) && movieChoices.Contains((peer.Id, 0))),

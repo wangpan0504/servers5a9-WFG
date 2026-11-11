@@ -1,5 +1,6 @@
 using DfoServer.Game.Dungeons;
 using DfoServer.Game.Raids;
+using DfoServer.GameWorld.Dungeons;
 using DfoServer.GameWorld.Raids;
 using static DfoServer.Testing.TestCheck;
 
@@ -28,13 +29,17 @@ internal static class PreyTeamDefenceTests
             That(Hp(battle) == hp - 1300 && battle.IsPreyLandingCurrent(landing),
                 "无人入场在当次到站发布结束立即扣血，不等下一段15秒且不清除阻击");
             var penalized = battle.View;
+            That(penalized.PreyWarningEvent == 1 && battle.PreyWarningCurrent(penalized),
+                "真实阻击碰撞登记一次原生警报事件，扣血未破甲也触发红图标和音效");
             battle.Publish(penalized); battle.Publish(penalized);
-            That(ReferenceEquals(penalized, battle.View), "同次到站重复发布不重复漏守扣血");
+            That(ReferenceEquals(penalized, battle.View) && battle.View.PreyWarningEvent == 1,
+                "同次到站重复发布不重复漏守扣血或重放警报事件");
             for (int step = 0; step < 16; step++) Step(battle);
             That(battle.CapturePreyLanding(battle.View, 5) is { } next && next.Arrival.Generation != landing.Arrival.Generation,
                 "未通关阻击保留到下一圈，签发新的到站身份");
             battle.Publish(battle.View);
-            That(Hp(battle) == hp - 2600, "下圈无人成功进入再次惩罚同一未通关阻击");
+            That(Hp(battle) == hp - 2600 && battle.View.PreyWarningEvent == 2,
+                "下圈无人成功进入再次惩罚同一未通关阻击，签发独立警报事件");
 
             battle = Create();
             landing = battle.CapturePreyLanding(battle.View, 5)!;
@@ -152,6 +157,34 @@ internal static class PreyTeamDefenceTests
             first!.Dispose();
             That(Hp(battle) == hp, "离站后的旧入场完成不能惩罚新到站状态");
             actors[0].Session.RaidBattleNoticeArrived = null;
+
+            battle = Create();
+            landing = battle.CapturePreyLanding(battle.View, 5)!;
+            var firstIdentity = new DungeonRunIdentity(actors[0].Character, 0, 1, Guid.NewGuid(), 1);
+            using var firstArea = battle.ReserveDungeon(new(battle.Instance, 0, 0, RaidKind.Prey)
+                { PreyGuide = false, PreyPartyId = 710 }, checked((uint)landing.Dungeon), [(actors[0], firstIdentity)], landing: landing);
+            That(firstArea is not null, "第一处阻击按真实到站区域安装");
+            firstArea!.Install();
+            int otherSlot = Enumerable.Range(1, 16).First(slot => battle.View.Symbols[$"[area_{slot}]"] == 0);
+            battle.SetMechanism(battle.Instance, battle.View.Revision, $"[area_{otherSlot}]", landing.Dungeon);
+            battle.SetMechanism(battle.Instance, battle.View.Revision, "[slenikon from area]", otherSlot + 300);
+            var otherLanding = battle.CapturePreyLanding(battle.View, 5)!;
+            var otherIdentity = new DungeonRunIdentity(actors[1].Character, 0, 1, Guid.NewGuid(), 1);
+            using var otherArea = battle.ReserveDungeon(new(battle.Instance, 0, 0, RaidKind.Prey)
+                { PreyGuide = false, PreyPartyId = 711 }, checked((uint)landing.Dungeon), [(actors[1], otherIdentity)], landing: otherLanding);
+            That(otherArea is not null && otherLanding.Arrival.FromArea != landing.Arrival.FromArea,
+                "同模板在另一格的阻击可独立入场，不共享PartyMax占用");
+            otherArea!.Install();
+            using var sameArea = battle.ReserveDungeon(new(battle.Instance, 0, 0, RaidKind.Prey)
+                { PreyGuide = false, PreyPartyId = 712 }, checked((uint)landing.Dungeon),
+                [(actors[2], new(actors[2].Character, 0, 1, Guid.NewGuid(), 1))], landing: otherLanding);
+            That(sameArea is null, "同区域的原人数上限仍生效，不能重复入场");
+            var clear = new DungeonClearFact(firstIdentity, checked((uint)landing.Dungeon), [Guid.NewGuid()])
+                { ClearMap = new DungeonMap("boss", new(0, 0), 77, "fixture/prey-defence.map") };
+            That(battle.CompletePreyDungeon([(actors[0], clear)]) is not null &&
+                battle.View.Symbols[$"[area_{landing.Arrival.FromArea - 300}]"] == 0 &&
+                battle.View.Symbols[$"[area_{otherSlot}]"] == landing.Dungeon,
+                "完成第一格只清除该Run原区域，保留另一格相同怪物及正在战斗的队伍");
 
             battle = Create();
             battle.SetMechanism(battle.Instance, battle.View.Revision, "[slenikon hp]", 1300);

@@ -10,6 +10,30 @@ internal static partial class PreyTeamTcpTests
     static async Task LandDefenceTeamAsync(TcpTestFixture fixture, TcpPeer captain, TcpPeer member, TownCatalog towns,
         RaidResources resources, LukeRaidClockTests.Clock clock, Dictionary<int, int> symbols, uint key)
     {
+        // 先让全员在甲板漏守一次，验证真实碰撞的原生警报，再沿原用例完成右侧接战。
+        var peers = new[] { captain, member };
+        var warnings = peers.Select(_ => new List<WirePacket>()).ToArray();
+        bool collided = false;
+        for (int stop = 0; stop < 16 && !collided; stop++)
+        {
+            clock.Advance(symbols[resources.Script.Symbols["[slenikon speed]"]]);
+            for (int index = 0; index < peers.Length; index++)
+                warnings[index].AddRange(Read(peers[index], "missed defence warning"));
+            if (warnings[0].LastOrDefault(row => row is { Kind: 0, Opcode: 583 }) is { } latest)
+                symbols = Symbols(latest.Body);
+            int area = symbols[resources.Script.Symbols["[slenikon from area]"]] - 300;
+            collided = area is >= 1 and <= 16 &&
+                symbols[resources.Script.Symbols[$"[area_{area}_dgn_type]"]] == 5;
+        }
+        foreach (var rows in warnings)
+            That(collided && rows.Count(row => row is { Kind: 0, Opcode: 1595, Body: [1, 0, 0, 0] }) == 1,
+                "真实漏守碰撞向每位成员发一次原生1595/op1音效与红色飞船警报");
+        foreach (var peer in peers)
+        {
+            peer.Send(1361, Build(writer => { writer.Write((byte)2); writer.Write(key); }));
+            That(Read(peer, "warning snapshot replay").All(row => row is not
+                { Kind: 0, Opcode: 1595, Body: [1, 0, 0, 0] }), "同一碰撞的名册和快照重发不重播警报");
+        }
         That(Cross(fixture, captain, towns, 5).All(row => row is not { Kind: 0, Opcode: 9 }),
             "首名成员在右侧单独等待，不提前创建普通队伍");
         ushort party = BoardingParty(Cross(fixture, member, towns, 5), 0, (0, captain.Id), (1, member.Id));
