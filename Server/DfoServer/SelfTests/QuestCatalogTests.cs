@@ -78,7 +78,7 @@ internal static class QuestCatalogTests
     public static void Run(PvfArchive pvf)
     {
         int checks = 0;
-        void Check(bool ok, string name) { checks++; if (!ok) throw new Exception("FAIL: " + name); }
+        void Check(bool ok, string name) { checks++; TestCheck.That(ok, name); }
         var catalog = global::DfoServer.Testing.SelfTestCatalogs.Quests(pvf);
         var indexedQuests = PvfScript.List(pvf.ReadText("n_quest/quest.lst"));
         Check(catalog.TryGet(5927,out _) == indexedQuests.ContainsKey(5927),
@@ -117,7 +117,7 @@ internal static class QuestCatalogTests
         Check(first.Rewards.Count > 2 && first.Rewards[0] == new QuestRewardToken(0, 10165055, null) && first.Rewards[1] == new QuestRewardToken(0, 1, null),
             "3145 public reward is one bracelet");
         Check(first.Rewards.Contains(new QuestRewardToken(6, first.Rewards.First(t => t.Text == "[job]").Value, "[job]"))
-            && first.Rewards.Any(t => t.Type == 0 && t.Value == 101010438), "3145 keeps the job-branched weapon token");
+            && first.Rewards.Any(t => t.Type == 0 && t.Value == 10005531), "3145保留当前PVF职业分支奖励，旧武器编号不作为现资源合同");
         Check(catalog.Get(3146).Rewards.Where(t => t.Type == 0).Select(t => t.Value).SequenceEqual([10164759, 1, 20002, 1, 24002, 1, 22002, 1]),
             "3146 reward pairs stay in source order");
         Check(catalog.Get(3148).Rewards.SequenceEqual([new QuestRewardToken(0, 0, null), new QuestRewardToken(0, 0, null)])

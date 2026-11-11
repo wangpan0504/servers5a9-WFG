@@ -107,6 +107,7 @@ internal sealed partial class CharacterRepository
         "account_pcroom_timepoint_days",
         "account_pcroom_timepoint_segments",
         "account_pcroom_timepoint_claims",
+        "account_returning_reward_claims",
         "account_weekly_attendance",
         "account_pvp_private_characters",
         "account_pvp_total_teams",

@@ -385,7 +385,23 @@ internal static class SqliteMigrations
         new(204, "通用Buff动态状态", static (db, tx) => Execute(db, tx, VariousBuffSchema.Definition.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal))),
         new(205, "商城自动更名资格来源", static (db, tx) => ReplaceTableConstraint(db, tx, "character_rename_pending",
             "CHECK(source_uid>0)", "CHECK(source_uid>=0)")),
+        new(206, "回归账本与已发布本地205兼容", UpgradeReturningAdventurer206),
     ];
+
+    static void UpgradeReturningAdventurer206(SqliteConnection db, SqliteTransaction tx)
+    {
+        // 本地85/86曾以205追加回归两表；仅完整已知结构允许补齐上游205的更名约束。
+        if (!KnownTable(db, tx, "character_rename_pending", CharacterRenameCardSchema.Definition.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)))
+        {
+            bool returning = ReturningAdventurerSchema.Definition
+                .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .All(sql => KnownTable(db, tx, sql["CREATE TABLE ".Length..sql.IndexOf('(')], sql));
+            if (!returning || !KnownTable(db, tx, "character_rename_pending", CharacterRenameCardSchema.OriginalDefinition.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)))
+                throw new InvalidDataException("回归账本升级拒绝未知205结构");
+            ReplaceTableConstraint(db, tx, "character_rename_pending", "CHECK(source_uid>0)", "CHECK(source_uid>=0)");
+        }
+        Execute(db, tx, ReturningAdventurerSchema.Definition.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal));
+    }
 
     const string AccountCommon45ListConstraint = "CHECK(list_type IN (0,1,2,3,7,12,38,45,46))";
     const string AccountCommon45OwnershipConstraint = "CHECK((list_type=12 AND character_id IS NULL AND slot_index<240) OR (list_type=45 AND character_id IS NULL AND slot_index<50) OR (list_type NOT IN(12,45) AND character_id IS NOT NULL AND (list_type<>2 OR slot_index<264)))";
@@ -2898,6 +2914,8 @@ internal static class SqliteMigrations
         "SELECT character_id,account,until_unix,permille FROM character_exp_bonus LIMIT 0",
         "SELECT character_id,account,kind,item_id,until_ms,maintenance,cool_group FROM character_consumable_states LIMIT 0",
         "SELECT character_id,account,buffs FROM character_various_buffs LIMIT 0",
+        "SELECT account,period_until,mission_id,progress FROM account_returning_mission_progress LIMIT 0",
+        "SELECT account,period_until,action,argument,day,recipient_id,item_id,item_count,claimed_at FROM account_returning_reward_claims LIMIT 0",
         "SELECT character_id,account,state_json FROM character_boss_selection_buff LIMIT 0",
         "SELECT character_id,account,job_type,expertness,learned_recipes FROM character_expert_job LIMIT 0",
         "SELECT character_id,account,giveup_state,machine_grade,machine_endurance FROM character_expert_meta LIMIT 0",

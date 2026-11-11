@@ -77,6 +77,7 @@ internal static partial class DungeonSettlementTests
 
     public static void RunResources(PvfArchive pvf)
     {
+        RunZeroExperienceResources(pvf);
         int before = TestCheck.Count;
         string root = Path.Combine(Path.GetTempPath(), "S5A9-settlement-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);

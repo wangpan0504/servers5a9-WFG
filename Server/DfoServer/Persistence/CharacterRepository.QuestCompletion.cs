@@ -303,6 +303,11 @@ internal sealed partial class CharacterRepository
             resourceMailId = mailId;
         }
         ApplyBattlePassQuestCompletion(db, tx, owner.Account, plan);
+        if (quests is not null)
+            foreach (int id in plan.NewCompletedQuestIds)
+                if (quests.TryGet(id, out var returningQuest) &&
+                    DfoServer.Game.Quests.QuestEventProgress.EffectiveGrade(returningQuest, quests) is { } returningGrade)
+                    RecordReturningEvent(db, tx, owner.Account, plan.TargetLevel, "quest clear - grade", returningGrade);
         if (plan.TotalRequestedExperience > 0)
             ApplyBattlePassExperienceGain(db, tx, owner.Account, "quest_completion",
                 FormattableString.Invariant($"{expected.Id}:{plan.AcceptanceId:N}"), plan.TotalRequestedExperience,

@@ -1,17 +1,53 @@
+using DfoServer.Game.Events;
+using DfoServer.GameWorld.Events;
+
 namespace DfoServer.Network.Builders;
 
 internal static class AdventurerBenefitPackets
 {
+    public static byte[] LuckyProfessions(IReadOnlyList<LuckyProfession> professions)
+    {
+        if (professions.Count > 2048 || professions.Distinct().Count() != professions.Count ||
+            professions.Any(row => row.Job > 15 || row.GrowType > 127))
+            throw new InvalidDataException("幸运职业名单无效");
+        // 01E29370先读u32数量，再逐条读职业u32、转职觉醒编码u32；不附角色ID。
+        using var bytes = new MemoryStream(); using var writer = new BinaryWriter(bytes);
+        writer.Write((uint)professions.Count);
+        foreach (var row in professions) { writer.Write((uint)row.Job); writer.Write((uint)row.GrowType); }
+        return bytes.ToArray();
+    }
+
     // NOTI1761由00498680固定读取16B；00498290区分1=回归、2=新手，00498160读取+12的绝对期限。
     // +4是首次提示已展示标记（读者弹窗后自行置1），不是领取成功。GM主动设身份不重弹首次引导。
-    public static byte[] Returning(long until)
+    public static byte[] Returning(long until, ushort welcome = 0, ushort daily = 0)
     {
         if (until is < 0 or > uint.MaxValue) throw new InvalidDataException("回归福利期限超出原生协议范围");
         using var bytes = new MemoryStream(); using var writer = new BinaryWriter(bytes);
         writer.Write(until == 0 ? 0u : 1u);
         writer.Write(until == 0 ? (ushort)0 : (ushort)1);
-        // 尚未领取任何奖励；保留原生初始状态，不伪造欢迎、每日或升级奖励的已领取事实。
-        writer.Write((ushort)0); writer.Write(0u); writer.Write((uint)until);
+        if (welcome > 2 || daily > 2 || until == 0 && (welcome != 0 || daily != 0))
+            throw new InvalidDataException("回归奖励状态无效");
+        writer.Write(welcome); writer.Write(daily); writer.Write((ushort)0); writer.Write((uint)until);
         return bytes.ToArray();
+    }
+
+    public static byte[] ReturningMissions(ReturningAdventurerState state)
+    {
+        if (state.Missions.Length > 100 || state.Missions.Select(row => row.Id).Distinct().Count() != state.Missions.Length ||
+            state.Missions.Any(row => row.Id is < 1 or > 100 || row.State > 2)) throw new InvalidDataException("回归任务状态无效");
+        // 00498700固定读取100条12B槽；不能发送变长列表或追加计数字节。
+        byte[] bytes = new byte[1200];
+        using var stream = new MemoryStream(bytes); using var writer = new BinaryWriter(stream);
+        foreach (var row in state.Missions)
+        {
+            writer.Write((uint)row.Id); writer.Write(row.Progress); writer.Write(row.State);
+        }
+        return bytes;
+    }
+
+    public static byte[] ReturningAck()
+    {
+        // 004983B0仅取12B后丢弃，不消费字段；实际成败由1761/1762及已提交背包差量表达。
+        return new byte[12];
     }
 }

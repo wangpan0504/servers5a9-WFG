@@ -14,7 +14,7 @@ internal static class PartyProjection
         void Actor(PublicCharacterSnapshot identity) => Post(NotiPacketType.USERINFO,
             TownPackets.Actor(identity.Character, identity.PvpGrade, identity.Channel, DateTimeOffset.UtcNow.ToUnixTimeSeconds(), identity.AdventureName,
                 identity.Phase is SessionPhase.Dungeon or SessionPhase.Settlement ? ActorSceneState.Dungeon : ActorSceneState.Town,
-                identity.PremiumPcRoom), "party_actor");
+                identity.PremiumPcRoom, returningAdventurerType: identity.ReturningAdventurerType), "party_actor");
         if (notice.Kind == PartyNoticeKind.SettlementCard && notice.Dungeon is { } dungeon)
         {
             if (context.Stop.IsCancellationRequested || context.PartyCardTemplate is not { } template ||
@@ -59,7 +59,7 @@ internal static class PartyProjection
                     var body = TownPackets.Actor(current, changed.Identity.PvpGrade, changed.Identity.Channel,
                             adventureName: changed.Identity.AdventureName,
                             sceneState: changed.Identity.Phase is SessionPhase.Dungeon or SessionPhase.Settlement
-                                ? ActorSceneState.Dungeon : ActorSceneState.Town, premiumPcRoom: changed.Identity.PremiumPcRoom);
+                                ? ActorSceneState.Dungeon : ActorSceneState.Town, premiumPcRoom: changed.Identity.PremiumPcRoom, returningAdventurerType: changed.Actor.Session.ReturningAdventurerType);
                     actorPrepared = true;
                     return body;
                 }

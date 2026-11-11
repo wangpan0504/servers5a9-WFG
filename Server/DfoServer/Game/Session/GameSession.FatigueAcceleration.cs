@@ -26,9 +26,18 @@ internal sealed partial class GameSession
         return fatigueAccelerationChoice.Value.Selected;
     }
 
+    int AvailableFatigueAccelerationPercent()
+    {
+        int percent = PremiumPcRoom ? fatigueAccelerationPercent : 0;
+        if (Selected is { } character && debugSettings?.AdventurerBenefits is { Catalog.Lucky: { } lucky } service &&
+            service.IsLucky(character.Job, character.GrowType, (timeProvider ?? TimeProvider.System).GetUtcNow().ToUnixTimeSeconds()))
+            percent = Math.Max(percent, lucky.FatigueAccelerationPercent);
+        return percent;
+    }
+
     public FatigueAccelerationReceipt? FatigueAccelerationState() => owner.Execute(() =>
         Selected is { } character ? new FatigueAccelerationReceipt(character.Id, owner.Generation, SelectionEpoch, Phase,
-            ReadFatigueAccelerationChoice(), PremiumPcRoom && fatigueAccelerationPercent > 0 && ReadFatigueAccelerationChoice()) : null);
+            ReadFatigueAccelerationChoice(), AvailableFatigueAccelerationPercent() > 0 && ReadFatigueAccelerationChoice()) : null);
 
     public FatigueAccelerationReceipt? ChangeFatigueAcceleration(bool enabled, bool blocked = false) => owner.Execute(() =>
     {
@@ -36,7 +45,7 @@ internal sealed partial class GameSession
         var current = FatigueAccelerationState()!;
         if (blocked || !Ready || Phase != SessionPhase.Town || pendingRental is not null || HasPendingTownQuestCommit || HasPendingFormalCard)
             return current with { Error = 19 };
-        if (enabled && (!PremiumPcRoom || fatigueAccelerationPercent <= 0 || repository is not IFatigueAccelerationStore))
+        if (enabled && (AvailableFatigueAccelerationPercent() <= 0 || repository is not IFatigueAccelerationStore))
             return current with { Error = 179 };
         if (current.Selected != enabled)
         {
@@ -44,15 +53,15 @@ internal sealed partial class GameSession
             store.SaveFatigueAcceleration(owner, character.Id, enabled);
             fatigueAccelerationChoice = (character.Id, SelectionEpoch, enabled);
         }
-        return current with { Selected = enabled, Active = enabled && PremiumPcRoom && fatigueAccelerationPercent > 0 };
+        return current with { Selected = enabled, Active = enabled && AvailableFatigueAccelerationPercent() > 0 };
     });
 
     public bool CanPublishFatigueAcceleration(FatigueAccelerationReceipt receipt, bool requireCurrentState = false) => owner.Execute(() =>
         owner.Generation == receipt.Generation && SelectionEpoch == receipt.Epoch && Selected?.Id == receipt.CharacterId &&
         Phase == receipt.Phase && (!requireCurrentState || receipt.Selected == ReadFatigueAccelerationChoice() &&
-            receipt.Active == (PremiumPcRoom && fatigueAccelerationPercent > 0 && ReadFatigueAccelerationChoice())));
+            receipt.Active == (AvailableFatigueAccelerationPercent() > 0 && ReadFatigueAccelerationChoice())));
 
     int CaptureFatigueAcceleration(DungeonEntryPlan entry) =>
-        PremiumPcRoom && fatigueAccelerationPercent > 0 && FatigueAccelerationRules.Eligible(entry) &&
-        guildDungeons?.Find(entry.DungeonId) is null && ReadFatigueAccelerationChoice() ? fatigueAccelerationPercent : 0;
+        FatigueAccelerationRules.Eligible(entry) && guildDungeons?.Find(entry.DungeonId) is null &&
+        ReadFatigueAccelerationChoice() ? AvailableFatigueAccelerationPercent() : 0;
 }

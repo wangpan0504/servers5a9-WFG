@@ -130,7 +130,8 @@ internal static class RaidSongQuotaTests
         Console.WriteLine($"PASS {Count - before} 不渝之咏周获得不随持有回升");
     }
 
-    // 已经存在的显式路径优先。未指定，或传入的路径不存在（含自测默认的程序旁路径），再回退本机，然后是程序旁 Data/Pvf/Script.pvf。都不存在则返回 null，调用方打印 SKIP，不记为通过。
+    // 已经存在的显式路径优先，再回退工作目录和程序旁 Data/Pvf/Script.pvf。
+    // 都不存在则返回 null，调用方打印 SKIP，不记为通过；不读取开发者固定盘符上的资源。
     internal static string? SelectCoreSongPvf(string? configuredPath, Func<string, bool> exists, string localFallback, string besideProgram)
     {
         if (!string.IsNullOrWhiteSpace(configuredPath) && exists(configuredPath)) return configuredPath;
@@ -141,40 +142,39 @@ internal static class RaidSongQuotaTests
     static void ExpectPvfPathSelection()
     {
         int before = Count;
-        const string local = @"E:\95\client\D95\Script.pvf";
-        const string beside = @"D:\server\Data\Pvf\Script.pvf";
-        const string configured = @"D:\explicit\Script.pvf";
+        string root = Path.Combine(Path.GetTempPath(), "song-pvf-path-selection");
+        string local = Path.Combine(root, "working", "Data", "Pvf", "Script.pvf");
+        string beside = Path.Combine(root, "server", "Data", "Pvf", "Script.pvf");
+        string configured = Path.Combine(root, "explicit", "Script.pvf");
         var present = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         bool Exists(string path) => present.Contains(path);
         present.Add(local);
         present.Add(configured);
-        That(SelectCoreSongPvf(configured, Exists, local, beside) == configured, "显式路径和本机回退都存在时选显式路径");
+        That(SelectCoreSongPvf(configured, Exists, local, beside) == configured, "显式路径和工作目录回退都存在时选显式路径");
         present.Clear();
         present.Add(local);
         That(SelectCoreSongPvf(null, Exists, local, beside) == local &&
-            SelectCoreSongPvf("  ", Exists, local, beside) == local, "未指定路径时使用本机回退");
+            SelectCoreSongPvf("  ", Exists, local, beside) == local, "未指定路径时使用工作目录回退");
         present.Clear();
         present.Add(beside);
-        That(SelectCoreSongPvf(null, Exists, local, beside) == beside, "未指定且本机回退不存在时使用程序旁 Script.pvf");
+        That(SelectCoreSongPvf(null, Exists, local, beside) == beside, "未指定且工作目录回退不存在时使用程序旁 Script.pvf");
         present.Clear();
         That(SelectCoreSongPvf(null, Exists, local, beside) is null &&
-            SelectCoreSongPvf(configured, Exists, local, beside) is null, "显式路径、本机回退和程序旁都不存在时不选择文件");
+            SelectCoreSongPvf(configured, Exists, local, beside) is null, "显式路径、工作目录回退和程序旁都不存在时不选择文件");
         present.Add(local);
-        That(SelectCoreSongPvf(configured, Exists, local, beside) == local, "显式路径缺失时回退到本机文件");
+        That(SelectCoreSongPvf(configured, Exists, local, beside) == local, "显式路径缺失时回退到工作目录文件");
         Console.WriteLine($"PASS {Count - before} 不渝之咏PVF路径选择");
     }
 
-    internal const string LocalSongPvf = @"E:\95\client\D95\Script.pvf";
-
-    // 已存在的 --pvf-path 优先。未指定或不存在时回退本机路径，再回退程序旁 Data/Pvf/Script.pvf。
+    // 已存在的 --pvf-path 优先。未指定或不存在时回退工作目录，再回退程序旁 Data/Pvf/Script.pvf。
     // 命令：dotnet build/check/bin/DfoServer/debug/DfoServer.dll --selftest-core
     internal static void RunCoreResources(string? configuredPath)
     {
-        string? path = SelectCoreSongPvf(configuredPath, File.Exists, LocalSongPvf,
+        string? path = SelectCoreSongPvf(configuredPath, File.Exists, Path.GetFullPath(Path.Combine("Data", "Pvf", "Script.pvf")),
             Path.Combine(AppContext.BaseDirectory, "Data", "Pvf", "Script.pvf"));
         if (path is null)
         {
-            Console.WriteLine("SKIP 不渝之咏PVF上限：未指定可用 --pvf-path，且本机与程序旁 Script.pvf 都不存在，未执行不记为通过");
+            Console.WriteLine("SKIP 不渝之咏PVF上限：未指定可用 --pvf-path，且工作目录与程序旁 Script.pvf 都不存在，未执行不记为通过");
             return;
         }
         using var archive = PvfArchive.Open(path);

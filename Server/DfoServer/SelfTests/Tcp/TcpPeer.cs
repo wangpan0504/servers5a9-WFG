@@ -1116,7 +1116,8 @@ internal sealed partial class TcpPeer : IDisposable
         (SkinOwnership[] Owned, int[] Selected)? emoticons = null, SkinStorageState? accountSkins = null, byte[]? ekernCycle = null,
         byte? recoveredPvpGrade = null, byte recoveredPowerTitle = 0, SkinStorageKey[]? recentSkins = null, int[]? knightShieldDeck = null,
         (int BuffId, int Remaining)? bossBuff = null, byte[]? strongwayHistory = null, byte[]? strongwayAccountRewards = null,
-        int? hellLegendUntil = null, (int BuffId, int Value)[]? variousBuffs = null)
+        int? hellLegendUntil = null, (int BuffId, int Value)[]? variousBuffs = null, byte[]? luckyProfessions = null,
+        bool luckyFatigueAcceleration = false)
     {
         // 三类决斗入口直接绑定非房间地区10/0；仍逐包断言1379不应出现，不跳过未知包。
         if (PvpEntry) room = false;
@@ -1175,6 +1176,9 @@ internal sealed partial class TcpPeer : IDisposable
             characterOptions = Build(writer => { writer.Write(512u); writer.Write(options); });
         }
         Expect(0, 390, characterOptions);
+        // 空名单也须先于Actor清除客户端上次连接残留；非空预期由专项显式独立编码。
+        Expect(0, 1057, luckyProfessions ?? new byte[4]);
+        if (luckyFatigueAcceleration) Expect(0, 490, [0, 0, 1]);
         var middle = new List<WirePacket>();
         RestoredConsumableStates.Clear();
         SkillInfo = [];

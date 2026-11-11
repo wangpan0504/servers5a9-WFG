@@ -53,7 +53,7 @@ internal static class PcRoomTimePointTcpTests
         clock.Advance(TimeSpan.FromMinutes(30));
         Request();
         State(1800, 0, 0, 0, "真实单调时钟推进30分钟才达到当前PVF首档");
-        That(resources.ItemResources.Items.Get(490014060).Expiration is { AbsoluteTime: 0, Days: 0, DailyDelete: 0, WeeklyDeleteDay: null },
+        That(resources.ItemResources.Items.Get(72683705).Expiration is { AbsoluteTime: 0, Days: 0, DailyDelete: 0, WeeklyDeleteDay: null },
             "当前客户端首档礼盒已无期限声明，不能沿用旧PVF的过期夹具");
         Request(1, 0xff);
         State(1800, 0, 1, 0, "达到真实阈值后发首档奖励并同步领取位");
@@ -65,9 +65,9 @@ internal static class PcRoomTimePointTcpTests
             JOIN character_inventory_items i ON i.item_uid=a.item_uid
             WHERE m.delivery_key LIKE 'online228:%'
             """);
-        That(firstAttachment is [[long recipient,long uid,490014060L,1L,long expiry,1L,DBNull]] &&
+        That(firstAttachment is [[long recipient,long uid,72683705L,1L,long expiry,1L,DBNull]] &&
             recipient == firstId && uid > 0 && expiry == 0,
-            "当前PVF首档宠物饲料礼盒以真实UID、实际数量和资源声明的无期限进入永久系统邮件");
+            "当前PVF在线首档礼盒以真实UID、实际数量和资源声明的无期限进入永久系统邮件");
         string mailBefore = MailSnapshot();
         int alarmBefore = alarms;
         Request(1, 0xff);
@@ -137,8 +137,8 @@ internal static class PcRoomTimePointTcpTests
             SELECT json_extract(i.item_core,'$.ItemId'),json_extract(i.item_core,'$.Value'),i.item_uid
             FROM account_pcroom_timepoint_claims c JOIN mailbox_attachments a ON a.mail_id=c.mail_id
             JOIN character_inventory_items i ON i.item_uid=a.item_uid WHERE c.account=$p0 AND c.kind=1 AND c.reward_index=0
-            """, account) is [[490014067L,3L,long periodUid]] && periodUid > 0,
-            "累计首档按当前资源发苍穹碎片礼盒三件且有独立真实UID");
+            """, account) is [[490014171L,1L,long periodUid]] && periodUid > 0,
+            "累计首档按当前资源发490014171一件且有独立真实UID");
         mailBefore = MailSnapshot();
         Request(0x10, 0);
         That(MailSnapshot() == mailBefore, "累计首档重复请求不产生额外邮件或UID");
@@ -192,8 +192,8 @@ internal static class PcRoomTimePointTcpTests
             WHERE account=$p0 AND (kind=1 OR day=20261029) ORDER BY kind,reward_index
             """, account);
         That(JsonSerializer.Serialize(awards) == JsonSerializer.Serialize(new long[][]
-            { [0,0,490014060,1], [0,1,490014061,1], [0,2,490014063,2], [0,3,490014064,1],
-              [1,0,490014067,3], [1,1,490014068,1], [1,2,490014069,1], [1,3,490014173,1] }),
+            { [0,0,72683705,1], [0,1,72683712,10], [0,2,3341,10], [0,3,490014064,5],
+              [1,0,490014171,1], [1,1,490002022,1], [1,2,490705453,3], [1,3,490008660,1] }),
             "实际八档领取事实逐项匹配S5A9当前PVF的物品与数量");
         mailBefore = MailSnapshot();
         alarmBefore = alarms;
@@ -205,7 +205,7 @@ internal static class PcRoomTimePointTcpTests
         client.Send(96); client.Expect(1, 96, [1, 0, 0]);
         var grants = MailboxTcpTests.ReadList(client.Expect(0, 97).Body).Summaries.Where(row => row.ItemId != 0).ToArray();
         That(grants.Length == 8 && grants.Select(row => row.ItemId).Order().SequenceEqual(
-            new[] { 490014060, 490014061, 490014063, 490014064, 490014067, 490014068, 490014069, 490014173 }),
+            new[] { 3341, 72683705, 72683712, 490002022, 490008660, 490014064, 490014171, 490705453 }),
             "当前领奖角色邮箱包含完整八档真实附件");
         var attachmentUids = fixture.Query("""
             SELECT i.item_uid FROM account_pcroom_timepoint_claims c
@@ -223,7 +223,7 @@ internal static class PcRoomTimePointTcpTests
         var owned = fixture.Query("""
             SELECT i.item_uid FROM character_inventory_items i JOIN character_inventory_slots s ON s.item_uid=i.item_uid
             WHERE s.character_id=$p0 AND s.list_type=0
-              AND json_extract(item_core,'$.ItemId') IN(490014060,490014061,490014063,490014064,490014067,490014068,490014069,490014173)
+              AND json_extract(item_core,'$.ItemId') IN(72683705,72683712,3341,490014064,490014171,490002022,490705453,490008660)
             ORDER BY i.item_uid
             """, secondId).Select(row => (long)row[0]!).ToArray();
         That(owned.SequenceEqual(attachmentUids), "八个原物理UID随邮箱取件进入角色背包，不重建或遗漏奖励");
