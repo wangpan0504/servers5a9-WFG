@@ -373,6 +373,6 @@ GM通过`GET /api/events/catalog`读取服务端`ServerEventDefinition.Registere
 
 ## 职业幸运与回归账号
 
-`lucky-profession <角色名>` 将所选角色的基础职业设置为全服活动职业，覆盖该职业全部转职，按原生组队表选择Buff；不是只给此角色加个人幸运标志。`returning-adventurer <角色名>` 将该角色所属账号设为回归冒险家，期限读取原生资源（当前28天）。两命令均支持既有 `account <账号>` 前缀，校验角色归属与owner，并在设置持久成功后返回实际 `account/characterId/name/job/scope/returningUntil/text` 凭据；失败不回通用成功。重新进图及后续原生投影读取新设置。
+`lucky-profession <角色名>` 将所选角色的基础职业设置为全服幸运职业，覆盖当前CHR实际存在的全部转职及觉醒，发送原生四叶草名单，由客户端应用技能Buff；独立的女格斗组队活动保持原资源条件。`returning-adventurer <角色名>` 将该角色所属账号设为回归冒险家，期限读取原生资源（当前28天）。两命令均支持既有 `account <账号>` 前缀，校验角色归属与owner，并在设置持久成功后返回实际 `account/characterId/name/job/scope/returningUntil/text` 凭据；失败不回通用成功。后续原生命令刷新资格，重新选角在本人Actor前完整初始化幸运名单。
 
-职业设置scope为profession，回归为account；前者期限为0，后者为绝对Unix秒。依赖当前PVF显式装配的AdventurerBenefitService，缺资源或旧服务端必须明确失败。范围和未接入的回归奖励见[模块说明](../模块/职业幸运与回归福利.md)。
+职业设置scope为profession，回归为account；前者期限为0，后者为绝对Unix秒。依赖当前PVF显式装配的AdventurerBenefitService，缺资源或旧服务端必须明确失败。范围及回归任务、奖励合同见[模块说明](../模块/职业幸运与回归福利.md)。

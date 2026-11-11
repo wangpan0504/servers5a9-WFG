@@ -243,7 +243,7 @@ internal static class ServerRuntime
             {
                 Source = "experience_bonus", Reason = "equipped_item_template_missing", CharacterId = request.Character.Id,
                 request.Event, request.DungeonId, ItemId = item.Core.ItemId, item.Uid, Slot = item.Position.Index
-            }), clock: clock);
+            }), clock: clock, adventurerBenefits: adventurerBenefits);
         tutorials ??= new TutorialCatalog(pvf);
         var questProjection = new QuestProjection(quests,questParameters,itemResources.Items,itemResources.GoldLimits,itemResources.EpicPieces,growth);
         var stats = new Game.Characters.CharacterStatComputer(characters);

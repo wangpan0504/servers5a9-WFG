@@ -5,6 +5,12 @@ using DfoServer.Game.Settings;
 using DfoServer.GameWorld.Events;
 using PvfLib;
 using DfoServer.Network.Builders;
+using DfoServer.Game.Accounts;
+using DfoServer.Game.Characters;
+using DfoServer.Game.Session;
+using DfoServer.GameWorld.Characters;
+using DfoServer.GameWorld.Items;
+using DfoServer.Persistence;
 using static DfoServer.Testing.TestCheck;
 
 namespace DfoServer;
@@ -27,6 +33,11 @@ internal static class AdventurerBenefitTests
         Bytes(AdventurerBenefitPackets.Returning(0), new byte[16], "原生正常身份清空16B状态");
         Bytes(AdventurerBenefitPackets.Returning(0x12345678), Convert.FromHexString("01000000010000000000000078563412"),
             "原生回归身份1和绝对期限独立金样，提示已展示不等于领取奖励");
+        Bytes(AdventurerBenefitPackets.LuckyProfessions([new(7, 0x24), new(15, 0x12)]),
+            Convert.FromHexString("0200000007000000240000000F00000012000000"), "幸运名单使用独立原生u32数量和8B职业编码金样");
+        Bytes(AdventurerBenefitPackets.LuckyProfessions([]), new byte[4], "幸运名单清除使用零数量，不伪造个人身份");
+        Reject<InvalidDataException>(() => AdventurerBenefitPackets.LuckyProfessions([new(16, 0)]), "拒绝未知幸运职业");
+        Reject<InvalidDataException>(() => AdventurerBenefitPackets.LuckyProfessions([new(7, 0), new(7, 0)]), "拒绝重复幸运职业编码");
         foreach (string action in new[] { "lucky-profession", "returning-adventurer" })
         {
             var request = DevelopmentRequest.Parse("account other-1 " + action + " Hero", "default");
@@ -58,6 +69,9 @@ internal static class AdventurerBenefitTests
         That(catalog.KillExperiencePercent(1087) == 20 && catalog.KillExperiencePercent(1088) == 50 &&
             catalog.KillExperiencePercent(1089) == 100 && catalog.KillExperiencePercent(1273) == 0, "击杀经验比例从真实Buff读取而非硬编码");
         var service = new AdventurerBenefitService(catalog, AdventurerBenefitConfiguration.Default, _ => { });
+        That(catalog.Lucky is { KillExperiencePercent: 10, ClearExperiencePercent: 15, QuestExperiencePercent: 10,
+                PartyExperiencePercent: 10, FatigueAccelerationPercent: 100 } && service.LuckyProfessions(1000).IsEmpty,
+            "四叶草独立资源包含原生比例，未启用的零日期日程不凭空授予幸运资格");
         var hero = new AdventurerBenefitMember("hero", 0, 0);
         var fighter = new AdventurerBenefitMember("fighter", 1, 0x24);
         That(service.Select(hero, [hero], 1000).Buffs.IsEmpty && service.Select(fighter, [fighter], 1000).Buffs.IsEmpty,
@@ -80,12 +94,81 @@ internal static class AdventurerBenefitTests
             "期限边界立即失效且不续期");
         service.SetProfession(7);
         var male = fighter with { Job = 7 };
-        That(service.Select(hero, [hero, fighter], 1000).Buffs.SequenceEqual([1273u]) &&
-            service.Select(hero, [hero, male], 1000).Buffs.SequenceEqual([1087u, 1273u]), "GM按基础职业替换目标，不按单个角色授予");
+        That(service.Select(hero, [hero, fighter], 1000).Buffs.SequenceEqual([1087u, 1273u]) &&
+            service.Select(hero, [hero, male], 1000).Buffs.SequenceEqual([1273u]), "幸运职业GM不改写独立女格斗组队活动的目标和专属Buff");
+        That(service.LuckyProfessions(1000).All(row => row.Job == 7) && service.IsLucky(7, 0x24, 1000) &&
+            service.IsLucky(7, 0, 1000) && !service.IsLucky(1, 0x24, 1000) && !service.IsLucky(7, 0x2f, 1000),
+            "幸运GM按合法基础职业全部转职及觉醒生效，未设置职业及非法成长分支不获资格");
+        That(service.Select(hero, [hero, male], 1000).LuckyPartyClearExperiencePercent == 10 &&
+            service.Select(male, [hero, male], 1000).LuckyPartyClearExperiencePercent == 0 &&
+            service.Select(male, [male], 1000).LuckyPartyClearExperiencePercent == 0 &&
+            service.Select(hero, [hero, male, male with { Account = "lucky-other" }], 1000).LuckyPartyClearExperiencePercent == 10,
+            "幸运队友通关奖励排除本人和单人，多名幸运队友也只给资源10%而不叠倍");
+        service.SetProfession(15);
+        That(service.IsLucky(15, 0x24, 1000) && service.LuckyProfessions(1000).All(row => row.Job == 15) &&
+            !service.IsLucky(7, 0x24, 1000), "新职业使用实际CHR合法分支，覆盖原生日程缺少枪剑士的情况");
         var failed = new AdventurerBenefitService(catalog, AdventurerBenefitConfiguration.Default, _ => throw new IOException("fixture persist failure"));
         Reject<IOException>(() => failed.SetProfession(7), "职业配置落盘失败不发布");
         Reject<IOException>(() => failed.SetReturning("hero", 1000), "账号配置落盘失败不发布");
         That(failed.Configuration == AdventurerBenefitConfiguration.Default, "失败保留完整旧快照");
+        LuckyExperienceAndSession(pvf, catalog);
         Console.WriteLine($"PASS {Count - before} adventurer benefit resource assertions");
+    }
+
+    static void LuckyExperienceAndSession(PvfArchive pvf, AdventurerBenefitCatalog catalog)
+    {
+        var benefit = new AdventurerBenefitService(catalog, AdventurerBenefitConfiguration.Default, _ => { });
+        var items = new ItemCatalog(null!, new Dictionary<int, string>(), new Dictionary<int, string>(), 0);
+        var experience = new ExperienceBonusService(items, new RecoveryConsumableCatalog([]), new(0, 0), adventurerBenefits: benefit);
+        var hero = new Character(1, 0, "Lucky", 0, new(1, 0, 10, 10), null) { Job = 7, GrowType = 0x24 };
+        benefit.SetProfession(7);
+        foreach (var (kind, amount) in new[] { (ExperienceEvent.Kill, 10u), (ExperienceEvent.Clear, 15u), (ExperienceEvent.Quest, 10u) })
+        {
+            var result = experience.Plan(new(hero, kind, 3, 1000, false), 101, 20, null);
+            That(result.Amount(ExperienceBonusSource.LuckyCharacter) == amount && result.Total == 121 + amount &&
+                result.Display(result.Total).BuffExperience == amount && result.Display(result.Total).DeductedExperienceComponent == amount,
+                "幸运本人经验按事件独立取整且到账与显示守恒：" + kind);
+            That(experience.Plan(new(hero with { Job = 0 }, kind, 3, 1000, false), 101, 20, null).Total == 121,
+                "未命中职业不获得幸运经验：" + kind);
+        }
+        byte[] clear = DungeonSettlementPackets.EmptyCardReward(new(100, 20, 145, 1, "lucky-test", "fixture")
+            { BonusParts = [new(ExperienceBonusSource.LuckyCharacter, 15), new(ExperienceBonusSource.LuckyParty, 10)] }, 0);
+        That(System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(clear.AsSpan(123)) == 15 &&
+            System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(clear.AsSpan(131)) == 10,
+            "结果页幸运本人及队伍奖励使用独立原生字段，不挤占职业组队Buff");
+
+        string root = Path.Combine(Path.GetTempPath(), "s5a9-lucky-session-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var repository = new CharacterRepository(Path.Combine(root, "game.db"));
+            using var owner = new AccountOwners().Acquire("lucky-session", () => { });
+            var towns = DfoServer.GameWorld.Towns.TownCatalog.Load(pvf);
+            repository.Create(owner, new("LuckySession", towns.Room, towns.InitialReturn) { Job = 7, GrowType = 0x24 });
+            var settings = new GameDebugSettings { AdventurerBenefits = benefit };
+            var session = new GameSession(repository, towns, owner, debugSettings: settings);
+            session.Select(0); session.MarkReady();
+            var initial = session.PlanLuckyProfessions()!;
+            That(!initial.Professions.IsEmpty && initial.IsCurrent() && session.PlanLuckyProfessions() is null,
+                "同一选角配置只投影一次幸运名单");
+            That(!session.PremiumPcRoom && session.ChangeFatigueAcceleration(true) is { Error: 0, Active: true },
+                "幸运职业不伪造网吧身份即可选择原生免费燃烧");
+            benefit.SetProfession(15);
+            var changed = session.PlanLuckyProfessions()!;
+            That(!initial.IsCurrent() && changed.IsCurrent() && changed.Professions.All(row => row.Job == 15) &&
+                session.FatigueAccelerationState() is { Selected: true, Active: false },
+                "职业切换废弃慢队列旧名单并停止原职业燃烧资格，保留玩家选择");
+            session.ReturnToRoster(); session.Select(0); session.MarkReady();
+            That(!changed.IsCurrent() && session.PlanLuckyProfessions() is not null,
+                "重新选角重发当前名单，旧epoch不能发回旧资格");
+            That(session.ChangeFatigueAcceleration(true) is { Error: 179 } &&
+                session.ChangeFatigueAcceleration(false) is { Error: 0, Active: false },
+                "普通职业不能开启幸运燃烧，仍可关闭已保存的选择");
+            var ordinary = new GameSession(repository, towns, owner,
+                debugSettings: new GameDebugSettings { AdventurerBenefits = new(catalog, AdventurerBenefitConfiguration.Default, _ => { }) });
+            ordinary.Select(0);
+            That(ordinary.PlanLuckyProfessions() is { Professions.IsEmpty: true },
+                "首次普通选角也必须发送空名单，清掉前一次连接的客户端全局资格");
+        }
+        finally { if (Directory.Exists(root)) TestFiles.DeleteDirectory(root, true); }
     }
 }

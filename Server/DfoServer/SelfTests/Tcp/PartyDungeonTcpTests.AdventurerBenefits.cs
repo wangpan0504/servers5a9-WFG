@@ -15,6 +15,30 @@ internal static partial class PartyDungeonTcpTests
         var hero = group.Peers[0]; var fighter = group.Peers[1];
         string name = Convert.ToString(fixture.Query("SELECT name FROM characters WHERE id=$p0", hero.Id)[0][0])!;
         string account = Convert.ToString(fixture.Query("SELECT account FROM characters WHERE id=$p0", hero.Id)[0][0])!;
+        void SetLucky(string targetAccount, string targetName, uint job)
+        {
+            That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort, "account " + targetAccount + " lucky-profession " + targetName,
+                out string result) && result.StartsWith("OK "), "真实GM幸运设置成功且先持久化");
+            var first = group.All(); var tail = group.All();
+            for (int member = 0; member < first.Length; member++)
+            {
+                var packet = first[member].Concat(tail[member]).Single(row => row is { Kind: 0, Opcode: 1057 });
+                int count = checked((int)U32(packet.Body));
+                That(count > 1 && packet.Body.Length == 4 + count * 8 && Enumerable.Range(0, count).All(at =>
+                    U32(packet.Body, 4 + at * 8) == job && U32(packet.Body, 8 + at * 8) <= 127),
+                    "所有在线会话收到完整原生职业名单，不发个人幸运标志或女格斗Buff替代");
+            }
+        }
+        SetLucky(account, name, 0);
+        hero.Send(562, [1]); hero.Expect(1, 562, [1]); hero.Expect(0, 490, [0, 0, 1]); group.All(hero);
+        That(fixture.Query("SELECT enabled FROM character_fatigue_acceleration WHERE character_id=$p0", hero.Id) is [[1L]],
+            "非网吧幸运角色沿真实562保存免费燃烧，不只是显示四叶草");
+        string fighterName = Convert.ToString(fixture.Query("SELECT name FROM characters WHERE id=$p0", fighter.Id)[0][0])!;
+        string fighterAccount = Convert.ToString(fixture.Query("SELECT account FROM characters WHERE id=$p0", fighter.Id)[0][0])!;
+        SetLucky(fighterAccount, fighterName, 1);
+        hero.Send(562, [0]); hero.Expect(1, 562, [1]); hero.Expect(0, 490, [0, 0, 0]); group.All(hero);
+        // 切回本人职业，后续击杀同时核对四叶草与独立女格斗队友活动，不能相互覆盖。
+        SetLucky(account, name, 0);
         That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort, "account " + account + " returning-adventurer " + name, out string response) && response.StartsWith("OK "),
             "真实GM命令持久化所选账号回归资格");
         That(File.Exists(Path.Combine(fixture.Options.DataDirectory, "adventurer-benefits.json")), "回归GM成功前已落盘");
@@ -68,6 +92,9 @@ internal static partial class PartyDungeonTcpTests
         long fighterExperience = Convert.ToInt64(fixture.Query("SELECT experience FROM characters WHERE id=$p0", fighter.Id)[0][0]);
         That(displayed > 0 && displayed == U32(exp.Body, buffOffset + 4) && heroExperience - fighterExperience == displayed,
             "同级同怪的真实经验差额等于Buff显示与基础扣除分项，无重复展示或只发图标");
+        long killBasis = fighterExperience - (long)SelfTestCatalogs.Growth(resources.Archive, resources.Learning).GetLevelStartExperience(50);
+        That(killBasis > 0 && displayed == killBasis * 20 / 100 + killBasis * 10 / 100,
+            "四叶草击杀10%与女格斗队友20%分别取整后真实到账，不只安装图标或误替换活动");
         // 不把图标当成经验到账：核对持久化角色经验与显示分项使用同一奖励链。
         That(Convert.ToInt64(fixture.Query("SELECT experience FROM characters WHERE id=$p0", hero.Id)[0][0]) >
             (long)SelfTestCatalogs.Growth(resources.Archive, resources.Learning).GetLevelStartExperience(50), "职业活动击杀经验真实落库");

@@ -8,9 +8,9 @@ internal sealed record AdventurerBenefitConfiguration(int? ProfessionJob, Immuta
     public static AdventurerBenefitConfiguration Default { get; } = new(null, ImmutableDictionary<string, long>.Empty);
 }
 internal sealed record AdventurerBenefitMember(string Account, byte Job, ushort GrowType);
-internal sealed record AdventurerBenefitSelection(ImmutableArray<uint> Buffs, int KillExperiencePercent);
+internal sealed record AdventurerBenefitSelection(ImmutableArray<uint> Buffs, int KillExperiencePercent, int LuckyPartyClearExperiencePercent = 0);
 
-// 运营设置只替换原生职业目标与账号福利期限；Buff及人数档位仍来自同一份活动资源。
+// 幸运职业覆盖与账号福利期限独立保存；职业组队Buff仍使用自己的资源目标及人数档位。
 internal sealed class AdventurerBenefitService(AdventurerBenefitCatalog catalog, AdventurerBenefitConfiguration initial,
     Action<AdventurerBenefitConfiguration> persist)
 {
@@ -30,9 +30,19 @@ internal sealed class AdventurerBenefitService(AdventurerBenefitCatalog catalog,
 
     public void SetProfession(byte job)
     {
-        if (job > 15) throw new InvalidDataException("活动职业无效");
+        if (job > 15 || catalog.Lucky is not { } lucky || !lucky.Professions.ContainsKey(job))
+            throw new InvalidDataException("幸运职业资源未装配或目标职业无效");
         lock (gate) Commit(configuration with { ProfessionJob = job });
     }
+    public ImmutableArray<LuckyProfession> LuckyProfessions(long now, AdventurerBenefitConfiguration? snapshot = null)
+    {
+        if (catalog.Lucky is not { } lucky) return [];
+        var current = snapshot ?? Configuration;
+        return current.ProfessionJob is { } job ? lucky.Professions[(byte)job] : lucky.Schedule
+            .Where(row => row.Starts > 0 && row.Starts <= now && now < row.Ends)
+            .Select(row => row.Profession).Distinct().OrderBy(row => row.Job).ThenBy(row => row.GrowType).ToImmutableArray();
+    }
+    public bool IsLucky(byte job, ushort growType, long now) => LuckyProfessions(now).Contains(new(job, (byte)(growType & 127)));
     public long SetReturning(string account, long now)
     {
         lock (gate)
@@ -56,8 +66,7 @@ internal sealed class AdventurerBenefitService(AdventurerBenefitCatalog catalog,
         if (members.Count is < 1 or > 4 || members.Select(member => member.Account).Distinct(StringComparer.Ordinal).Count() != members.Count ||
             !members.Contains(self)) throw new InvalidDataException("活动队伍快照无效");
         var current = Configuration;
-        bool Target(AdventurerBenefitMember member, EventProfession target) =>
-            current.ProfessionJob is { } job ? member.Job == job : target.Matches(member.Job, member.GrowType);
+        static bool Target(AdventurerBenefitMember member, EventProfession target) => target.Matches(member.Job, member.GrowType);
         var buffs = ImmutableArray.CreateBuilder<uint>();
         foreach (var target in catalog.Professions)
         {
@@ -71,6 +80,9 @@ internal sealed class AdventurerBenefitService(AdventurerBenefitCatalog catalog,
             buffs.Add(checked((uint)(current.ReturningUntil.TryGetValue(self.Account, out long expiry) && expiry > now
                 ? catalog.ReturningBuff : catalog.ExistingBuff)));
         var result = buffs.Distinct().Order().ToImmutableArray();
-        return new(result, result.Sum(id => catalog.KillExperiencePercent(checked((int)id))));
+        var lucky = LuckyProfessions(now, current);
+        int partyPercent = members.Any(member => member.Account != self.Account &&
+            lucky.Contains(new(member.Job, (byte)(member.GrowType & 127)))) ? catalog.Lucky!.PartyExperiencePercent : 0;
+        return new(result, result.Sum(id => catalog.KillExperiencePercent(checked((int)id))), partyPercent);
     }
 }

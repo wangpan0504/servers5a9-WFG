@@ -5,8 +5,22 @@ namespace DfoServer.Network.Projection;
 
 internal static class AdventurerBenefitProjection
 {
+    public static void PostLucky(GameConnectionContext context)
+    {
+        if (context.Session.PlanLuckyProfessions() is { } lucky)
+        {
+            context.Sender.Post(0, (ushort)NotiPacketType.ACTIVATE_CHARACTER, AdventurerBenefitPackets.LuckyProfessions(lucky.Professions),
+                "lucky_profession_list", lucky.IsCurrent);
+            if (context.Session.FatigueAccelerationState() is { Selected: true } acceleration)
+                context.Sender.Post(0, (ushort)NotiPacketType.USER_FATIGUE_ACCELERATION_STATE,
+                    FatigueAccelerationPackets.State(acceleration.Active), "lucky_fatigue_acceleration_state",
+                    () => lucky.IsCurrent() && context.Session.CanPublishFatigueAcceleration(acceleration, requireCurrentState: true));
+        }
+    }
+
     public static bool Post(GameConnectionContext context, bool clear = false, bool force = false)
     {
+        PostLucky(context);
         var identity = context.Session.PlanReturningAdventurerIdentity(force);
         var progress = context.Session.PlanReturningAdventurerProgress(force);
         if (progress is not null)

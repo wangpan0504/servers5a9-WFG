@@ -268,6 +268,8 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
             await settings.PreloadGameOptionsAsync(context, settingReceipt);
         var appearanceTime = timer.GetUtcNow();
         bool premiumPcRoom = context.Session.PremiumPcRoom;
+        // 原生Player初始化消费幸运名单，必须先于本人Actor及技能表建立资格。
+        AdventurerBenefitProjection.PostLucky(context);
         await context.Notify(NotiPacketType.USERINFO,
             TownPackets.Actor(context.Session.ReadSkillCharacter(c), context.Session.ReadPvpGrade(c), context.Channel, appearanceTime.ToUnixTimeSeconds(), context.Session.ReadAdventureName(),
                 premiumPcRoom: premiumPcRoom, returningAdventurerType: context.Session.ReturningAdventurerType), "actor");

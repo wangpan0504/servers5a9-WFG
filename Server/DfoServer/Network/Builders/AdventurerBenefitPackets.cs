@@ -1,9 +1,22 @@
 using DfoServer.Game.Events;
+using DfoServer.GameWorld.Events;
 
 namespace DfoServer.Network.Builders;
 
 internal static class AdventurerBenefitPackets
 {
+    public static byte[] LuckyProfessions(IReadOnlyList<LuckyProfession> professions)
+    {
+        if (professions.Count > 2048 || professions.Distinct().Count() != professions.Count ||
+            professions.Any(row => row.Job > 15 || row.GrowType > 127))
+            throw new InvalidDataException("幸运职业名单无效");
+        // 01E29370先读u32数量，再逐条读职业u32、转职觉醒编码u32；不附角色ID。
+        using var bytes = new MemoryStream(); using var writer = new BinaryWriter(bytes);
+        writer.Write((uint)professions.Count);
+        foreach (var row in professions) { writer.Write((uint)row.Job); writer.Write((uint)row.GrowType); }
+        return bytes.ToArray();
+    }
+
     // NOTI1761由00498680固定读取16B；00498290区分1=回归、2=新手，00498160读取+12的绝对期限。
     // +4是首次提示已展示标记（读者弹窗后自行置1），不是领取成功。GM主动设身份不重弹首次引导。
     public static byte[] Returning(long until, ushort welcome = 0, ushort daily = 0)
