@@ -159,6 +159,11 @@ internal static class PreyGuideTcpTests
         That(autoReturned.Any(packet => packet is { Kind: 0, Opcode: 24, Body: [59, 3, ..] }) &&
             fixture.Query("SELECT town,area FROM characters WHERE id=$p0", peer.Id) is [[59L, 3L]],
             "普雷副本内全员死亡倒计时归0自动退场回到鸟背59/3");
+        var guideScript = PreyGuideScript.Parse(resources.Archive.ReadTokens(PreyGuideScript.Path),
+            resources.Archive.ReadTokens(PreyGuideScript.Path + ".symbol"), resources.Archive.ResolveString);
+        var waiting = guideScript.WaitingRoom ?? throw new InvalidOperationException("引导候战区缺失");
+        That(guideScript.Issues.IsEmpty && !(waiting.Town == 59 && waiting.Area == 3),
+            "引导候战区可读，且不是鸟背59/3");
         var report = new AntonTcpProbe.AntonProbeReport { Observe = observed.Add };
         int phaseStart = observed.Count;
         foreach (int dungeon in branch == 0 ? new[] { 291100391, 291100393 } : new[] { 291100390, 291100392 })
@@ -297,14 +302,19 @@ internal static class PreyGuideTcpTests
             That(Read("guide movie finished " + phase).Any(row => row is { Kind: 1, Opcode: 659, Body: [1] }),
                 "真实6591确认当前引导阶段演出完成");
             long began = clock.GetTimestamp();
-            for (int tick = 0; tick < 10 && !Displayed(); tick++)
+            // 二阶段不能在 587 一出现就停。1278 屏障可能插在开窗写出和候战 24 之间。
+            // 完成条件是观察到目标 24 且库中位置已更新；25ms 只是轮询让出，不是等待完成。
+            bool Settled() => phase == 1 ? HomeReady() : Displayed();
+            for (int tick = 0; tick < 10 && !Settled(); tick++)
             {
                 clock.Advance(1);
                 await Task.Delay(25);
                 Read("guide automatic reward " + phase);
             }
-            That(Displayed() && clock.GetElapsedTime(began).TotalSeconds <= 10,
-                "引导演出完成后由原秒tick交付，不等待资源电影加120秒兜底");
+            That(Settled() && clock.GetElapsedTime(began).TotalSeconds <= 10,
+                phase == 1
+                    ? "二阶段以候战24和库中位置为完成条件，超时仍失败，不等待资源电影加120秒兜底"
+                    : "引导演出完成后由原秒tick交付，不等待资源电影加120秒兜底");
             var shown = observed.Skip(start).ToList();
             int opened = shown.FindIndex(row => row is { Kind: 0, Opcode: 587, Body: [4, 1] });
             var personal = shown.Single(row => row is { Kind: 0, Opcode: 600, Body.Length: >= 6 } && row.Body[0] == 1);
@@ -323,6 +333,21 @@ internal static class PreyGuideTcpTests
                 That(next > opened && ReceiptCount(1) == 0 && fixture.Query(
                     "SELECT phase1_event IS NULL,state FROM character_raid_runs WHERE character_id=$p0", peer.Id) is [[1L, 0L]],
                     "真实phase0结果实际写完后才开放phase1，显示1不污染资格与业务身份");
+                That(!shown.Any(row => row is { Kind: 0, Opcode: 24, Body: [var town, var area, ..] } &&
+                    town == waiting.Town && area == waiting.Area) &&
+                    fixture.Query("SELECT town,area FROM characters WHERE id=$p0", peer.Id) is [[59L, 3L]],
+                    "一阶段开窗后仍停在鸟背59/3，不进入脚本候战区");
+            }
+            if (phase == 1)
+            {
+                int home = shown.FindIndex(row => row is { Kind: 0, Opcode: 24, Body: [var town, var area, ..] } &&
+                    town == waiting.Town && area == waiting.Area);
+                var saved = fixture.Query("SELECT town,area FROM characters WHERE id=$p0", peer.Id);
+                That(shown.Count(row => row is { Kind: 0, Opcode: 24, Body: [var town, var area, ..] } &&
+                    town == waiting.Town && area == waiting.Area) == 1 && home > opened &&
+                    saved is [[var dbTown, var dbArea]] &&
+                    Convert.ToInt64(dbTown) == waiting.Town && Convert.ToInt64(dbArea) == waiting.Area,
+                    "二阶段开窗实际写出后只迁一次，回到脚本候战区");
             }
             string committed = RewardAssets();
             int opens = observed.Count(row => row is { Kind: 0, Opcode: 587, Body: [4, 1] });
@@ -335,6 +360,14 @@ internal static class PreyGuideTcpTests
             bool Displayed() => ReceiptCount(phase) == 2 && observed.Skip(start).Any(row =>
                 row is { Kind: 0, Opcode: 587, Body: [4, 1] }) && (phase != 0 || observed.Skip(start).Any(row =>
                 row is { Kind: 0, Opcode: 587, Body: [2, 1] }));
+            bool HomeReady()
+            {
+                bool packet = observed.Skip(start).Any(row => row is { Kind: 0, Opcode: 24, Body: [var town, var area, ..] } &&
+                    town == waiting.Town && area == waiting.Area);
+                var saved = fixture.Query("SELECT town,area FROM characters WHERE id=$p0", peer.Id);
+                return packet && saved is [[var dbTown, var dbArea]] &&
+                    Convert.ToInt64(dbTown) == waiting.Town && Convert.ToInt64(dbArea) == waiting.Area;
+            }
         }
         long ReceiptCount(int phase) => Convert.ToInt64(fixture.Query(
             "SELECT count(*) FROM character_raid_reward_receipts WHERE character_id=$p0 AND raid_type=3 AND phase=$p1", peer.Id, phase)[0][0]);

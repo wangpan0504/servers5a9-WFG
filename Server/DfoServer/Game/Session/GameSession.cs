@@ -440,6 +440,7 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
         pendingRental = null;
         InvalidateImageCommunication();
         pendingQuestQuickClear = null;
+        AbandonPreyGuideWaiting();
         SelectionEpoch++;
         Selected = null;
         completed = new HashSet<int>();

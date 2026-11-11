@@ -716,6 +716,17 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
             if (!context.Sender.TryPost(0, (ushort)NotiPacketType.AREA_USERS, TownPackets.Transition(receipt.Character),
                 action, CanSend, afterWritten: SceneWritten))
                 throw new IOException("Raid return scene queue unavailable");
+            // 42在排队发布里会跳过Drain，24的写后回调因此落在ACK 1278之后。引导奖励须把601紧跟24入队，探针才能在屏障内看到演出。
+            if (raid.Battle.PreyGuide)
+            {
+                var follow = raid.Battle.View;
+                bool Follow() => CanSend() && raid.Actor.IsCurrent &&
+                    ReferenceEquals(context.Session.CurrentRaidBattle(raid.Actor), raid.Battle) &&
+                    follow.State == Game.Raids.AntonRaidBattleState.Reward && follow.Phase == raid.View.Phase &&
+                    !follow.PhaseExpired && !follow.ClockFaulted && context.Session.CanPublishRaidBattle(raid.Actor, follow);
+                if (context.Owner.Execute(Follow))
+                    RaidCombatProjection.PostState(context, follow, raid.Actor, Follow, "raid_return_state", sceneFollowsQueuedAreaUsers: true);
+            }
             if (!context.Sender.IsPublicationQueued) await context.Sender.DrainAsync();
         }
         else

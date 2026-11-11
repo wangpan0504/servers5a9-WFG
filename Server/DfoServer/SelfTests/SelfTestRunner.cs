@@ -13,6 +13,7 @@ internal static class SelfTestRunner
 {
     public static async Task RunCoreAsync(string? songPvfPath = null, bool loadSongPvf = true)
     {
+        await PreyGuideWaitingReturnTests.RunCoreAsync();
         ServerDefaultsUpgradeTests.RunCore();
         SaveImportGuardTests.RunCore();
         PreyTeamResourceTests.RunCore();
