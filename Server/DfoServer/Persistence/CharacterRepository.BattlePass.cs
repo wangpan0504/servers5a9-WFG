@@ -50,8 +50,7 @@ internal sealed partial class CharacterRepository
                 plan.Rewards.Length > 160 || plan.Reward != plan.Rewards[0] ||
                 plan.Rewards.Distinct().Count() != plan.Rewards.Length || plan.Before.Claims.Overlaps(plan.Rewards) ||
                 !plan.After.Claims.SetEquals(plan.Before.Claims.Union(plan.Rewards)) ||
-                plan.Inventory.Reason != "battle_pass_reward" || plan.Inventory.CharacterPrecondition is null ||
-                !plan.Inventory.OverflowItems.IsEmpty)
+                plan.Inventory.Reason != "battle_pass_reward" || plan.Inventory.CharacterPrecondition is null)
                 throw new InvalidOperationException("Invalid battle-pass reward plan.");
             using var db = database.Open();
             using var write = db.BeginWrite("CharacterRepository.CommitBattlePassReward");

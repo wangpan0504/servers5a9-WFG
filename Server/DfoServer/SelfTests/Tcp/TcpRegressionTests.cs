@@ -573,6 +573,7 @@ internal static class TcpRegressionTests
         {
             await global::DfoServer.TownTravelPublicationTests.RunServerEventPublicationAsync(resources);
             await global::DfoServer.BattlePassRewardTests.RunRewardSuccessPublicationAsync(resources);
+            await global::DfoServer.BattlePassRewardTests.RunClaimAllOverflowPublicationAsync(resources);
             await global::DfoServer.BattlePassRewardTests.RunMissionSuccessPublicationAsync(resources);
             await global::DfoServer.BattlePassRewardTests.RunMissionPublicationBusyAsync(resources);
             await global::DfoServer.BattlePassRaidRecipientFailureTests.RunAsync(resources);
