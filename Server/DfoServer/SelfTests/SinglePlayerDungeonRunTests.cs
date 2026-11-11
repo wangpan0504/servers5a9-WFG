@@ -10,6 +10,7 @@ internal static partial class SinglePlayerDungeonRunTests
     public static void RunCore()
     {
         int checks = Count;
+        RunChampionCore();
         VerifyHelperRotation();
         VerifyCompanionStartRoomIdentity();
         VerifyTagSystemCompanionSuppression();
@@ -170,20 +171,7 @@ internal static partial class SinglePlayerDungeonRunTests
                 "caller cannot forge blocking eligibility away from the same resource row");
         }
         var defaultRoute = route with { Rooms = [Plan(start, 10, 11), .. route.Rooms.Skip(1)] };
-        var championEntry = entry with { ChampionPercents = new(100, 100, 100, 100) };
-        var championRoute = defaultRoute with { Rooms = defaultRoute.Rooms.Select(room => room.WithChampionRolls(championEntry.ChampionPercents, 0, _ => 0)).ToArray() };
-        That(SinglePlayerDungeonRun.TryCreate(championEntry, 3, 300, championRoute, authority, out _, out _) &&
-            !SinglePlayerDungeonRun.TryCreate(entry, 3, 300, championRoute, authority, out _, out _) &&
-            !SinglePlayerDungeonRun.TryCreate(championEntry with { NamedMonsters = [1] }, 3, 300, championRoute, authority, out _, out _) &&
-            !SinglePlayerDungeonRun.TryCreate(entry with { ChampionPercents = default }, 3, 300, championRoute, authority, out _, out _),
-            "有精英概率声明的普通怪升级仍能建立实例；没有声明或概率为零时不能伪造精英");
-        var excessChampions = defaultRoute.Rooms[0] with
-        {
-            Monsters = defaultRoute.Rooms[0].Monsters.Select(monster => monster with { SpawnType = 1 }).ToArray()
-        };
-        That(!SinglePlayerDungeonRun.TryCreate(championEntry, 3, 300,
-            championRoute with { Rooms = [excessChampions, .. championRoute.Rooms.Skip(1)] }, authority, out _, out _),
-            "每房随机提升至多一只，不能借合法概率伪造全房精英");
+        VerifyChampionRun(entry, defaultRoute, authority);
         That(SinglePlayerDungeonRun.TryCreate(entry, 3, 300, defaultRoute, authority, out var defaultRun, out _),
             "fixtures without team metadata retain their former lifecycle contract");
         defaultRun!.CompleteLoading(defaultRun.Snapshot.Identity, Guid.NewGuid());

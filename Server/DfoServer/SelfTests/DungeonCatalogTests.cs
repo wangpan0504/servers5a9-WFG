@@ -68,7 +68,7 @@ internal static class DungeonCatalogTests
                 "具名原图只恢复完全缺失的原结果块，不覆盖显式或畸形声明");
         }
     }
-    static void VerifyChampionRates()
+    internal static void VerifyChampionRates()
     {
         var row = new DungeonRawSection("champion", [new(0, 4), new(0, 33), new(0, 50), new(0, 70), new(0, 80)]);
         var ordinary = new DungeonDefinition(3, "dungeon/act1/mirkwood.dgn", 1, 1, [], [row]);
@@ -87,6 +87,9 @@ internal static class DungeonCatalogTests
         })
             That(!DungeonChampionRates.For(ordinary with { RawSections = sections }).IsEnabled,
                 "缺失、重复、畸形、全零或特殊玩法声明不借普通精英策略生成演员");
+        That(DungeonChampionRates.For(ordinary with { RawSections = [row, new("raid dungeon", [new(0, 1)])] },
+                raidAdmission: true) == new DungeonChampionRates(33, 50, 70, 80),
+            "已实现正式准入只开放同一资源概率，不编造团本概率表");
         That(!DungeonChampionRates.For(ordinary with { DungeonType = "assaultmode dungeon" }).IsEnabled &&
             !DungeonChampionRates.For(ordinary with { Path = "dungeon/towers/test.dgn" }).IsEnabled,
             "非普通类型与塔类不改变既有演员合同");
@@ -549,8 +552,9 @@ internal static class DungeonCatalogTests
         var catalog = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf);
         That(DungeonChampionRates.For(catalog.Get(3)) == new DungeonChampionRates(33, 50, 70, 80) &&
             DungeonChampionRates.For(catalog.Get(7322)) == new DungeonChampionRates(25, 40, 60, 60) &&
-            new[] { 1, 2, 5000, 5101, 11006, 400000016 }.All(id => !DungeonChampionRates.For(catalog.Get(id)).IsEnabled),
-            "匹配PVF普通图恢复实际精英率，零声明、训练、卢克、祭坛及超时空不新增精英");
+            DungeonChampionRates.For(catalog.Get(5101)) == new DungeonChampionRates(25, 40, 60, 60) &&
+            new[] { 1, 2, 5000, 11006, 400000016 }.All(id => !DungeonChampionRates.For(catalog.Get(id)).IsEnabled),
+            "匹配PVF普通图恢复实际精英率，零声明、训练、祭坛及普通超时空不新增精英");
         var lostLand = catalog.Get(4000);
         That(lostLand.Mazes[0] is { ResourceError: null, MapSpecification.Count: 86 } &&
             lostLand.RawSections.Count(section => section.Tag == "map specification") == 2 &&
