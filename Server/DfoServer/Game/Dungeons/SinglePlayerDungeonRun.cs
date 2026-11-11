@@ -700,9 +700,11 @@ internal sealed partial class SinglePlayerDungeonRun
             next = replacement;
         current = next;
         FreezeCurrentRoom();
-        mapOperation = DungeonMapOperation.Current;
+        // 原生普通格选择不会清除该坐标的叠层游标。末层直接离房后折返，
+        // 必须显式恢复基础格，否则客户端仍会用叠层演员缓存重建已死亡的怪物。
+        mapOperation = layerSources.ContainsKey(target) ? DungeonMapOperation.RestoreBase : DungeonMapOperation.Current;
         mapPayload = replaceVisited ? DungeonMapPayload.Refresh : current.Loaded ? DungeonMapPayload.Cached : DungeonMapPayload.Build;
-        pendingLayerBaseAck = null;
+        pendingLayerBaseAck = mapOperation == DungeonMapOperation.RestoreBase ? target : null;
         Phase = SinglePlayerDungeonPhase.Loading;
         Advance();
         return Result(DungeonRunOutcome.Accepted);

@@ -26,7 +26,7 @@ internal static class DungeonStoryFlowTests
         }
         foreach (byte[] invalid in new byte[][] { [],[0],[0,0,0],[2,0],[0,3] })
             That(!DungeonRequests.TryParseStoryPause(invalid,out _),"无效暂停正文不转成成功应答");
-        Layers(); LayerBaseRestore(); DungeonCinematicLayerReturnTests.Run(); RepeatedLayers(); Stages(); StageBaseFallback(); Entrances(); QuestObjects(); DummyBosses(); DummyLinearRoute(); StoryDummyBosses();
+        Layers(); LayerBaseRestore(); LayerRoomRevisit(); DungeonCinematicLayerReturnTests.Run(); RepeatedLayers(); Stages(); StageBaseFallback(); Entrances(); QuestObjects(); DummyBosses(); DummyLinearRoute(); StoryDummyBosses();
         Console.WriteLine($"PASS {Count-before} 剧情暂停、层叠、重复坐标阶段和动态任务物件断言（合成）");
     }
 
@@ -118,6 +118,65 @@ internal static class DungeonStoryFlowTests
         That(run.Move(run.Snapshot.Identity,Guid.NewGuid(),boss.Position).Outcome == DungeonRunOutcome.Accepted &&
             run.Snapshot.MapOperation == DungeonMapOperation.Current && run.Snapshot.MapPayload == DungeonMapPayload.Build,
             "恢复后真实清房可继续普通路线，不把缓存恢复模式带入邻房");
+    }
+
+    static void LayerRoomRevisit()
+    {
+        var start = new DungeonMap("map",new(0,0),100,"map/base.map");
+        var side = new DungeonMap("map",new(1,0),101,"map/side.map");
+        var boss = new DungeonMap("boss",new(2,0),102,"map/boss.map");
+        var first = start with { Kind="layered",Id=103,Path="map/first.map" };
+        var last = first with { Id=104,Path="map/last.map" };
+        var maze = new DungeonMaze(0,3,1,"BBCCEE",[start.Position],[boss.Position],[start,side,boss],[])
+            { LayeredMaps=[first,last] };
+        var entry = new DungeonEntryPlan(99,0,777,200,0,0,maze,start,boss);
+        var authority = new Authority();
+        That(SinglePlayerDungeonRun.TryCreate(entry,1,100,new([Empty(start),Monster(side,20),Monster(boss,21),
+            Empty(first),Monster(last,30)],[new(start.Position,side.Position),new(side.Position,boss.Position)]),
+            authority,out var created,out _),"折返回归使用两层起点、相邻战斗房与独立终点");
+        var run = created!;
+        run.CompleteLoading(run.Snapshot.Identity,Guid.NewGuid());
+        foreach (var layer in new[] { first,last })
+        {
+            That(run.MoveLayer(run.Snapshot.Identity,Guid.NewGuid(),start.Position,true).Outcome == DungeonRunOutcome.Accepted &&
+                run.Snapshot.CurrentMap == layer,"按原序进入两层剧情房间");
+            run.CompleteLoading(run.Snapshot.Identity,Guid.NewGuid());
+        }
+        var death = authority.Death(run.Snapshot.Identity,30,1);
+        That(run.AcceptConfirmedDeath(death).Outcome == DungeonRunOutcome.Accepted,"末层怪物仅提交一次死亡");
+        Load(side.Position);
+        run.AcceptConfirmedDeath(authority.Death(run.Snapshot.Identity,20,2));
+        uint fatigue = run.Snapshot.ConsumedFatigue;
+        for (int visit=0;visit<2;visit++)
+        {
+            var identity = run.Snapshot.Identity;
+            var action = Guid.NewGuid();
+            That(run.Move(identity,action,start.Position).Outcome == DungeonRunOutcome.Accepted &&
+                run.Snapshot is { MapOperation:DungeonMapOperation.RestoreBase,MapPayload:DungeonMapPayload.Cached } &&
+                run.Snapshot.CurrentMap == start && run.Snapshot.LivingMonsters.Count == 0,
+                "末层直接离房后折返必须清除客户端叠层游标并恢复基础缓存");
+            That(run.Move(identity,action,start.Position).Outcome == DungeonRunOutcome.Duplicate &&
+                !run.ConfirmLayerBase(identity,start.Position) && run.ConfirmLayerBase(run.Snapshot.Identity,start.Position) &&
+                !run.ConfirmLayerBase(run.Snapshot.Identity,start.Position),"移动重放及最后kind1确认不推进或重入叠层");
+            byte[] packet = DungeonPackets.StartMap(entry with { StartMap=start },0x12345678,
+                run.Snapshot.MapOperation,run.Snapshot.MapPayload);
+            That(packet.SequenceEqual(new byte[] {0,0,2,0x78,0x56,0x34,0x12,0,0,1,0,0,0,0,0,0xff}),
+                "折返实际NOTI29是operation2/mode0的16字节缓存合同，不重发演员");
+            run.CompleteLoading(run.Snapshot.Identity,Guid.NewGuid());
+            That(run.AcceptConfirmedDeath(death).Outcome == DungeonRunOutcome.Duplicate &&
+                run.Snapshot.ConsumedFatigue == fatigue && run.ClearFact is null &&
+                run.MoveLayer(run.Snapshot.Identity,Guid.NewGuid(),start.Position,true).Outcome == DungeonRunOutcome.Rejected,
+                "折返不复活、不重复奖励或疲劳、不重跑剧情，也不提前结算");
+            Load(side.Position);
+            That(run.Snapshot is { MapOperation:DungeonMapOperation.Current,MapPayload:DungeonMapPayload.Cached } &&
+                run.Snapshot.LivingMonsters.Count == 0,"未进入叠层的相邻房保持普通已清缓存");
+        }
+        void Load(DungeonPoint point)
+        {
+            That(run.Move(run.Snapshot.Identity,Guid.NewGuid(),point).Outcome == DungeonRunOutcome.Accepted,
+                "真实清房门禁允许相邻移动");
+            run.CompleteLoading(run.Snapshot.Identity,Guid.NewGuid());
+        }
     }
 
     static void Stages()
