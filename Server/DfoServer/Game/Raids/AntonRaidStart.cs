@@ -185,7 +185,8 @@ internal sealed class AntonRaidStart(RaidRegistry registry, PartyService parties
         }
         ImmutableDictionary<ushort, ImmutableArray<RaidPhaseRewardPolicy>>? memberRewards = null;
         decimal epicMultiplier = dropControl?.Current.ResolveReward(DfoServer.Game.Dungeons.DungeonDropScope.Raid)?.Equipment ?? 1;
-        var completion = preyGuide ? preyRewards!.Create(actor.Session.PremiumPcRoom, epicMultiplier: epicMultiplier) : null;
+        var completion = preyGuide ? preyRewards!.Create(actor.Session.PremiumPcRoom, epicMultiplier: epicMultiplier,
+            privilege: reservations.Single().Expected.Inventory.PrivilegeService.IsActive(now.ToUnixTimeSeconds())) : null;
         if (preyTeam)
         {
             var policies = reservations.ToDictionary(member => member.Actor.Character,
