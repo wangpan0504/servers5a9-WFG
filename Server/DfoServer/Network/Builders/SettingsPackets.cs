@@ -50,6 +50,13 @@ internal static class SettingsPackets
         return body;
     }
 
+    public static byte[] HotkeysInitialization(byte profile)
+    {
+        if (profile > 1) throw new InvalidDataException("键位初始化配置类型无效");
+        // 原生 NONE 哨兵按当前 bank 加载资源默认，并由客户端回送完整198；不作为存档文本接受。
+        return [profile, 4, 0, 0, 0, (byte)'N', (byte)'O', (byte)'N', (byte)'E'];
+    }
+
     public static byte[] Hotkeys(byte profile, ImmutableArray<byte> text)
     {
         if (profile > 1) throw new InvalidDataException("键位回放配置类型无效");
