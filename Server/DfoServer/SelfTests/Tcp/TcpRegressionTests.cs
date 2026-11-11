@@ -444,6 +444,11 @@ internal static class TcpRegressionTests
                 resources.ItemResources, resources.Quests, resources.Learning);
             return Task.CompletedTask;
         }),
+        ("champion-policy", (_, _, resources) =>
+        {
+            DungeonChampionPolicyTests.RunResources(resources.Archive);
+            return Task.CompletedTask;
+        }),
         ("epic-road-admission", (_, _, resources) =>
         {
             EpicRoadAdmissionSessionTests.RunResources(resources.Archive, resources.ItemResources);
@@ -785,7 +790,7 @@ internal static class TcpRegressionTests
         "otherverse-drop-rules",
         "rift-daily-rules", "particular-hell-entry",
         "tayberrs-settlement",
-        "epic-road-admission",
+        "champion-policy", "epic-road-admission",
         "fiendwar-reward-rules",
         "fiendwar-recovery-movie",
         "fiendwar-shared-limits",

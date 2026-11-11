@@ -1683,6 +1683,8 @@ internal sealed partial class TcpPeer : IDisposable
                 int next = expectedSettings.FindIndex(option => option.Opcode != 173);
                 expectedSettings.Insert(next >= 0 ? next : expectedSettings.Count, (390, characterOptions));
             }
+            if (!expectedSettings.Any(option => option.Opcode == 454))
+                expectedSettings.Add((454, [Convert.ToByte(guideCharacter[0]) == 10 ? (byte)1 : (byte)0, 4, 0, 0, 0, 78, 79, 78, 69]));
             ClientSettings = expectedSettings.Select(option => Expect(0, option.Opcode, option.Body)).ToArray();
             if (appearanceFlags.HasValue)
                 Expect(0, 357, Build(w =>

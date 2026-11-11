@@ -945,7 +945,7 @@ internal static class ServerRuntime
                 new Game.Marriage.MarriageShopService(itemResources.Items, itemResources.Shops,
                     itemResources.GoldLimits, itemResources.EpicPieces, marriageCatalog, clock), marriageProjection, promotions: cashPromotions, promotionPage: promotionPage, nativePromotionTown: promotionPageService is null ? null : projection,
                 serverEvents: events, strongwayShops: itemResources.Shops,
-                battlePassCertificateChanged: battlePassProjection is null ? null : battlePassProjection.MissionStateAsync),
+                battlePassCertificateChanged: battlePassProjection is null ? null : battlePassProjection.MissionStateAsync, renameTown: projection),
             new RepairHandler(new InventoryRepairService(itemResources.Items, itemResources.Repair, towns, clock), inventoryProjection, log),
             new CharmChargingHandler(new InventoryCharmChargingService(itemResources.Items.Get,
                 itemResources.Items.ActionConsumable, clock), inventoryProjection, log),

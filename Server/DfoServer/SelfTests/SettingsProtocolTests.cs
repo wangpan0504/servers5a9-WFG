@@ -103,6 +103,14 @@ internal static partial class SettingsProtocolTests
         foreach (byte profile in new byte[] { 0, 1 })
             That(SettingsPackets.Hotkeys(profile, parsed).SequenceEqual(new byte[] { profile }.Concat(Body(text))),
                 "454独立预期为配置u8、长度u32及原样文本，无额外尾部");
+        foreach (byte profile in new byte[] { 0, 1 })
+            Bytes(SettingsPackets.HotkeysInitialization(profile), [profile, 4, 0, 0, 0, 78, 79, 78, 69],
+                "缺存档454仅含profile、长度4和无终止符的原生NONE哨兵");
+        byte[] initialization = SettingsPackets.HotkeysInitialization(0);
+        initialization[5] = 0;
+        That(SettingsPackets.HotkeysInitialization(0)[5] == 78, "键位初始化正文不共享可变数组");
+        Reject<InvalidDataException>(() => SettingsPackets.HotkeysInitialization(2), "未知profile不能初始化另一键位bank");
+        Reject<InvalidDataException>(() => SettingsRequests.Hotkeys(Body("NONE"u8.ToArray())), "198仍拒绝仅用于454的初始化哨兵");
         That(HotkeySettingsRules.Profile(10) == 1 && Enumerable.Range(0, 16).Where(job => job != 10)
             .All(job => HotkeySettingsRules.Profile((byte)job) == 0), "本版job10单独使用缔造者键位配置");
         foreach (byte[] bad in new[] { Array.Empty<byte>(), Body(text)[..^1], Body(text).Concat(new byte[] { 0 }).ToArray(),

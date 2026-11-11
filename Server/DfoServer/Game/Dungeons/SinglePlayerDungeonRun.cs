@@ -194,10 +194,12 @@ internal sealed partial class SinglePlayerDungeonRun
         FatigueAccelerationPercent = percent;
     }
     internal DungeonMonsterPlan CurrentMonsterPlan => current.Plan;
-    // 友方APC在原客户端跨房随行；只读取本实例真正加载过的资源演员，不把未来房间算作存活。
+    // 友方APC及MAP显式follow的monster跨房随行；只认本实例真正加载过的原对象key。
+    static bool IsFollowingFriendlyActor(DungeonPlannedMonster monster) => monster.IsFriendly && !monster.CanReportDeath &&
+        (monster.AiCharacter is not null || monster.Source?.FollowType == "follow");
     internal DungeonPlannedMonster? PublishedFriendlyActor(ushort key) => carriedCompanions.GetValueOrDefault(key) ?? allRooms.Where(room => room.Loaded)
         .SelectMany(room => room.Plan.Monsters).SingleOrDefault(monster => monster.ObjectKey == key &&
-            monster.AiCharacter is not null && monster.IsFriendly && !monster.CanReportDeath);
+            IsFollowingFriendlyActor(monster));
 
     internal bool HasLivingFriendlyActor(int id, DungeonRunSnapshot snapshot) =>
         carriedCompanions.Values.Any(monster => monster.MonsterId == id && !retiredCarriedCompanions.Contains(monster.ObjectKey)) ||
@@ -264,7 +266,7 @@ internal sealed partial class SinglePlayerDungeonRun
         }
         var room = current.Plan.Monsters.Any(monster => monster.ObjectKey == key && !monster.CanReportDeath) ? current :
             allRooms.SingleOrDefault(candidate => candidate.Loaded && candidate.Plan.Monsters.Any(monster =>
-                monster.ObjectKey == key && monster.AiCharacter is not null && monster.IsFriendly && !monster.CanReportDeath));
+                monster.ObjectKey == key && IsFollowingFriendlyActor(monster)));
         room?.Dead.Add(key);
     }
     internal bool MockBattleDefeated => entry.MockBattle is not null &&
@@ -532,8 +534,7 @@ internal sealed partial class SinglePlayerDungeonRun
             var baseMonsters = plan.Monsters.Where(monster => monster.HellWave is null).ToArray();
             var waveMonsters = plan.Monsters.Where(monster => monster.HellWave is not null).ToArray();
             if (baseMonsters.Length != resourcePlan.Monsters.Count || waveMonsters.Length != plan.HellWaves.Count ||
-                !EpicRoad2019MonsterPolicy.Matches(entry) &&
-                    baseMonsters.Zip(resourcePlan.Monsters).Count(pair => pair.First.SpawnType != pair.Second.SpawnType) > 1 ||
+                baseMonsters.Zip(resourcePlan.Monsters).Count(pair => pair.First.SpawnType != pair.Second.SpawnType) > 1 ||
                 waveMonsters.Any(wave => !wave.IsBlocking || wave.ObjectKey == entry.CharacterId || !keys.Add(wave.ObjectKey) ||
                     !plan.HellWaves.Any(hell => hell.ObjectKey == wave.ObjectKey && hell.MonsterId == wave.MonsterId)) ||
                 baseMonsters.Zip(resourcePlan.Monsters).Any(pair =>
@@ -606,10 +607,8 @@ internal sealed partial class SinglePlayerDungeonRun
 
     // 入场已按资源[champion]抽出精英；复验不能把这一步合法的0→1变化当成伪造演员。
     static bool AllowedChampionPromotion(DungeonPlannedMonster planned, DungeonPlannedMonster resource, DungeonEntryPlan entry) =>
-        planned.SpawnType == 1 && (EpicRoad2019MonsterPolicy.Matches(entry)
-            ? EpicRoad2019MonsterPolicy.CanPromote(resource)
-            : DungeonMonsterPlan.CanBecomeChampion(resource) && !entry.NamedMonsters.Contains(resource.MonsterId) &&
-                entry.ChampionPercents.Percent(entry.Difficulty) > 0);
+        planned.SpawnType == 1 && DungeonMonsterPlan.CanBecomeChampion(resource) &&
+        !entry.NamedMonsters.Contains(resource.MonsterId) && entry.ChampionPercents.Percent(entry.Difficulty) > 0;
 
     // 等级只在房间首次安装时冻结；AI参数每次安装都重新解析，回访不沿用上一次访问的配置。
     // 组队各角色共享同一个冻结控制器，同房安装仍取同一份快照。

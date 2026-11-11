@@ -37,8 +37,11 @@ internal sealed class MagicBoxHandler(InventoryMagicBoxService magicBox, Invento
             return CommandResult.Handled;
         }
         MagicBoxReceipt? receipt = null;
-        var result = context.BlocksTownActions ? InventoryResult.Reject(19) :
-            context.Session.PlanAndCommitInventory(character => magicBox.Open(character, request, out receipt), 19);
+        var selected = context.Owner.Execute(() => context.Session.Selected);
+        int sourceId = selected?.Inventory.Find(request.BoxSlot)?.Core.ItemId ?? 0;
+        var result = context.Activity?.BlocksTownActions == true || context.Session.Strongway2019BlocksTownActions ? InventoryResult.Reject(19) :
+            context.Session.PlanAndCommitBooster(character => ReferenceEquals(character, selected)
+                ? magicBox.Open(character, request, out receipt) : InventoryResult.Reject(19), magicBox.UsePlaces(sourceId), sourceId);
         bool seriaBatch = expand && receipt?.BoxItemId == 2682272;
         CmdPacketType responseOpcode = seriaBatch ? CmdPacketType.USE_RANDOMBOX_ITEM_EXPAND : CmdPacketType.USE_RANDOMBOX_ITEM;
         byte[] response = !result.Accepted || receipt is null ? MagicBoxPackets.Failure() :

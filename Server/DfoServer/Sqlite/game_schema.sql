@@ -2136,7 +2136,7 @@ CREATE TABLE character_beast_stage_rewards(
         );
 
 CREATE TABLE IF NOT EXISTS character_rename_pending(
-  character_id INTEGER NOT NULL,account TEXT NOT NULL,source_uid INTEGER NOT NULL CHECK(source_uid>0),
+  character_id INTEGER NOT NULL,account TEXT NOT NULL,source_uid INTEGER NOT NULL CHECK(source_uid>=0),
   PRIMARY KEY(character_id),FOREIGN KEY(character_id,account) REFERENCES characters(id,account));
 
 CREATE TABLE IF NOT EXISTS character_name_history(

@@ -284,7 +284,7 @@ internal static class SqliteMigrations
         new(153, "艾肯每日循环通关进度", static (db, tx) => Execute(db, tx, EkernCycleSchema.Definition)),
         new(154, "商城累计规则期与原子订单", CashShopPromotionSchema.EnsureBase),
         new(155, "商城常驻累计精确前驱衔接", CashShopPromotionSchema.EnsureContinuation),
-        new(156, "角色更名卡待改名资格", static (db, tx) => Execute(db, tx, CharacterRenameCardSchema.Definition)),
+        new(156, "角色更名卡待改名资格", static (db, tx) => Execute(db, tx, CharacterRenameCardSchema.OriginalDefinition)),
         new(157, "账号聊天表情指令", static (db, tx) => Execute(db, tx, ChatEmoticonSchema)),
         new(158, "账号最近聊天表情", static (db, tx) => Execute(db, tx, RecentEmoticonSchema)),
         new(159, "守护者五位盾牌配置", AddKnightShieldDeckColumn),
@@ -383,8 +383,25 @@ internal static class SqliteMigrations
             DungeonCardRewardSchema.ResetSql.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal))),
         new(203, "追加券账号与奖励额度", DungeonTicketQuotaSchema.Upgrade),
         new(204, "通用Buff动态状态", static (db, tx) => Execute(db, tx, VariousBuffSchema.Definition.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal))),
-        new(205, "回归任务进度与奖励账本", static (db, tx) => Execute(db, tx, ReturningAdventurerSchema.Definition.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal))),
+        new(205, "商城自动更名资格来源", static (db, tx) => ReplaceTableConstraint(db, tx, "character_rename_pending",
+            "CHECK(source_uid>0)", "CHECK(source_uid>=0)")),
+        new(206, "回归账本与已发布本地205兼容", UpgradeReturningAdventurer206),
     ];
+
+    static void UpgradeReturningAdventurer206(SqliteConnection db, SqliteTransaction tx)
+    {
+        // 本地85/86曾以205追加回归两表；仅完整已知结构允许补齐上游205的更名约束。
+        if (!KnownTable(db, tx, "character_rename_pending", CharacterRenameCardSchema.Definition.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)))
+        {
+            bool returning = ReturningAdventurerSchema.Definition
+                .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .All(sql => KnownTable(db, tx, sql["CREATE TABLE ".Length..sql.IndexOf('(')], sql));
+            if (!returning || !KnownTable(db, tx, "character_rename_pending", CharacterRenameCardSchema.OriginalDefinition.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)))
+                throw new InvalidDataException("回归账本升级拒绝未知205结构");
+            ReplaceTableConstraint(db, tx, "character_rename_pending", "CHECK(source_uid>0)", "CHECK(source_uid>=0)");
+        }
+        Execute(db, tx, ReturningAdventurerSchema.Definition.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal));
+    }
 
     const string AccountCommon45ListConstraint = "CHECK(list_type IN (0,1,2,3,7,12,38,45,46))";
     const string AccountCommon45OwnershipConstraint = "CHECK((list_type=12 AND character_id IS NULL AND slot_index<240) OR (list_type=45 AND character_id IS NULL AND slot_index<50) OR (list_type NOT IN(12,45) AND character_id IS NOT NULL AND (list_type<>2 OR slot_index<264)))";

@@ -240,6 +240,8 @@ internal static class EpicRoadAdmissionSessionTests
                     ticketCount == (dungeon == 400000097 ? 2 : 1) &&
                     session.Selected.Fatigue!.Used == before.Fatigue!.Used + diagnosticEntry.StartFatigue,
                     "成功重试按两图各自真实次数、门票与疲劳规则仅提交一次");
+                That(entered!.Monsters.Monsters.Count(monster => monster.SpawnType == 1) <= 1,
+                    "正式星河首房不再将全部小怪提升为精英");
                 var paid = session.Selected;
                 var loaded = session.CompleteFormalDungeonLoading();
                 That(loaded is not null && session.Phase == SessionPhase.Dungeon &&
@@ -280,7 +282,7 @@ internal static class EpicRoadAdmissionSessionTests
                         $"monsters={string.Join(',',loaded.Monsters.Monsters.Select(m => $"{m.MonsterId}:{m.IsBlocking}"))};" +
                         $"objects={string.Join(',',loaded.Monsters.SpecialObjects.Select(o => o.Source.ObjectId))};" +
                         $"result={moved is not null};map={moved?.Snapshot.CurrentMap.Id};phase={session.Phase}");
-                    That(moved!.Monsters.Monsters is [{ MonsterId: 407000551, BattleLevel: 95, SpawnType: 1, SourceOrdinal: 0 }] &&
+                    That(moved!.Monsters.Monsters is [{ MonsterId: 407000551, BattleLevel: 95, SpawnType: 0, SourceOrdinal: 0 }] &&
                         moved.Monsters.SpecialObjects.Count == 0 && moved.Monsters.Room.PassiveObjects.Count == 1,
                         "458保持原怪物与地图本地被动对象，不将本地对象重复发成特殊actor或恢复未消费后缀");
                     var mapBody = DungeonPackets.StartMap(moved.Entry, moved.Monsters, moved.MapSeed, passiveItems:moved.PassiveItems);
@@ -288,7 +290,7 @@ internal static class EpicRoadAdmissionSessionTests
                         BinaryPrimitives.ReadUInt32LittleEndian(mapBody.AsSpan(21)) == 0 &&
                         BinaryPrimitives.ReadUInt16LittleEndian(mapBody.AsSpan(25)) == moved.Monsters.Monsters[0].ObjectKey &&
                         BinaryPrimitives.ReadUInt32LittleEndian(mapBody.AsSpan(27)) == 407000551 &&
-                        mapBody[31] == 95 && mapBody[32] == 1 && mapBody[35] == byte.MaxValue,
+                        mapBody[31] == 95 && mapBody[32] == 0 && mapBody[35] == byte.MaxValue,
                         "NOTI29编码当前458回执的原演员索引、物件键、等级与创建组");
                     var nextLoaded = session.CompleteFormalDungeonLoading();
                     That(nextLoaded is not null && session.Phase == SessionPhase.Dungeon &&
@@ -302,10 +304,10 @@ internal static class EpicRoadAdmissionSessionTests
                     {
                         var death = session.ObserveFormalDungeonDeath(FormalDungeonSessionTests.Observation(current, monster), kills, growth);
                         That(death.Outcome == DungeonRunOutcome.Accepted && death.Receipt is not null,
-                            "458原缺rank怪物的精英死亡经过事务后可清房");
+                            "458原缺rank普通怪物死亡经过事务后可清房");
                         That(death.Reward is { Amount: > 0 } &&
                             (ulong)death.GainedExperience + death.ProficiencyGained > 0,
-                            "活动精英击杀产生正经验并由成长事务实际记入角色或熟练度");
+                            "活动怪物按实际冻结品级产生正经验并由成长事务实际记入角色或熟练度");
                         current = death.Receipt!;
                     }
                     var terminal = session.MoveFormalDungeon(2, 0);
@@ -442,6 +444,9 @@ internal static class EpicRoadAdmissionSessionTests
                             room0 = session.ObserveFormalDungeonDeath(FormalDungeonSessionTests.Observation(room0, monster), kills, growth).Receipt!;
                         That(session.MoveFormalDungeon(1, 0) is not null, "超星河首房清怪后进入次房");
                         var room1 = session.CompleteFormalDungeonLoading()!;
+                        That(room1.Monsters.Monsters.Count(monster => monster.SpawnType == 1) == 1 &&
+                            room1.Monsters.Monsters.Count(monster => monster.SpawnType == 0) > 1,
+                            "超星河真实次房命中资源概率仅提升一只，其余普通怪保持原品级");
                         foreach (var monster in room1.Monsters.Monsters.Where(m => m.IsBlocking).ToArray())
                             room1 = session.ObserveFormalDungeonDeath(FormalDungeonSessionTests.Observation(room1, monster), kills, growth).Receipt!;
                         That(session.MoveFormalDungeon(2, 0) is not null, "超星河次房清怪后进入末房");
