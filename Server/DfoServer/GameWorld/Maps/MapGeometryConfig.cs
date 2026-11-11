@@ -66,8 +66,8 @@ internal sealed partial class MapGeometryConfig
     }
     private static (int Stride, int X, int Strings) AnchorLayout(string kind) => kind switch
     {
-        "dungeon_animation5" => (5,2,3),
-        "dungeon_passive4" => (4,1,0),
+        "dungeon_animation5" or "dungeon_tent_animation5" => (5,2,3),
+        "dungeon_passive4" or "dungeon_tent_passive4" => (4,1,0),
         "dungeon_monster10_fixed_normal" => (10,3,(1 << 8) | (1 << 9)),
         "dungeon_ai8" => (8,1,(1 << 4) | (1 << 5)),
         "dungeon_ai10_npc_monster_boss" => (10,1,(1 << 4) | (1 << 5) | (1 << 7)),
@@ -77,6 +77,7 @@ internal sealed partial class MapGeometryConfig
     };
     private static void ValidateAnchor(string kind, Atom[] before, Atom[] after)
     {
+        if (TentKind(kind)) { ValidateTentRecord(kind,before,after); return; }
         var layout = AnchorLayout(kind);
         if (before.Length == 0 || before.Length != after.Length || before.Length % layout.Stride != 0)
             throw new InvalidDataException("World anchor record shape");
@@ -220,8 +221,10 @@ internal sealed partial class MapGeometryConfig
                 ("dungeon_ext_tilemap", "[tile map]") => 1,
                 ("dungeon_ext_tilemap3", "[tile map]") => 1,
                 ("dungeon_animation5", "[animation]") => 5,
+                ("dungeon_tent_animation5", "[animation]") => 5,
                 ("dungeon_animation5_append", "[animation]") => 5,
                 ("dungeon_passive4", "[passive object]") => 4,
+                ("dungeon_tent_passive4", "[passive object]") => 4,
                 ("dungeon_monster10_fixed_normal", "[monster]") => 10,
                 ("dungeon_ai8", "[ai character]") => 8,
                 ("dungeon_ai10_npc_monster_boss", "[ai character]") => 10,
@@ -343,6 +346,7 @@ internal sealed partial class MapGeometryConfig
             throw new InvalidDataException("World alias requires guarded pass grid");
         foreach (var row in result)
         {
+            ValidateTentPlan(row.Value);
             ValidateExtendedRecipe(row.Key,row.Value,aliases);
             ValidateVisibleExtensionClone(row.Key,row.Value,aliases,result);
             if (row.Value.Any(rule => rule.Kind is "dungeon_animation5_append" or "dungeon_virtual_xywh1") && row.Value.Count(rule => rule.Kind == "dungeon_tiles") != 1)
