@@ -164,9 +164,17 @@ internal static class DungeonStoryEventPublicationTests
         f.TravelTo(towns,new(40,4,800,285));
         var entry = f.Session.EnterFormalDungeon(24,3204,0,global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf),global::DfoServer.Testing.SelfTestCatalogs.Rooms(pvf))!;
         That(entry is not null && entry.Snapshot.CurrentMap.Id == 53480,"真实3204使用53480基础房间入场");
+        var definition = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf).Get(24);
+        That(definition.Path == "dungeon/act3/whitenight.dgn" && !definition.DisableFatigueConsumption && !definition.DeclaresStartFatigue &&
+            entry!.Entry is { UsesRoomFatigue:true,RoomFatigueCost:1,StartFatigue:0 } && quests.Get(3204).IntData.SequenceEqual([53486]),
+            "匹配D24无免疲劳或一次性扣点，53480及53501按不同MapID首次扣1；目标53486不被演出代替");
         f.Session.CompleteFormalDungeonLoading();
         var baseKeys = f.Session.DungeonSnapshot!.LivingMonsters.ToArray();
-        long revision = f.Read().Revision;
+        var beforeScene = f.Read();
+        var charges = DungeonTransientReceipts.Find(f.Owner,entry!.Snapshot.Identity)!;
+        That(charges.Fatigue.Keys.SequenceEqual([53480]) && charges.Fatigue[53480].Committed &&
+            charges.Fatigue[53480].Rule == CharacterFatigueState.NormalRoomRuleId,
+            "基础53480已真实加载并保留本实例唯一房间扣点回执");
         using var output = new MemoryStream(); using var stop = new CancellationTokenSource();
         await using var sender = new GameConnectionSender(f.Owner,output,stop,0,(_,_,_,_,_) => { });
         var context = new GameConnectionContext(new(89,IPAddress.Loopback,output,stop),f.Owner,f.Session,sender);
@@ -175,6 +183,16 @@ internal static class DungeonStoryEventPublicationTests
             f.Session.DungeonSnapshot!.CurrentMap.Id == 53501,"复现首个kind1进入原演出层53501");
         output.SetLength(0);
         await commands.DispatchAsync(context,new(1,37,new byte[8]));
+        var afterSceneLoading = f.Read();
+        var expectedFatigue = beforeScene.Fatigue!.ConsumeOrdinaryRoom();
+        That(afterSceneLoading.Revision == beforeScene.Revision+1 && afterSceneLoading.Fatigue == expectedFatigue &&
+            QuestCompletionRepositoryTests.Same(beforeScene with { Revision=beforeScene.Revision+1,Fatigue=expectedFatigue },afterSceneLoading),
+            "53501首次加载仅扣1疲劳并提交一次版本；经验、资产、任务及其它持久状态完全不变");
+        That(charges.Fatigue.Keys.Order().SequenceEqual([53480,53501]) && charges.Fatigue[53501] is { Committed:true } charge &&
+            charge.Rule == CharacterFatigueState.NormalRoomRuleId && charge.BeforeRevision == beforeScene.Revision &&
+            charge.Before == beforeScene.Fatigue && charge.After == expectedFatigue && charge.Revision == afterSceneLoading.Revision &&
+            charges.Loot.Count == 0,
+            "新增账本只属于53501的精确首次扣点，不能伪装成击杀奖励或重复房间提交");
         output.SetLength(0);
         That(await commands.DispatchAsync(context,new(1,45,move)) == CommandResult.Handled,"第二个相同kind1结束演出层，不再静默拒绝");
         byte[] written = output.ToArray();
@@ -185,16 +203,36 @@ internal static class DungeonStoryEventPublicationTests
             written[17] == 0 && BinaryPrimitives.ReadUInt16LittleEndian(written.AsSpan(18)) == 29 && written.AsSpan(33).SequenceEqual(expected),
             "恢复沿ACK45→NOTI29精确16B缓存正文，不重新下发基础演员或地图编号");
         That(f.Session.DungeonSnapshot!.CurrentMap.Id == 53480 && f.Session.DungeonSnapshot.LivingMonsters.SequenceEqual(baseKeys) &&
-            f.Read().Revision == revision && f.Read().ActiveMainQuests.Single(row => row.QuestId == 3204).ConditionState == 1,
-            "恢复原房间key和任务接取，演出换层不创造死亡、奖励或清图凭据");
+            f.Read().Revision == afterSceneLoading.Revision && f.Read().ActiveMainQuests.Single(row => row.QuestId == 3204).ConditionState == 1 &&
+            QuestCompletionRepositoryTests.Same(afterSceneLoading,f.Read()) && charges.Loot.Count == 0 &&
+            charges.Fatigue.Keys.Order().SequenceEqual([53480,53501]) && f.Session.EnableFormalDungeonSettlement() is null,
+            "恢复原房间key和任务接取，缓存返回不再扣点、不改变任何持久状态或创造死亡、奖励、清图凭据");
         var restored = f.Session.DungeonSnapshot;
         output.SetLength(0);
         That(await commands.DispatchAsync(context,new(1,45,move)) == CommandResult.Handled && output.Length == 0 &&
             f.Session.DungeonSnapshot!.Identity == restored!.Identity && f.Session.DungeonSnapshot.Phase == restored.Phase,
             "加载前的最终自动确认仅消费一次，不重发地图或重置加载");
         await commands.DispatchAsync(context,new(1,37,new byte[8]));
+        var loadedBase = f.Session.DungeonSnapshot!;
+        var fatigueBeforeReplay = charges.Fatigue.OrderBy(row => row.Key).Select(row =>
+            (row.Key,row.Value.Rule,row.Value.BeforeRevision,row.Value.Before,row.Value.After,row.Value.Revision,row.Value.Committed)).ToArray();
         output.SetLength(0);
-        That(await commands.DispatchAsync(context,new(1,45,move)) == CommandResult.Unhandled && output.Length == 0 &&
-            f.Session.DungeonSnapshot!.Phase == SinglePlayerDungeonPhase.Dungeon,"重复最终确认不能再次进入演出层");
+        var replayResult = await commands.DispatchAsync(context,new(1,45,move));
+        byte[] rejected = output.ToArray();
+        // 已解析的CMD45业务拒绝须回失败ACK以解除客户端等待位，不能沿用旧静默拒绝期望。
+        That(replayResult == CommandResult.Handled && rejected.Length == 19 && rejected[0] == 1 &&
+            BinaryPrimitives.ReadUInt16LittleEndian(rejected.AsSpan(1)) == 45 &&
+            BinaryPrimitives.ReadInt32LittleEndian(rejected.AsSpan(3)) == 19 && rejected.AsSpan(16).SequenceEqual(new byte[] { 0,19,0 }),
+            "重复最终确认只发布唯一19B拒绝ACK45，不发送NOTI29或重新进入演出层");
+        var afterReplay = f.Session.DungeonSnapshot!;
+        That(afterReplay.Identity == loadedBase.Identity && afterReplay.Phase == SinglePlayerDungeonPhase.Dungeon &&
+            afterReplay.CurrentMap == loadedBase.CurrentMap && afterReplay.CurrentMap.Id == 53480 &&
+            afterReplay.LivingMonsters.SequenceEqual(baseKeys) && afterReplay.MapOperation == loadedBase.MapOperation &&
+            afterReplay.MapPayload == loadedBase.MapPayload && afterReplay.ConsumedFatigue == loadedBase.ConsumedFatigue &&
+            afterReplay.BossPosition == loadedBase.BossPosition && QuestCompletionRepositoryTests.Same(afterSceneLoading,f.Read()) &&
+            charges.Fatigue.Keys.Order().SequenceEqual([53480,53501]) && charges.Fatigue.OrderBy(row => row.Key).Select(row =>
+                (row.Key,row.Value.Rule,row.Value.BeforeRevision,row.Value.Before,row.Value.After,row.Value.Revision,row.Value.Committed))
+                .SequenceEqual(fatigueBeforeReplay) && charges.Loot.Count == 0 && f.Session.EnableFormalDungeonSettlement() is null,
+            "重复最终确认保持原基础图、身份、key及完整持久状态，两张图扣点回执不变且无清图奖励许可");
     }
 }

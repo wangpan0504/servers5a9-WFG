@@ -13,6 +13,7 @@ internal static partial class DungeonRoomCatalogTests
     {
         int checks = Count;
         var fixture = new Fixture();
+        RunMonsterFollowers();
         NativeMissingRankPrefix(fixture);
         foreach (string tag in new[] { "no champion", "is named monster" })
         {
