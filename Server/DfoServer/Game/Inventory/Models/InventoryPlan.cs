@@ -31,6 +31,7 @@ internal sealed class InventoryPlan
     public byte? EquipmentSlotFlagsAfter { get; init; }
     public uint? CloneTitleItemIdAfter { get; init; }
     public bool UnlockSkillTree { get; init; }
+    public bool CashShopRename { get; init; }
     public DfoServer.Game.Guild.GuildHongbaoPurchase? GuildHongbaoPurchase { get; init; }
     public InventoryEventPrecondition? RequiredEvent { get; init; }
     public long? PromotionCatalogRevision { get; init; }
@@ -92,6 +93,7 @@ internal sealed class InventoryPlan
         EquipmentSlotFlagsAfter = EquipmentSlotFlagsAfter,
         CloneTitleItemIdAfter = CloneTitleItemIdAfter,
         UnlockSkillTree = UnlockSkillTree,
+        CashShopRename = CashShopRename,
         GuildHongbaoPurchase = GuildHongbaoPurchase,
         RequiredEvent = requiredEvent ?? RequiredEvent,
         PromotionCatalogRevision = promotionCatalogRevision ?? PromotionCatalogRevision,

@@ -284,7 +284,7 @@ internal static class SqliteMigrations
         new(153, "艾肯每日循环通关进度", static (db, tx) => Execute(db, tx, EkernCycleSchema.Definition)),
         new(154, "商城累计规则期与原子订单", CashShopPromotionSchema.EnsureBase),
         new(155, "商城常驻累计精确前驱衔接", CashShopPromotionSchema.EnsureContinuation),
-        new(156, "角色更名卡待改名资格", static (db, tx) => Execute(db, tx, CharacterRenameCardSchema.Definition)),
+        new(156, "角色更名卡待改名资格", static (db, tx) => Execute(db, tx, CharacterRenameCardSchema.OriginalDefinition)),
         new(157, "账号聊天表情指令", static (db, tx) => Execute(db, tx, ChatEmoticonSchema)),
         new(158, "账号最近聊天表情", static (db, tx) => Execute(db, tx, RecentEmoticonSchema)),
         new(159, "守护者五位盾牌配置", AddKnightShieldDeckColumn),
@@ -383,6 +383,8 @@ internal static class SqliteMigrations
             DungeonCardRewardSchema.ResetSql.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal))),
         new(203, "追加券账号与奖励额度", DungeonTicketQuotaSchema.Upgrade),
         new(204, "通用Buff动态状态", static (db, tx) => Execute(db, tx, VariousBuffSchema.Definition.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal))),
+        new(205, "商城自动更名资格来源", static (db, tx) => ReplaceTableConstraint(db, tx, "character_rename_pending",
+            "CHECK(source_uid>0)", "CHECK(source_uid>=0)")),
     ];
 
     const string AccountCommon45ListConstraint = "CHECK(list_type IN (0,1,2,3,7,12,38,45,46))";

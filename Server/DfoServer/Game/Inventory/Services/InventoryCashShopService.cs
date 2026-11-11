@@ -68,7 +68,7 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
         var serviceWallet = before.AccountWallet;
         var serviceInventory = before;
         var shopPurchases = before.ShopPurchases;
-        bool unlockSkillTree = false;
+        bool unlockSkillTree = false, cashShopRename = false;
         int today = ShopPurchaseCount.Today(now);
         foreach (var requested in request.Items)
         {
@@ -82,7 +82,8 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
             bool marriedOnly = marriedOnlyCommodities?.Contains(product.CommodityId) == true;
             if (marriedOnly && (character.Marriage is not { State: 4 } marriage || !marriage.IsMember(character.Id)))
                 return InventoryResult.Reject(17) with { RejectReason = "cash_shop_marriage_required" };
-            bool renameCard = catalog.StackableAction(product.ItemId)?.Label == "[character name change]";
+            bool automaticRename = product.CommodityId == 100902 && product.ItemId == 2682290;
+            bool renameCard = automaticRename || catalog.StackableAction(product.ItemId)?.Label == "[character name change]";
             if (renameCard && !CharacterRenameCard.AllowsMarriage(character.Marriage))
                 return InventoryResult.Reject(17) with { RejectReason = "cash_shop_marriage_rename_blocked" };
             requireMarriageState |= marriedOnly || renameCard;
@@ -202,6 +203,12 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
                 gold += product.GoldPrice;
                 var template = !devilProduct && !privilegeProduct && CurrencyWallet.RewardKind(product.ItemId) is null && !pieces.ByPiece.ContainsKey(product.ItemId) &&
                     contracts?.Recognizes(product.ItemId) != true ? catalog.Get(product.ItemId) : null;
+                if (automaticRename)
+                {
+                    if (cashShopRename || product.Count != 1 || template is null || character.Level < template.MinimumLevel)
+                        return InventoryResult.Reject(17) with { RejectReason = "cash_shop_rename_unavailable" };
+                    cashShopRename = true;
+                }
                 // 本版红包购买确认只核真实点券；不能使用普通商品的代币券支付顺序。
                 if (template is not null && catalog.StackableAction(product.ItemId) is { Label: "[guild hongbao]" })
                 {
@@ -299,7 +306,7 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
                     Deadline(packageDeadline);
                     foreach (var avatar in packageAvatars) Deadline(avatar.ExpireTime);
                 }
-                else if (!devilProduct && !privilegeProduct && !certificateProduct && !deluxeProduct)
+                else if (!automaticRename && !devilProduct && !privilegeProduct && !certificateProduct && !deluxeProduct)
                     rewards.Add(new(product.ItemId, product.Count));
             }
             if (total > int.MaxValue || gold > int.MaxValue || winPoints > int.MaxValue)
@@ -426,6 +433,7 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
                 cashPaymentPaid, after, paymentLines, actualCera, actualToken, actualHappy, now, time),
             RequiredEvent = requireEvent ? new(activity!.Schedule, time) : null,
             UnlockSkillTree = unlockSkillTree,
+            CashShopRename = cashShopRename,
             GuildHongbaoPurchase = hongbaoCera == 0 ? null : new(character.Guild!.Id, checked((int)hongbaoCera),
                 hongbao!.MinimumMembers, hongbao.DailyCeraLimit, DfoServer.Game.Guild.GuildAttendanceDay.Start(now.ToUnixTimeSeconds()))
         });

@@ -30,6 +30,13 @@ internal static class CharacterRenameCardTests
         foreach (byte state in new byte[] { 0, 1, 2, 3, 4 })
             That(CharacterRenameCard.AllowsMarriage(new MarriageRecord(Guid.NewGuid(), 1, 1, 1, 2, state)) == (state is 0 or 4),
                 "原生更名资格仅排除订婚、预约及婚礼进行中 " + state);
+        var jobItem = new ItemTemplate(490006669, ItemKind.Consumable, 0, 1, 0, 1, 0, 0, 1, "[trade]", 1 << 3, 0, "职业卡");
+        var jobCard = new ActionConsumableDefinition(jobItem, "[character name change]", [], 0, 0, 0, 0, []);
+        var jobRole = new Character(1, 0, "Job", 1, new(1, 0, 1, 1), null);
+        That(!CharacterRenameCard.Eligible(jobRole with { Job = 0 }, jobCard) &&
+            CharacterRenameCard.Eligible(jobRole with { Job = 3 }, jobCard) &&
+            !CharacterRenameCard.Eligible(jobRole with { Job = 3 }, jobCard with { Parameters = [1] }),
+            "更名动作单独核对职业掩码及无参数，不更改通用激活规则");
         That(CharacterRenameRequests.Use([65, 0]) == 65, "509读取原生Main槽u16");
         var body = Body(2, "旧名字", "新名字");
         That(CharacterRenameRequests.Complete(body) == new CharacterRenameRequest(2, "旧名字", "新名字", 1),
