@@ -22,6 +22,7 @@ internal sealed partial class GameSession
     {
         if (!UserStatePolicy.CanTransition(Phase, next))
             throw new InvalidOperationException($"非法会话状态切换：{Phase} -> {next}");
+        if (next == SessionPhase.Loading && Phase != SessionPhase.Loading) pendingCinematicClear = null;
         if (next != SessionPhase.MapSelect) InvalidateFiendwarKeyPreparation();
         bool endingDungeon = next is not (SessionPhase.Loading or SessionPhase.Dungeon or SessionPhase.Settlement);
         bool endingPvp = next != SessionPhase.PvpRoom;
@@ -35,6 +36,7 @@ internal sealed partial class GameSession
         }
         if (endingDungeon)
         {
+            pendingCinematicClear = null;
             CancelHostedDungeonEligibility();
             portableCargo = null;
             formalDungeon?.Run.CancelTagEvildom();
