@@ -47,6 +47,23 @@ internal static partial class DungeonSettlementTests
                 "真实零奖励经过清图、结算确认及正常返回，不因零经验中断");
             Check(new CharacterRepository(path).List(owner).Single().Learning.Experience == character.Learning.Experience,
                 "重开文件库保留零经验结算后的角色");
+            var benefits = new DfoServer.Game.Events.AdventurerBenefitService(new(pvf),
+                DfoServer.Game.Events.AdventurerBenefitConfiguration.Default, _ => { });
+            var returningCatalog = new DfoServer.GameWorld.Events.ReturningAdventurerCatalog(pvf);
+            repository.ConfigureReturningAdventurers(returningCatalog, benefits, _ => 0);
+            benefits.SetReturning(owner.Account, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+            var returning = repository.Create(owner, Fixture("ReturnClear") with { Level = 70,
+                InitialLearning = Learning(growth.GetLevelStartExperience(70)) });
+            var (returnRun, returnAuthority) = CreateRun(returning, entry => entry with { DungeonId = checked((uint)dungeon.Id),
+                ExperienceWeight = DfoServer.GameWorld.Dungeons.DungeonKillExperienceCatalog.GetDungeonWeight(dungeon) });
+            returnRun.AcceptConfirmedDeath(returnAuthority.Death(returnRun.Snapshot.Identity, 20));
+            var returnPrepared = returnRun.PrepareSettlement(returnRun.ClearFact!, new byte[] { 1, 2, 3 }, catalog.Calculate(dungeon, 0, 99)).Pending!;
+            var returnCommit = repository.CommitDungeonSettlement(owner, returning, returnRun, returnPrepared, growth);
+            Check(repository.ReadReturningAdventurer(owner, returnCommit.Character).Missions.Single(row => row.Id == 4) is { Progress: 1, State: 1 },
+                "真实零经验遗迹结算与回归第4任务进度同事务提交");
+            repository.CommitDungeonSettlement(owner, returning, returnRun, returnPrepared, growth);
+            Check(repository.ReadReturningAdventurer(owner, returnCommit.Character).Missions.Single(row => row.Id == 4).Progress == 1,
+                "遗迹结算重放不会二次累计回归任务");
         }
         finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
         Console.WriteLine($"PASS {TestCheck.Count - before} 真实零经验副本结算、恢复与返回断言");

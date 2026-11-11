@@ -169,6 +169,9 @@ internal sealed partial class CharacterRepository
                 proficiencyGained = checked((uint)proficiency.Credited);
             }
         }
+        if (!run.Entry.IsPractice && !run.Entry.IsTrainingRoom && !run.Entry.IsTutorial && !run.Entry.IsClassExperience &&
+            !run.Entry.IsQuestReplay && run.Entry.MockBattle is null)
+            RecordReturningEvent(db, tx, owner.Account, plan.TargetLevel, "dungeon clear", checked((int)prepared.Fact.DungeonId));
         // 推荐地下城通关按角色累计到u16上限，账号面板读取时求和；同一实例的重复报告已在上面提前返回。
         if (recommendedClear)
         {

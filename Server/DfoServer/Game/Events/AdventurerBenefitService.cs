@@ -35,9 +35,13 @@ internal sealed class AdventurerBenefitService(AdventurerBenefitCatalog catalog,
     }
     public long SetReturning(string account, long now)
     {
-        long until = checked(now + catalog.ReturningPeriodSeconds);
-        lock (gate) Commit(configuration with { ReturningUntil = configuration.ReturningUntil.SetItem(account, until) });
-        return until;
+        lock (gate)
+        {
+            if (ReturningUntil(account, now) is > 0 and var active) return active;
+            long until = checked(now + catalog.ReturningPeriodSeconds);
+            Commit(configuration with { ReturningUntil = configuration.ReturningUntil.SetItem(account, until) });
+            return until;
+        }
     }
     void Commit(AdventurerBenefitConfiguration next)
     {

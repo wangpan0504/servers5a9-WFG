@@ -383,6 +383,7 @@ internal static class SqliteMigrations
             DungeonCardRewardSchema.ResetSql.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal))),
         new(203, "追加券账号与奖励额度", DungeonTicketQuotaSchema.Upgrade),
         new(204, "通用Buff动态状态", static (db, tx) => Execute(db, tx, VariousBuffSchema.Definition.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal))),
+        new(205, "回归任务进度与奖励账本", static (db, tx) => Execute(db, tx, ReturningAdventurerSchema.Definition.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal))),
     ];
 
     const string AccountCommon45ListConstraint = "CHECK(list_type IN (0,1,2,3,7,12,38,45,46))";
@@ -2896,6 +2897,8 @@ internal static class SqliteMigrations
         "SELECT character_id,account,until_unix,permille FROM character_exp_bonus LIMIT 0",
         "SELECT character_id,account,kind,item_id,until_ms,maintenance,cool_group FROM character_consumable_states LIMIT 0",
         "SELECT character_id,account,buffs FROM character_various_buffs LIMIT 0",
+        "SELECT account,period_until,mission_id,progress FROM account_returning_mission_progress LIMIT 0",
+        "SELECT account,period_until,action,argument,day,recipient_id,item_id,item_count,claimed_at FROM account_returning_reward_claims LIMIT 0",
         "SELECT character_id,account,state_json FROM character_boss_selection_buff LIMIT 0",
         "SELECT character_id,account,job_type,expertness,learned_recipes FROM character_expert_job LIMIT 0",
         "SELECT character_id,account,giveup_state,machine_grade,machine_endurance FROM character_expert_meta LIMIT 0",
