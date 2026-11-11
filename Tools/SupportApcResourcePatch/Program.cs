@@ -3,6 +3,12 @@ using System.Text.Json;
 using PvfLib;
 
 Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+if (args is ["prepare-support-balanced-tiers", var balancedPvf, var balancedEvidence, var balancedOutput])
+{
+    using var source = PvfArchive.Open(balancedPvf);
+    SupportBalancedTierDelta.Write(source, balancedEvidence, balancedOutput);
+    return;
+}
 if (args is ["prepare-support-damage", var damagePvf, var damageOutput])
 {
     using var source = PvfArchive.Open(damagePvf);
