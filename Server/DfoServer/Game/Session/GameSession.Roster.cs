@@ -37,7 +37,7 @@ internal sealed partial class GameSession
         index < roster.Entries.Length ? roster.Entries[index] : null;
 
     public bool BeastSelectionBlocked(ushort index) => owner.Execute(() => BeastChannel.IsEntry(ChannelEntry) &&
-        PublishedRosterEntry(index) is { BeastEligible: false });
+        PublishedRosterEntry(index) is { } entry && !BeastChannel.Eligible(entry.Level, entry.BeastEligible));
 
     public bool PvpPrivateSelectionBlocked(ushort index) => owner.Execute(() =>
         PublishedRosterEntry(index)?.IsPvpPrivate == true && ChannelEntry?.Type is not (8 or 24));
