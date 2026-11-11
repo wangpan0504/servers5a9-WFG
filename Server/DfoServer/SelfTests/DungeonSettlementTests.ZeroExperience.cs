@@ -65,7 +65,7 @@ internal static partial class DungeonSettlementTests
             Check(repository.ReadReturningAdventurer(owner, returnCommit.Character).Missions.Single(row => row.Id == 4).Progress == 1,
                 "遗迹结算重放不会二次累计回归任务");
         }
-        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+        finally { if (Directory.Exists(root)) TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"PASS {TestCheck.Count - before} 真实零经验副本结算、恢复与返回断言");
     }
 }

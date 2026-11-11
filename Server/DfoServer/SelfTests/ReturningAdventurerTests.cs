@@ -141,7 +141,7 @@ internal static class ReturningAdventurerTests
                 using var command = db.CreateCommand(); command.CommandText = sql; command.ExecuteNonQuery();
             }
         }
-        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+        finally { if (Directory.Exists(root)) TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"PASS {Count - before} returning adventurer resource/storage assertions");
     }
 }
