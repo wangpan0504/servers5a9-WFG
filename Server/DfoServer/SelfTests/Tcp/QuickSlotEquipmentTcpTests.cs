@@ -47,22 +47,29 @@ internal static class QuickSlotEquipmentTcpTests
         var third = created.Inventory.Find(Slot(11))!;
         fixture.Sql("UPDATE character_fatigue SET used=maximum-1,remaining=1 WHERE character_id=$p0", created.Id);
         await fixture.StartAsync();
+        That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort, "infinite-fatigue on", out var enabled) &&
+            enabled == "OK {\"infiniteFatigue\":true}", "无限疲劳用例显式开启隔离服务开关，不依赖发行默认值");
         using (var peer = Open(fixture))
         {
             peer.Select();
             // 空快捷格在请求前面，与匹配客户端实际拖放顺序一致。
-            Move(peer, 3, 0, 9, 196386); Ack(peer, 3, 9); peer.Barrier();
+            Move(peer, 3, 0, 9, 196386); Ack(peer, 3, 9);
+            Published(peer, 3, 196386, 9); peer.Barrier();
             That(Read(3) == first.Core && Uid(3) == first.Uid && Read(9) is null,
                 "真实CMD19装入永久纹章，完整保存零Value、零耐久、UID及打造，无独立启用请求");
-            Move(peer, 8, 0, 10, 400360017); Ack(peer, 8, 10); peer.Barrier();
+            Move(peer, 8, 0, 10, 400360017); Ack(peer, 8, 10);
+            Published(peer, 8, 400360017, 10); peer.Barrier();
             That(Read(3) == first.Core && Read(8) == second.Core && Uid(8) == second.Uid && Read(10) is null,
                 "快捷栏已有纹章时允许继续拖入第二件快捷栏装备，不返错误23");
-            Move(peer, 3, 196386, 11, 400360000); Ack(peer, 3, 11); peer.Barrier();
+            Move(peer, 3, 196386, 11, 400360000); Ack(peer, 3, 11);
+            Published(peer, 3, 400360000, 11, 196386); peer.Barrier();
             That(Read(3) == third.Core && Uid(3) == third.Uid && Uid(11) == first.Uid && Uid(8) == second.Uid,
                 "多件快捷栏装备并存时按客户端右键顺序直接替换首格成功，品级、耐久不互换，不重建实例");
             Move(peer, 10, 0, 11, 196386); Ack(peer, 10, 11); peer.Barrier();
-            Move(peer, 8, 400360017, 3, 400360000); Ack(peer, 8, 3); peer.Barrier();
-            Move(peer, 11, 0, 3, 400360017); Ack(peer, 11, 3); peer.Barrier();
+            Move(peer, 8, 400360017, 3, 400360000); Ack(peer, 8, 3);
+            Published(peer, 8, 400360000, 3, 400360017); peer.Barrier();
+            Move(peer, 11, 0, 3, 400360017); Ack(peer, 11, 3);
+            Published(peer, 11, 400360017, 3); peer.Barrier();
             string before = Assets();
             peer.Send(23, [0, 255, 255, 255, 255, 0, 0, 0]);
             peer.Expect(1, 23, Build(w =>
@@ -71,7 +78,8 @@ internal static class QuickSlotEquipmentTcpTests
             peer.Send(23, [0, 8, 0, 255, 255, 0, 0, 0]); peer.Expect(1, 23, [0, 19, 0]); peer.Barrier();
             That(Assets() == before && Read(8) == third.Core,
                 "旧符咒75耐久不被普通一键修理补满，单件修理也拒绝且不扣费用，连接仍可继续");
-            Move(peer, 11, 400360017, 8, 400360000); Ack(peer, 11, 8); peer.Barrier();
+            Move(peer, 11, 400360017, 8, 400360000); Ack(peer, 11, 8);
+            Published(peer, 11, 400360000, 8, 400360017); peer.Barrier();
             before = Assets();
             Charge(peer, 10, 90); Charged(peer, 10, 1, 0); peer.Barrier();
             That(Assets() == before && Read(10) == first.Core,
@@ -108,8 +116,10 @@ internal static class QuickSlotEquipmentTcpTests
             Charge(peer, 11, 91); Charged(peer, 11, 0, 100); peer.Expect(0, 14); peer.Barrier();
             That(Read(11) == third.Core with { Durability = 300 } && Read(91)?.Count == 1,
                 "回滚后重新使用仍成功恢复100，源券余额与目标能量在同一事务提交");
-            Move(peer, 8, 400360017, 12, 0); Ack(peer, 8, 12); peer.Barrier();
-            Move(peer, 10, 196386, 6, 0); Ack(peer, 10, 6); peer.Barrier();
+            Move(peer, 8, 400360017, 12, 0); Ack(peer, 8, 12);
+            Published(peer, 12, 400360017, 8); peer.Barrier();
+            Move(peer, 10, 196386, 6, 0); Ack(peer, 10, 6);
+            Published(peer, 6, 196386, 10); peer.Barrier();
             FormalDungeonTcpTests.EntryTown(peer);
             var map = FormalDungeonTcpTests.Enter(peer);
             FormalDungeonTcpTests.Load(peer);
@@ -136,7 +146,8 @@ internal static class QuickSlotEquipmentTcpTests
         using (var peer = Open(fixture))
         {
             peer.Select(); peer.Barrier();
-            Move(peer, 11, 400360000, 6, 196386); Ack(peer, 11, 6); peer.Barrier();
+            Move(peer, 11, 400360000, 6, 196386); Ack(peer, 11, 6);
+            Published(peer, 6, 400360000, 11, 196386); peer.Barrier();
             string fatigue = fixture.Snapshot("SELECT * FROM character_fatigue");
             FormalDungeonTcpTests.EntryTown(peer);
             FormalDungeonTcpTests.Enter(peer);
@@ -201,6 +212,24 @@ internal static class QuickSlotEquipmentTcpTests
     }));
     static void Ack(TcpPeer peer, short source, short target) => peer.Expect(1, 19, Build(w =>
     { w.Write((byte)1); w.Write((byte)0); w.Write(source); w.Write(1); w.Write((byte)0); w.Write(target); }));
+    static void Published(TcpPeer peer, short firstSlot, int firstId, short secondSlot, int secondId = 0)
+    {
+        if (secondId == 0)
+        {
+            var cleared = peer.Expect(0, 14).Body;
+            That(cleared.Length == 126 && cleared[0] == 0 && U16(cleared, 1) == 1 &&
+                U16(cleared, 3) == secondSlot && BinaryPrimitives.ReadInt32LittleEndian(cleared.AsSpan(5)) == -1,
+                "移格先清真实空格，避免全量遗漏空格而残留旧图标");
+        }
+        var body = peer.Expect(0, 13).Body;
+        That(body.Length >= 5 && body[0] == 0 && body.Length == 5 + U16(body, 3) * 123,
+            "纹章移格成功后发布Main真实全量，沿13现有物品语义重建可见图标");
+        var rows = Enumerable.Range(0, U16(body, 3)).ToDictionary(row => U16(body, 5 + row * 123),
+            row => BinaryPrimitives.ReadInt32LittleEndian(body.AsSpan(7 + row * 123)));
+        That(rows.GetValueOrDefault((ushort)firstSlot) == firstId &&
+            rows.GetValueOrDefault((ushort)secondSlot) == secondId,
+            "实际下发列表包含装入、替换、快捷格互换或卸下后的两端真实模板");
+    }
     static void Charge(TcpPeer peer, int target, int source) => peer.Send(1113, Build(w =>
     { w.Write(Enumerable.Repeat((byte)0xA5, 13).ToArray()); w.Write(target); w.Write(source); }));
     static void Charged(TcpPeer peer, int target, uint status, int restored) => peer.Expect(1, 1113, Build(w =>

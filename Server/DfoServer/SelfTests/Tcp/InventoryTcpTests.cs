@@ -212,6 +212,10 @@ internal static partial class InventoryTcpTests
             var quickRequest = Convert.FromHexString("0003000000000000000000001500E047000000000000FFFFFFFF0000");
             peer.Send(19, quickRequest);
             peer.Expect(1, 19, Convert.FromHexString("0100030001000000001500"));
+            Bytes(peer.Expect(0, 14).Body.AsSpan(0, 9), [0, 1, 0, 21, 0, 255, 255, 255, 255],
+                "装备移入快捷栏后清除背包源格");
+            var quickList = peer.Expect(0, 13).Body;
+            That(U32(quickList, MainEntry(quickList, 3) + 2) == pantsId, "装备移入快捷栏后全量同步实际模板");
             peer.Barrier();
             That(Equals(fixture.Query("SELECT item_uid FROM character_inventory_slots WHERE character_id=$p0 AND list_type=0 AND slot_index=3", characterId)[0][0], quickUid), "equipment quick slot retains persisted UID");
             string quickSnapshot = Snapshot(fixture);
@@ -242,9 +246,12 @@ internal static partial class InventoryTcpTests
             DeltaAndAppearance(peer, 4);
             peer.Send(19, MoveItem(0, 8, pantsId, 0, 0, 3, 0));
             peer.Expect(1, 19, MoveAck(0, 8, 1, 0, 3));
+            Bytes(peer.Expect(0, 14).Body.AsSpan(0, 9), [0, 1, 0, 8, 0, 255, 255, 255, 255],
+                "快捷栏装备换格后清除旧快捷格");
+            peer.Expect(0, 13);
             peer.Barrier();
             That(Equals(fixture.Query("SELECT item_uid FROM character_inventory_slots WHERE character_id=$p0 AND list_type=0 AND slot_index=3", characterId)[0][0], quickUid),
-                "装备快捷栏首尾换格只有ACK，并保留原实例UID");
+                "装备快捷栏首尾换格同步列表，并保留原实例UID");
             peer.Send(19, MoveItem(0, 3, pantsId, 1, 3, 17, 0));
             peer.Expect(1, 19, MoveAck(0, 3, 1, 3, 17));
             DeltaAndAppearance(peer, 5, emptyQuick: true);
@@ -321,6 +328,10 @@ internal static partial class InventoryTcpTests
             That(Snapshot(fixture) == beforeReplay, "replayed discard does not mutate storage");
             peer.Send(19, MoveItem(0, 8, 0, 0, 0, 10, weaponId));
             peer.Expect(1, 19, MoveAck(0, 8, 1, 0, 10));
+            Bytes(peer.Expect(0, 14).Body.AsSpan(0, 9), [0, 1, 0, 10, 0, 255, 255, 255, 255],
+                "重启前快捷栏移动清除源格");
+            var beforeRestart = peer.Expect(0, 13).Body;
+            That(U32(beforeRestart, MainEntry(beforeRestart, 8) + 2) == weaponId, "重启前快捷栏同步完整装备模板");
             peer.Barrier();
         }
         await fixture.StopAsync();
