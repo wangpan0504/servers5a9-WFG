@@ -13,7 +13,8 @@ internal sealed record LukeRewardResultSpec(byte? RawCode, uint? ItemId, ushort?
         Matches(offer.Grants[0]) && offer.LukeAdditionalResults.All(row => row.RawCode == RawCode) &&
         offer.LukeAdditionalResults.Zip(offer.Grants.Skip(1)).All(pair => pair.First.Matches(pair.Second));
     internal bool Matches(InventoryReward grant) => RawCode.HasValue && RawFlag.HasValue && RawTail1.HasValue &&
-        EnchantUpgrade is <= byte.MaxValue && grant is { ItemId: > 0, Count: > 0 and <= ushort.MaxValue } &&
+        EnchantUpgrade is <= byte.MaxValue && grant is { ItemId: > 0, Count: >= 0 and <= ushort.MaxValue } &&
+        (grant.Count > 0 || grant.ItemId == RaidSongQuota.ItemId) &&
         ItemId == (uint)grant.ItemId && DisplayNumber == grant.Count && EnchantUpgrade == grant.EnchantUpgrade;
 }
 

@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using DfoServer.GameWorld.Items;
 
 namespace DfoServer.Game.Raids;
 
@@ -46,6 +47,7 @@ internal sealed partial class AntonRaidBattle
     readonly Dictionary<int, LukePhaseSettlement> lukeSettlements = [];
     readonly Dictionary<int, LukePhaseCommit> lukePhaseCommits = [];
     readonly ImmutableDictionary<ushort, ImmutableArray<RaidPhaseRewardPolicy>> memberRewardPolicies;
+    AccountMaterialDefinition? undefeatedSongLimit;
 
     internal static bool ValidLukeCompletion(LukeRaidCompletionPolicy policy) => !string.IsNullOrWhiteSpace(policy.Source) &&
         policy.WeeklyClearLimit > 0 && policy.Cycle is { Valid: true } && policy.Cutoff == LukeParticipationCutoff.TerminalCommittedFacts &&
@@ -73,10 +75,12 @@ internal sealed partial class AntonRaidBattle
         public ImmutableDictionary<ushort, ImmutableArray<ushort>> GuildParties { get; }
         public bool FiendwarNoFacilities { get; }
         public bool FiendwarNoBaseThreat { get; }
+        public AccountMaterialDefinition? SongLimit { get; }
         private LukePhaseSettlement(AntonRaidBattle battle, int phase)
         {
             var policy = battle.lukeCompletion!;
             Instance = battle.Instance; RaidType = battle.Kind; Phase = phase; FinalPhase = phase + 1 == battle.PhaseCount; Anchor = battle.lukeClock.GetUtcNow();
+            SongLimit = battle.undefeatedSongLimit;
             Week = policy.Cycle.Key(Anchor); Source = policy.Source; WeeklyClearLimit = policy.WeeklyClearLimit;
             Seconds = battle.lukePhaseAnchor is { } start
                 ? checked((uint)Math.Max(0, Math.Floor(battle.lukeClock.GetElapsedTime(start).TotalSeconds))) : 0;
@@ -184,7 +188,7 @@ internal sealed partial class AntonRaidBattle
                 receipt.Members.Any(row => row.Instance != Instance || row.RaidType != Kind || row.Phase != candidate.Phase ||
                     row.Event != candidate.Event || row.Anchor != candidate.Anchor.ToUnixTimeSeconds() || row.Week != candidate.Week ||
                     !candidate.Members.Any(member => member.Character == row.Character) ||
-                    row.Source != candidate.RewardsFor(row.Character).Source || !SameLukeOffers(row.Offers, candidate.RewardsFor(row.Character).Offers)))
+                    row.Source != candidate.RewardsFor(row.Character).Source || !AcceptedSongFace(row)))
                 throw new InvalidDataException("卢克阶段回执不属于原密封候选");
             if (lukePhaseCommits.TryGetValue(candidate.Phase, out var previous))
             {
@@ -192,6 +196,7 @@ internal sealed partial class AntonRaidBattle
                 return null;
             }
             lukePhaseCommits.Add(candidate.Phase, receipt);
+            if (candidate.SongLimit is not null) PublishSealedSongOffers(candidate.Phase, receipt);
             var transition = CommitPendingTransition();
             if (transition is not null || !(Kind == RaidKind.Luke || Kind == RaidKind.Prey && !PreyGuide) ||
                 pendingTransition is not { State: AntonRaidBattleState.Reward }) return transition;
@@ -199,6 +204,31 @@ internal sealed partial class AntonRaidBattle
             var before = current;
             current = current with { Revision = checked(current.Revision + 1) };
             return new(before, current);
+
+            bool AcceptedSongFace(RaidPhaseEligibility row)
+            {
+                var expectedOffers = candidate.RewardsFor(row.Character).Offers;
+                return SameLukeOffers(row.Offers, expectedOffers) ||
+                    candidate.SongLimit is not null && RaidSongQuota.IsOfferReduction(row.Offers, expectedOffers);
+            }
+        }
+    }
+
+    // 调用方已持有 gate。只改本阶段已密封的牌面，不改开团时保存的原始 memberRewardPolicies。
+    void PublishSealedSongOffers(int phase, LukePhaseCommit receipt)
+    {
+        foreach (var row in receipt.Members)
+        {
+            if (!row.Eligible) continue;
+            RaidActor? actor = null;
+            foreach (var key in members.Keys)
+                if (key.Character == row.Character) { actor = key; break; }
+            if (actor is null || !members.TryGetValue(actor, out var policies) || (uint)phase >= (uint)policies.Length) continue;
+            if (SameLukeOffers(policies[phase].Offers, row.Offers)) continue;
+            var next = policies.SetItem(phase, policies[phase] with { Offers = row.Offers });
+            members[actor] = next;
+            if (originalLukePolicies.ContainsKey(row.Character))
+                originalLukePolicies[row.Character] = next;
         }
     }
 }

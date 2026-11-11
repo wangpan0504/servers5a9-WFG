@@ -14,13 +14,16 @@ internal sealed class LukeResourceRewards
     // 旧资格仍按原冻结产物领取，不随新资源策略补差或重抽。
     internal static bool IsFormalSource(string source) => source is Source or LegacySource;
     readonly RaidScript script;
+    readonly ItemCatalog catalog;
     readonly RaidRewardContainers odds;
     readonly ImmutableDictionary<int, BoosterDefinition> containers;
+    internal AccountMaterialDefinition? UndefeatedSongLimit => RaidSongQuota.Limit(catalog);
 
     internal LukeResourceRewards(RaidScript script, ItemCatalog items, BoosterCatalog boosters)
     {
         if (script.Phases.Length != 2 || !script.Issues.IsEmpty) throw new InvalidDataException("卢克奖励阶段声明无效");
         this.script = script;
+        catalog = items;
         odds = new(script, items, boosters);
         var loaded = ImmutableDictionary.CreateBuilder<int, BoosterDefinition>();
         var visiting = new HashSet<int>();

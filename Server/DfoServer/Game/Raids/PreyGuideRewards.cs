@@ -13,6 +13,7 @@ internal sealed class PreyGuideRewards(RaidScript script, ItemCatalog items, Boo
     internal const string Source = "prey-guide-resource-v1;etc/raid/prey/prey.etc;single;weighted-squad=1;legacy=resolved;booster=box";
     internal const string TeamSource = "prey-team-resource-v1;etc/raid/prey/prey.etc;weighted-squad=1;per-character=1;privilege=entitled";
     readonly RaidRewardContainers containers = new(script, items, boosters);
+    internal AccountMaterialDefinition? UndefeatedSongLimit => RaidSongQuota.Limit(items);
 
     internal static bool ValidDisplay(RaidRewardOffer offer) => offer.Kind is 0 or 1 && offer.Card == 0 &&
         !offer.PreyDisplay.IsDefaultOrEmpty && offer.PreyDisplay.Length == offer.Grants.Length && offer.Grants.Length <= 32 &&

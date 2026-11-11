@@ -11,7 +11,7 @@ namespace DfoServer;
 
 internal static class SelfTestRunner
 {
-    public static async Task RunCoreAsync()
+    public static async Task RunCoreAsync(string? songPvfPath = null, bool loadSongPvf = true)
     {
         ServerDefaultsUpgradeTests.RunCore();
         SaveImportGuardTests.RunCore();
@@ -242,6 +242,8 @@ internal static class SelfTestRunner
         await DevelopmentGmTests.RunCoreAsync();
         LukeRewardRecoveryTests.RunCore();
         LukeResourceCompletionTests.RunCore();
+        RaidSongQuotaTests.RunCore();
+        RaidSongQuotaRepositoryTests.RunCore();
         LukeRewardResultTests.Run();
         AntonRewardDisplayTests.Run();
         DevelopmentEquipmentSlotTests.RunCore();
@@ -526,6 +528,8 @@ internal static class SelfTestRunner
         RaidCreateFlowTests.RunCore();
         FiendwarKeyLeaseTests.RunCore();
         DisasterDungeonTests.RunCore();
+        // 卢克重启子进程在方法开头返回，不会走到这里。完整 --selftest 自己带档案，不再读第二遍。
+        if (loadSongPvf) RaidSongQuotaTests.RunCoreResources(songPvfPath);
     }
 
     public static async Task RunAsync(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters, ItemResources itemResources)
@@ -543,7 +547,7 @@ internal static class SelfTestRunner
         MarriageShopTests.Run(pvf, itemResources);
         ImperialArenaTests.RunResources(pvf);
         WorldMapHoverTests.RunResources(towns, pvf);
-        await RunCoreAsync();
+        await RunCoreAsync(loadSongPvf: false);
         var sharedQuests = global::DfoServer.Testing.SelfTestCatalogs.Quests(pvf);
         var sharedSkills = SkillLearningCatalog.Load(pvf, itemResources.Contracts.ExpertSkillLevels);
         QuestOrdinaryCompletionTests.RunExpertJob(towns, pvf, characters, itemResources, sharedQuests);
@@ -605,6 +609,7 @@ internal static class SelfTestRunner
         PreyChannelTests.Run(towns, pvf, characters, itemResources);
         PreyTeamResourceTests.Run(pvf);
         PreyTeamResourceTests.RunRewards(pvf, itemResources);
+        RaidSongQuotaTests.RunResources(pvf, itemResources);
         SpecialAreaChannelTests.Run(towns, pvf);
         CharacterCreationTests.Run(towns, characters);
         PvpPrivateCharacterTests.RunResources(towns,pvf,characters,itemResources,sharedSkills);

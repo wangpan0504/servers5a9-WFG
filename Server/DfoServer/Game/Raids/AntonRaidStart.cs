@@ -226,7 +226,7 @@ internal sealed class AntonRaidStart(RaidRegistry registry, PartyService parties
             if (expected.Members.Any(member => RaidAdmissionPlan.Rejection(member.Actor.Session.ChannelEntry,
                 member.Actor.Session.Selected!) is not null || parties.Current(member.Actor.Session) is not null))
                 return new(19, "fiendwar-member-not-ready");
-            // 在全团owner/事务之外抽取每人完整结果，SQL重试与网络重发均复用原冻结产物。
+            // 在全团owner/事务之外抽取每人完整结果，SQL重试与网络重发均复用原产物。
             var policies = reservations.ToDictionary(member => member.Actor.Character,
                 member => expected.Guide ? fiendwarRewards!.CreateGuide(member.Actor.Session.PremiumPcRoom,
                     member.Expected.Inventory.PrivilegeService.IsActive(now.ToUnixTimeSeconds()), epicMultiplier: epicMultiplier) :
@@ -239,10 +239,13 @@ internal sealed class AntonRaidStart(RaidRegistry registry, PartyService parties
                 completion.Cycle.Key(now), completion.WeeklyClearLimit, definition.Resources.Fiendwar!.DailyAccountLimit, expected.Guide ? guideRoute : null) }).ToImmutableArray();
         }
         var kind = fiendwar ? RaidKind.Fiendwar : prey ? RaidKind.Prey : RaidKind.Anton;
+        AccountMaterialDefinition? songLimit = preyGuide ? preyRewards!.UndefeatedSongLimit
+            : preyTeam ? preyTeamRewards!.UndefeatedSongLimit
+            : fiendwar ? fiendwarRewards!.UndefeatedSongLimit : null;
         var battle = new AntonRaidBattle(definition.Resources.Script, kind: kind, completion: completion,
             antonPhaseProgress: !prey && !fiendwar && phaseProgress, clock: clock, antonRewards: prey || fiendwar ? null : rewards, phaseTimeout: timeout,
             fiendwar: fiendwar ? definition.Resources.Fiendwar : null, memberRewards: memberRewards, fiendwarRoute: guideRoute,
-            fiendwarMazeRandom: fiendwarMazeRandom, preyGuide: preyGuide, epicMultiplier: epicMultiplier);
+            fiendwarMazeRandom: fiendwarMazeRandom, preyGuide: preyGuide, epicMultiplier: epicMultiplier, undefeatedSongLimit: songLimit);
         battle.PrepareRaidPayments(reservations);
         var timerLease = timers?.Reserve(battle);
         if (timers is not null && timerLease is null) return new(19, "anton-clock-capacity");

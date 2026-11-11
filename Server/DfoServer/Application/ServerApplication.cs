@@ -114,7 +114,7 @@ public static class ServerApplication
             SqliteDatabaseBootstrap.EnableRuntimePooling();
         if (command.Kind == ServerCommandKind.SelfTestCore)
         {
-            try { await SelfTestRunner.RunCoreAsync(); }
+            try { await SelfTestRunner.RunCoreAsync(options.PvfPath); }
             finally { SqliteDatabaseBootstrap.ReleaseRuntimePool(); }
             return 0;
         }
