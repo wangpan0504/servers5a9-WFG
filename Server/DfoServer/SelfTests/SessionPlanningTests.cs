@@ -789,6 +789,7 @@ internal static partial class SessionPlanningTests
                 INSERT INTO character_fatigue VALUES({{id}},'planning',0,156,0,156,0,0);
                 INSERT INTO character_fatigue_acceleration VALUES({{id}},'planning',1);
                 INSERT INTO character_fatigue_reset_days VALUES({{id}},739916);
+                INSERT INTO character_fatigue_battery VALUES({{id}},123,53);
                 INSERT INTO character_pcroom_claims VALUES({{id}},'planning',20261031);
                 INSERT INTO character_teleport_cooldowns(character_id,account,potion_until,aura_until) VALUES({{id}},'planning',2000000000000,2000000420000);
                 INSERT INTO character_exp_bonus VALUES({{id}},'planning',2000007200,1000);

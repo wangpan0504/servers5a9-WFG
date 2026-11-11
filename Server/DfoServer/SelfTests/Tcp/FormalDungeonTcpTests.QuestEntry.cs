@@ -89,7 +89,7 @@ internal static partial class FormalDungeonTcpTests
                 if (scenario.Quest == 2948 || auxiliary)
                 {
                     int used = checked((int)attempt+1);
-                    peer.Expect(0,36,[checked((byte)used),0,156,0,0,0,checked((byte)(156-used)),0,0,0]);
+                    peer.Expect(0,36,[checked((byte)used),0,156,0,0,0,0,0,0,0]);
                     peer.Send(37,new byte[8]); peer.Barrier();
                     That(maze.QuestConnectionTokens.Count == 0 && fixture.Query(
                         "SELECT used,remaining FROM character_fatigue WHERE character_id=$p0",peer.Id) is [[long actualUsed,long remaining]] &&

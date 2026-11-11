@@ -7,7 +7,12 @@ internal sealed partial class GameSession
 {
     ExperienceBonuses PlanExperience(Character character, ExperienceEvent kind, uint basis, uint rank, long now, uint dungeonId, string equipmentModule = "dungeon")
     {
-        ExperienceBonuses Complete(ExperienceBonuses reward) => DfoServer.Game.PcRoom.FatigueAccelerationRules.Apply(ApplyAdventurerExperience(character, kind, basis, now, reward), basis,
+        ExperienceBonuses Complete(ExperienceBonuses reward) => DfoServer.Game.PcRoom.FatigueAccelerationRules.Apply(FatigueBattery.Apply(
+            ApplyAdventurerExperience(character, kind, basis, now, reward), basis,
+            kind == ExperienceEvent.Kill && character.Fatigue?.BatteryBuff > 0 &&
+            repository.FatigueBatteryCatalog?.Eligible(character.Level) == true &&
+            formalDungeon is { } batteryDungeon && batteryDungeon.Entry.DungeonId == dungeonId &&
+            batteryDungeon.Entry.UsesFatigue && !batteryDungeon.Entry.IsTutorial && !batteryDungeon.Entry.IsTrainingRoom), basis,
             (kind is ExperienceEvent.Kill or ExperienceEvent.Clear) && formalDungeon is { } dungeon && dungeon.Entry.DungeonId == dungeonId
                 ? dungeon.Run.FatigueAccelerationPercent : 0);
         if (experienceBonuses is not null)

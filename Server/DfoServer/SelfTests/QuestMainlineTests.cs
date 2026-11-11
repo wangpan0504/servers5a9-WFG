@@ -70,7 +70,7 @@ internal static class QuestMainlineTests
         {
         // 剧情路线现已按真实规则消耗疲劳；本用例只考连续主线推进，不考疲劳经济，沿用调试开关的无限疲劳避免跨日补给。
         using var f = new QuestSceneTests.Fixture(towns,characters,skills,growth,quests,false,1,[],job: job,
-            debugSettings: new DfoServer.Game.Settings.GameDebugSettings());
+            debugSettings: new DfoServer.Game.Settings.GameDebugSettings(initialFatigueAccounts: ["scene-quest"]));
         uint lastDungeon = 3;
         bool retryChecked = false;
         var initial = f.Read();
@@ -193,7 +193,26 @@ internal static class QuestMainlineTests
                 var equipment = current.Inventory.Items.Where(item => item.Position.List == InventoryListType.Main && item.Core.Kind == ItemKind.Equipment &&
                     !items.Items.Get(item.Core.ItemId).DisjointForbidden && !items.Items.Get(item.Core.ItemId).AttachType.Contains("[trade delete]",StringComparison.OrdinalIgnoreCase))
                     .OrderByDescending(item => items.Items.Get(item.Core.ItemId).DisjointValue).FirstOrDefault();
-                if (equipment is null) throw new InvalidOperationException("正常主线实际装备不足以分解任务无色小晶块");
+                if (equipment is null)
+                {
+                    // 剧情怪物不保证掉可分解装备；用已赚金币到实际可达NPC购买普通装备。
+                    var reachable = f.TravelPaths(towns).Keys.SelectMany(key => towns.Areas[key].Map(QuestEligibility.Completed(current)).Npcs)
+                        .Select(npc => checked((int)npc.Id)).ToHashSet();
+                    var product = items.Shops.Shops.Where(pair => !pair.Value.Raid && reachable.Contains(pair.Value.NpcId))
+                        .SelectMany(pair => pair.Value.Items.Select(id => (Shop: pair.Key, Npc: pair.Value.NpcId, Item: items.Items.Get(id))))
+                        .Where(row => row.Item.Kind == ItemKind.Equipment && row.Item.Rarity <= 1 && row.Item.MinimumLevel <= current.Level &&
+                            row.Item.DisjointValue > 0 && !row.Item.DisjointForbidden &&
+                            !row.Item.AttachType.Contains("[trade delete]", StringComparison.OrdinalIgnoreCase) &&
+                            row.Item.ShopPrice is { Gold: > 0, Materials.IsEmpty: true, Limit: null } && row.Item.ShopPrice.Gold <= current.Inventory.Gold)
+                        .OrderByDescending(row => row.Item.DisjointValue).First();
+                    Npc(product.Npc);
+                    uint gold = f.Session.Selected!.Inventory.Gold;
+                    var shop = new InventoryShopService(items.Items,items.Shops,items.GoldLimits,items.EpicPieces);
+                    That(f.Session.PlanAndCommitShopBuy(product.Shop, character => shop.Buy(character,new(product.Item.Id,1,product.Shop,product.Npc),out _)).Accepted &&
+                        f.Session.Selected!.Inventory.Gold == gold-product.Item.ShopPrice.Gold,
+                        "补给装备从真实NPC商店购买并足额扣除主线所得金币");
+                    continue;
+                }
                 That(f.Session.MutateInventory(character => disjoint.Disjoint(character,new(equipment.Position,-1,0),out _)).Accepted,
                     "任务材料由已领取装备的实际分解产物提供，不注入材料或完成位");
             }
@@ -241,7 +260,7 @@ internal static class QuestMainlineTests
         FormalDungeonReceipt Enter(uint dungeon,uint quest)
         {
             var result = f.Session.EnterFormalDungeon(dungeon,quest,0,dungeons,rooms,drops,items.Items,pieces: items.EpicPieces);
-            That(result is not null,$"连续主线当前Lv{f.Session.Selected!.Level}真实入场{dungeon}/{quest}，{f.Session.Selected.Position}");
+            That(result is not null,$"连续主线当前Lv{f.Session.Selected!.Level}真实入场{dungeon}/{quest}，{f.Session.Selected.Position}，拒绝原因{f.Session.LastFormalDungeonRejection}");
             return f.Session.CompleteFormalDungeonLoading()!;
         }
         void ClearQuest(ushort id)
@@ -255,15 +274,7 @@ internal static class QuestMainlineTests
             while (f.Session.Selected!.Level < level)
             {
                 That(++runs <= 100,"普通副本的真实经验在有界次数内满足后继等级，不注入经验");
-                Gate(lastDungeon);
-                var current = f.Session.Selected!;
-                var gate = towns.Areas[(current.Position.Town,current.Position.Area)];
-                var done = QuestEligibility.Completed(current);
-                var routine = towns.DungeonMaps[gate.DungeonWorldMap!.Value].Options.Where(option => option.QuestId == -1 ||
-                    (option.InProgress ? current.ActiveMainQuests.Any(active => active.QuestId == option.QuestId) : done.Contains(option.QuestId)))
-                    .Select(option => checked((uint)option.DungeonId)).Distinct().OrderBy(id => id == lastDungeon ? 0 : 1)
-                    .First(id => DungeonEntryPlan.TryCreate(dungeons,current,id,0,0,out _,out _,quests: quests));
-                var settled = Clear(Enter(routine,0));
+                var settled = Clear(EnterRoutine());
                 if (!retryChecked)
                 {
                     var before = f.Read(); var selected = f.Session.Selected;
@@ -284,6 +295,18 @@ internal static class QuestMainlineTests
                 }
                 Return();
             }
+        }
+        FormalDungeonReceipt EnterRoutine()
+        {
+            Gate(lastDungeon);
+            var current = f.Session.Selected!;
+            var gate = towns.Areas[(current.Position.Town,current.Position.Area)];
+            var done = QuestEligibility.Completed(current);
+            var routine = towns.DungeonMaps[gate.DungeonWorldMap!.Value].Options.Where(option => option.QuestId == -1 ||
+                (option.InProgress ? current.ActiveMainQuests.Any(active => active.QuestId == option.QuestId) : done.Contains(option.QuestId)))
+                .Select(option => checked((uint)option.DungeonId)).Distinct().OrderBy(id => id == lastDungeon ? 0 : 1)
+                .First(id => DungeonEntryPlan.TryCreate(dungeons,current,id,0,0,out _,out _,quests: quests));
+            return Enter(routine,0);
         }
         void Return() => That(f.Session.ReturnFromFormalDungeon() is not null,"连续主线清图后正常回城");
         FormalDungeonReceipt Clear(FormalDungeonReceipt receipt)

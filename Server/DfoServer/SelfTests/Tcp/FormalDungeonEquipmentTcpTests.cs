@@ -143,7 +143,7 @@ internal static partial class FormalDungeonTcpTests
                         map.Length == 16 && map[13] == 0 && map[14] == 0 && map[15] == byte.MaxValue),
                     $"副本{family.Name}换装后合成请求通过Handler45，已清房间沿缓存模式恢复");
                 Load(peer, fatigue: false);
-                peer.Expect(0, 36, [2, 0, 156, 0, 0, 0, 154, 0, 0, 0]);
+                peer.Expect(0, 36, [2, 0, 156, 0, 0, 0, 0, 0, 0, 0]);
                 peer.Barrier();
 
                 (short Slot, long Uid) FindBag(int id, long except = 0)

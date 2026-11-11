@@ -26,6 +26,7 @@ internal sealed partial class CharacterRepository(string path, DfoServer.GameWor
         DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
         (promotionClock ?? TimeProvider.System).GetUtcNow().ToUnixTimeSeconds()));
     public DfoServer.GameWorld.Adventure.AdventureCatalog? AdventureCatalog => adventureCatalog;
+    public FatigueBatteryCatalog? FatigueBatteryCatalog => growthCatalog?.FatigueBattery;
     public Character[] List(AccountOwners.Lease owner) => owner.Execute(() =>
     {
         using var db = database.Open();

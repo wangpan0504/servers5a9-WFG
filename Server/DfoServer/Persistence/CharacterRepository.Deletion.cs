@@ -204,7 +204,7 @@ internal sealed partial class CharacterRepository
             // 队伍身份不随单个角色删除，独立评分及整局来源也继续保留。
             "account_pvp_total_ratings", "account_pvp_total_rating_claims",
             // 疲劳owner删除时级联清除日戳，不对没有account列的子表重复执行删除。
-            "character_fatigue_reset_days",
+            "character_fatigue_reset_days", "character_fatigue_battery",
             // 原翻牌回执删除时级联清除刷新标记，子表没有account列。
             "character_clear_reward_resets",
             "character_server_item_usage",

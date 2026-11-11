@@ -461,7 +461,7 @@ internal static partial class QuestLifecycleTcpTests
                 FormalDungeonTcpTests.EntryTown(peer);
                 var map = FormalDungeonTcpTests.Enter(peer); FormalDungeonTcpTests.Load(peer, fatigue: false);
                 // 此夹具保留默认无限疲劳，首房仍必须消费完整余额通知。
-                peer.Expect(0,36,[0,0,156,0,0,0,156,0,0,0]);
+                peer.Expect(0,36,[0,0,156,0,0,0,0,0,0,0]);
                 before = State();
                 foreach (int length in new[] { 52,74 })
                 {

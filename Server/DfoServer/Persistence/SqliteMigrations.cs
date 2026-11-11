@@ -387,6 +387,7 @@ internal static class SqliteMigrations
             "CHECK(source_uid>0)", "CHECK(source_uid>=0)")),
         new(206, "回归账本与已发布本地205兼容", UpgradeReturningAdventurer206),
         new(207, "账号冒险团四组名称与图标", SocialSchema.UpgradeGroups),
+        new(208, "角色疲劳蓄电池充能与祝福", FatigueBatterySchema.Upgrade),
     ];
 
     static void UpgradeReturningAdventurer206(SqliteConnection db, SqliteTransaction tx)
@@ -2718,6 +2719,7 @@ internal static class SqliteMigrations
             (PvpMissionSchema.ClaimTable,PvpMissionSchema.Claims),
             (PvpDailyMissionSchema.Table,PvpDailyMissionSchema.Sql),
             (FatigueDailyResetSchema.Table,FatigueDailyResetSchema.Definition),
+            (FatigueBatterySchema.Table,FatigueBatterySchema.Definition),
             (ServerItemUsageSchema.StateTable,ServerItemUsageSchema.StateDefinition),
             (ServerItemUsageSchema.AccountTable,ServerItemUsageSchema.AccountDefinition),
             ("marriage_records",MarriageSameAccountSchema.Definition),
