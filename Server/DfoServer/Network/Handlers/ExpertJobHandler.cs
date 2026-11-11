@@ -291,9 +291,11 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
             catch (System.Data.Common.DbException error) { throw new IOException("Committed machine disjoint publication failed", error); }
         }
         RefreshOpenStore(context, receipt.Character);
-        await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(receipt.Character, context.Session.ReadPvpGrade(receipt.Character), context.Channel,
-            sceneState: ActorSceneState(receipt.Phase), adventureName: context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom, returningAdventurerType: context.Session.ReturningAdventurerType), "expert_job_disjoint_actor", Current);
-        await NotifyInfo(context, receipt.Character, Current, "expert_job_disjoint_info");
+        // gain exp允许抽到0；只有熟练度实际改变才重装Actor，避免批量分解重复重建角色。
+        if (receipt.Character.ExpertJobExperience != current.ExpertJobExperience)
+            await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(receipt.Character, context.Session.ReadPvpGrade(receipt.Character), context.Channel,
+                sceneState: ActorSceneState(receipt.Phase), adventureName: context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom, returningAdventurerType: context.Session.ReturningAdventurerType), "expert_job_disjoint_actor", Current);
+        // 0236FDB0已将ACK235尾部耐久写入当前机器及本人副职业；不用205再次初始化窗口。
         log.Write("expert_job_disjoint", new { Connection = context.Id, Character = current.Id, Accepted = true,
             Rule = "pvf-disjointer-v1", request.SourceSlot, SourceItem = current.Inventory.Find(new(InventoryListType.Main, (short)request.SourceSlot))?.Core.ItemId,
             current.ExpertMachineGrade, Rewards = products.Rewards, receipt.Character.ExpertMachineEndurance });

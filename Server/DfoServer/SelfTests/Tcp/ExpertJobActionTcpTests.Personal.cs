@@ -19,6 +19,7 @@ internal static partial class ExpertJobActionTcpTests
         var scripts = resources.ItemResources.ExpertJobs;
         scripts.TryRepair(3, 2, out _, out int grade2Max);
         uint upgradedMax = checked((uint)grade2Max);
+        int machineExperience = 200;
         var targetTemplate = items.Get(10400);
         var machineTemplate = items.Get(10114);
         var cardRecipe = scripts.KnownCards(1).Order().Select(id => scripts.TryCardRecipe(id, out var row) ? row : null)
@@ -124,8 +125,8 @@ internal static partial class ExpertJobActionTcpTests
             byte[] ack = peer.Expect(1, 235).Body;
             That(ack[0] == 1 && U16(ack, 1) == 3 && U16(ack, 4) == machineId && U32(ack, ack.Length - 4) == 289,
                 "战斗阶段个人分解机成功分解装备并扣减耐久");
-            That(ActorSceneState(peer.Expect(0, 2).Body) == 1, "战斗阶段个人分解Actor通知保持副本场景状态");
-            peer.Expect(0, 205, MachineInfo(289));
+            if (ReadMachineProgress(peer, fixture, machineId, ref machineExperience) is { } disjointActor)
+                That(ActorSceneState(disjointActor) == 1, "战斗阶段熟练度变化通知保持副本场景状态");
             peer.Barrier();
 
             peer.Send(236);
@@ -184,8 +185,8 @@ internal static partial class ExpertJobActionTcpTests
             ack = peer.Expect(1, 235).Body;
             That(ack[0] == 1 && U16(ack, 1) == 4 && U16(ack, 4) == machineId && U32(ack, ack.Length - 4) == upgradedMax - 1,
                 "结算阶段个人分解机成功分解装备并扣减耐久");
-            That(ActorSceneState(peer.Expect(0, 2).Body) == 1, "结算阶段个人分解Actor通知保持副本场景状态");
-            peer.Expect(0, 205, Build(w => { w.Write((byte)0); w.Write((byte)3); w.Write(2u); w.Write(upgradedMax - 1); }));
+            if (ReadMachineProgress(peer, fixture, machineId, ref machineExperience) is { } settlementActor)
+                That(ActorSceneState(settlementActor) == 1, "结算阶段熟练度变化通知保持副本场景状态");
             peer.Send(600);
             peer.Barrier();
         }
