@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Text;
 using DfoServer.Game.Characters;
+using DfoServer.Game.Social;
 
 namespace DfoServer.Network.Parsers;
 
@@ -8,6 +9,26 @@ internal sealed record SocialRequest(string Name, byte Server = 0, string Messag
 
 internal static class SocialRequests
 {
+    public static AccountFriendGroup[] AccountGroups(ReadOnlySpan<byte> body)
+    {
+        if (body.Length != 61) throw new InvalidDataException("冒险团分组请求必须为61字节");
+        // 前13B为不透明字段，不赋业务含义，也不要求为零。
+        var groups = new AccountFriendGroup[4];
+        for (int i = 0; i < groups.Length; i++)
+        {
+            byte icon = body[13 + i];
+            if (icon > 7) throw new InvalidDataException("冒险团分组图标越界");
+            var slot = body.Slice(17 + i * 11, 11);
+            int nul = slot.IndexOf((byte)0);
+            if (nul < 0) throw new InvalidDataException("冒险团分组名称缺少NUL");
+            string name;
+            try { name = CharacterName.Encoding.GetString(slot[..nul]); }
+            catch (DecoderFallbackException e) { throw new InvalidDataException("冒险团分组名称不是CP936", e); }
+            groups[i] = new(icon, name);
+        }
+        if (!AccountFriendGroup.Valid(groups)) throw new InvalidDataException("冒险团分组名称非法或重复");
+        return groups;
+    }
     internal ref struct Reader(ReadOnlySpan<byte> body)
     {
         ReadOnlySpan<byte> remaining = body;

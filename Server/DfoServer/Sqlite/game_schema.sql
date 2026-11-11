@@ -2698,6 +2698,13 @@ CREATE TABLE account_returning_mission_progress(
     progress INTEGER NOT NULL CHECK(progress BETWEEN 0 AND 4294967295),
     PRIMARY KEY(account,period_until,mission_id)
 ) STRICT;
+CREATE TABLE account_social_groups(
+  account TEXT NOT NULL REFERENCES accounts(account_id),
+  slot INTEGER NOT NULL CHECK(slot BETWEEN 0 AND 3),
+  icon INTEGER NOT NULL CHECK(icon BETWEEN 0 AND 7),
+  name TEXT NOT NULL CHECK(length(name) BETWEEN 1 AND 10),
+  PRIMARY KEY(account,slot),UNIQUE(account,name)
+) STRICT;
 CREATE TABLE account_returning_reward_claims(
     account TEXT NOT NULL,
     period_until INTEGER NOT NULL CHECK(period_until BETWEEN 1 AND 4294967295),

@@ -2,6 +2,32 @@ namespace DfoServer.Persistence;
 
 internal static class SocialSchema
 {
+    internal const string GroupsTable = "account_social_groups";
+    internal const string GroupsSql = """
+        CREATE TABLE account_social_groups(
+          account TEXT NOT NULL REFERENCES accounts(account_id),
+          slot INTEGER NOT NULL CHECK(slot BETWEEN 0 AND 3),
+          icon INTEGER NOT NULL CHECK(icon BETWEEN 0 AND 7),
+          name TEXT NOT NULL CHECK(length(name) BETWEEN 1 AND 10),
+          PRIMARY KEY(account,slot),UNIQUE(account,name)
+        ) STRICT;
+        """;
+    internal static void UpgradeGroups(Microsoft.Data.Sqlite.SqliteConnection db, Microsoft.Data.Sqlite.SqliteTransaction tx)
+    {
+        using var query = db.CreateCommand(); query.Transaction = tx;
+        query.CommandText = "SELECT type,sql FROM sqlite_schema WHERE name='account_social_groups'";
+        using (var row = query.ExecuteReader())
+        {
+            if (row.Read())
+            {
+                if (row.GetString(0) != "table" || SqliteMigrations.NormalizeTable(row.GetString(1), GroupsTable) !=
+                    SqliteMigrations.NormalizeTable(GroupsSql, GroupsTable))
+                    throw new InvalidDataException("冒险团分组迁移拒绝未知同名结构");
+                return;
+            }
+        }
+        SqliteMigrations.Execute(db, tx, GroupsSql);
+    }
     internal static void Upgrade(Microsoft.Data.Sqlite.SqliteConnection db, Microsoft.Data.Sqlite.SqliteTransaction tx)
     {
         SqliteMigrations.Execute(db, tx, Sql.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ")
