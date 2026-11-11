@@ -89,6 +89,7 @@ internal static class ChatServiceTests
         Truncation();
         RunRateRules();
         ChannelMapping();
+        OfficialMegaphoneRules();
         Wire();
         MegaphoneWire();
         ItemLinkWire();
@@ -655,6 +656,46 @@ internal static class ChatServiceTests
             packet[^1]);
     }
 
+    // chat定向组复用这组无网络规则，不调用整套核心自测。
+    internal static void OfficialMegaphoneRules()
+    {
+        int[] retained = [4, 5, 8, 13, 22, 23, 24, 32, 39, 40, 45, 50, 53, 54, 55, 64];
+        int[] allowed = [22, 23, 32, 39, 40, 45, 50, 53, 54, 55, 64];
+        foreach (int type in Enumerable.Range(0, 256))
+        {
+            var channel = new ChannelEntry(new(2, 10), type, "[test]");
+            byte expected = retained.Contains(type) ? (byte)type : (byte)0;
+            That(channel.LoginType == expected && ChannelPackets.LoginChannelType(channel) == expected &&
+                ChannelPackets.Endpoint("127.0.0.1", 10011, channelType: channel.LoginType)[3] == expected,
+                $"共享频道类型映射保持原LOGIN保留/fallback输出：{type}");
+            That(ChatService.AllowsOfficialMegaphone(channel) == allowed.Contains(type),
+                $"GM喇叭使用客户端实际模式，包含raw25回退0及4/5拒绝：{type}");
+        }
+        That(!ChatService.AllowsOfficialMegaphone(null), "缺少真实频道不能使用GM喇叭");
+        That(ChatService.TryKind(14, out var kind) && kind == ChatKind.OfficialMegaphone &&
+            ChatService.MegaphoneItemId(kind) == 1120 && MegaphonePackets.TypeOf(kind) == 14,
+            "1120使用独立业务种类和原生14，不借普通36/37");
+        That(!ChatService.TryKind(53, out _), "同心53资格未闭合，保留未接入拒绝");
+        ChatRecipient[] recipients =
+        [
+            Recipient("same", 100, null, Scene(10)),
+            Recipient("other-channel", 101, null, Scene(11)),
+            Recipient("other-server", 102, null, Scene(10) with { Channel = new(3, 10) })
+        ];
+        var delivery = new Delivery(recipients);
+        var origin = new ChatOrigin(100, "GMHolder", null, Scene(10));
+        var dispatch = new ChatService(new Store(), delivery).Broadcast(new(14, 9999, 71, 2, "hi"), origin);
+        That(dispatch.Accepted && dispatch.Recipients == 2 && delivery.Filter!(recipients[1]) && !delivery.Filter(recipients[2]) &&
+            delivery.Notice is { Kind: ChatKind.OfficialMegaphone, Megaphone.Actor: 100, Megaphone.Speaker: "GMHolder" },
+            "GM喇叭同分组跨频道投递，跨分组隔离且保留真实发言人");
+        byte[] expectedBody = MegaphoneBody(14, "GMHolder", "hi");
+        expectedBody[1] = 2;
+        expectedBody[3] = 10;
+        BinaryPrimitives.WriteUInt16LittleEndian(expectedBody.AsSpan(4), 100);
+        Bytes(MegaphonePackets.Build(kind, delivery.Notice!.Megaphone!), expectedBody,
+            "GM14的118保留6B来源头、真实名字与三串，不在服务端伪造官方显示名");
+    }
+
     static void Routing()
     {
         var store = new Store();
@@ -943,6 +984,8 @@ internal static class ChatServiceTests
             That(!heldMegaphone!.Guard!(),"初筛误放行时，发送前仍拒绝非本频道的频道喇叭");
             session.TryDeliverChat(_=>true,foreignHorn with { Kind = ChatKind.ServerMegaphone });
             That(heldMegaphone!.Guard!(),"服务器喇叭在相同分组内不按接收者频道限制");
+            session.TryDeliverChat(_=>true,foreignHorn with { Kind = ChatKind.OfficialMegaphone });
+            That(heldMegaphone!.Guard!(),"GM喇叭同样复用服务器范围的出队身份门禁");
             var queuedMegaphone = heldMegaphone;
             session.TryDeliverChat(_=>true,foreignHorn with { Kind = ChatKind.ServerMegaphone,
                 Megaphone = foreignHorn.Megaphone! with { Channel = new(2,10) } });

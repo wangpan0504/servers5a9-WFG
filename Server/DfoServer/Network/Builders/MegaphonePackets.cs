@@ -5,7 +5,7 @@ namespace DfoServer.Network.Builders;
 
 /// <summary>
 /// 喇叭通道 <c>NOTI 0x0076 MEGAPHONE_MSG</c>：客户端「喇叭」页签里的一行 <c>str1 : str2</c>，
-/// 两种玩家喇叭都保留发言人和来源频道，不使用官方公告标签。
+/// 包体均保留真实发言人和来源频道；118/type14由客户端选择官方显示名，不在服务端替换。
 /// <para>
 /// 正文：<c>[u8 type][u8 B][u8 C][u8 D][u16LE E][str1][str2][str3]</c>，
 /// 每条str保留u32字节长度。023A3AE0按来源分组B、显示模式C、来源频道D、角色编号E读取；
@@ -49,14 +49,15 @@ internal static class MegaphonePackets
     const string TextFallback = " ";
 
     /// <summary>
-    /// 玩家服务器/频道喇叭对应原生type11/13，不能复用官方type14。
+    /// 玩家服务器/频道喇叭对应原生type11/13，GM1120独立对应官方type14。
     /// 非喇叭种类直接抛出，避免静默按频道喇叭发出去。
     /// </summary>
     public static byte TypeOf(ChatKind kind) => kind switch
     {
         ChatKind.ServerMegaphone => ServerType,
         ChatKind.ChannelMegaphone => ChannelType,
-        _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "只有服务器/频道喇叭有 0x0076 类型")
+        ChatKind.OfficialMegaphone => (byte)ChatMessageType.Official1120Megaphone,
+        _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "只有喇叭种类有 0x0076 类型")
     };
 
     /// <summary>按种类构造一帧 <c>NOTI 0x0076</c> 正文，<c>str3</c> 用固定占位（生产入口）。</summary>

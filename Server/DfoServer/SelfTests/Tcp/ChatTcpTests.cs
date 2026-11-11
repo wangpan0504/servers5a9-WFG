@@ -34,7 +34,7 @@ namespace DfoServer.Testing;
 /// </list>
 /// 期望值来自实测收包样本、反汇编结论与仓库既有背包查询，不调用服务端 Parser/Builder 反算。
 /// </summary>
-internal static class ChatTcpTests
+internal static partial class ChatTcpTests
 {
     const ushort CommandSendMessage = 0x0011;
     const ushort CommandItemHyperlink = 0x01A8;
@@ -55,6 +55,7 @@ internal static class ChatTcpTests
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
         int before = Count;
+        ChatServiceTests.OfficialMegaphoneRules();
         var clock = new DailyBoosterTestClock(new DateTimeOffset(2026, 1, 15, 12, 0, 0, TimeSpan.Zero));
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "chat"), resources: resources, clock: clock);
         var repository = new CharacterRepository(fixture.Database);
@@ -80,6 +81,7 @@ internal static class ChatTcpTests
                         .Add(new(0, new(InventoryListType.Main, 68), InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(37), 1)))
                         .Add(new(0, new(InventoryListType.Main, 69), InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(36), 2)))
                         .Add(new(0, new(InventoryListType.Main, 70), InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(37), 2)))
+                        .Add(new(0, new(InventoryListType.Main, 71), InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(1120), 1)))
                 };
             if (name == "ChatD")
                 inventory = inventory with { Items = inventory.Items.Add(new(0,new(InventoryListType.Main,68),
@@ -87,6 +89,7 @@ internal static class ChatTcpTests
             profiles[name] = repository.Create(owner, candidate with { Level = 20, InitialLearning = learning, Inventory = inventory });
         }
 
+        OfficialMegaphoneSessions(fixture, resources, clock);
         await fixture.StartAsync();
 
         // 公会成员表：A、B 在选角前入会；C 的成员行在它选角之后才写入，用来验证"投递前锁内复核会话快照"。
@@ -273,7 +276,7 @@ internal static class ChatTcpTests
         That(CountSlot(68) == channelMegaphoneBefore && channelMegaphoneBefore == 1, "槽位不匹配不扣道具");
 
         // ⑨ 频道喇叭（type 13）：槽 68 扣 1 个，同频道的 A、B、C 各收一帧 0x76 喇叭行
-        // （type 0x0B = Ch. 频道标签，str1=ChatA、str2=频道喇叭）；另一频道的 D 不收。
+        // （type13，str1=ChatA、str2=频道喇叭）；另一频道的D不收。
         NextChatWindow();
         alpha.Send(CommandSendMessage, SendBody(13, 0, 68, "频道喇叭"));
         byte[] channelMegaphone = MegaphoneBody(13, "ChatA", "频道喇叭", 2, 10, alpha.Id);
@@ -285,7 +288,7 @@ internal static class ChatTcpTests
         That(CountSlot(68) == 0, "频道喇叭扣减后库存为 0");
 
         // ⑩ 服务器喇叭（type 11）：槽 67 扣 1 个（2→1），全服 4 个在线会话各收一帧 0x76 喇叭行
-        // （type 0x0E = D&F 官方标签，客户端会忽略 str1），不弹 0x06AD 公告框。
+        // （type11保留真实str1），不弹0x06AD公告框；官方type14仅用于1120。
         NextChatWindow();
         alpha.Send(CommandSendMessage, SendBody(11, 0, 67, "服务器喇叭"));
         byte[] serverMegaphone = MegaphoneBody(11, "ChatA", "服务器喇叭", 2, 10, alpha.Id);
@@ -363,6 +366,9 @@ internal static class ChatTcpTests
         Same(beta.Expect(0,NoticeHyperLink).Body,HyperLinkBody(3,alpha.Id,"ChatA",mixedExpected,equipment,stackable),
             "原角色ID兼容入口的引用仍只投目标，不丢目标参数或降为公开广播");
         alpha.Barrier();beta.Barrier();gamma.Barrier();delta.Barrier();
+
+        // GM1120沿同一真实请求分派接入，重复文字/引用均不产生库存提交。
+        OfficialMegaphoneTcp(fixture, alpha, beta, gamma, delta, NextChatWindow, mixedQuote, mixedExpected, equipment, stackable);
 
         // 队伍聊天使用正式邀请/接受名册，覆盖同场景旁观者、跨频道旁观者以及退队后的隔离。
         NextChatWindow();
@@ -465,12 +471,12 @@ internal static class ChatTcpTests
                 row.GetProperty("Detail").GetProperty("TextLength").GetInt32() == 200 &&
                 row.GetProperty("Detail").GetProperty("Truncated").GetBoolean()),
             "超长普通聊天按 200 字节截断并记 chat_send(Truncated=true)");
-        That(events.Count(row => row.GetProperty("Kind").GetString() == "chat_throttled") == 1,
-            "同一连接 1 秒内第 6 条记一次 chat_throttled");
+        That(events.Count(row => row.GetProperty("Kind").GetString() == "chat_throttled") == 2,
+            "普通消息与无限GM喇叭各自的第6条均沿同一连接限频拒绝");
         That(events.Count(row => row.GetProperty("Kind").GetString() == "chat_whisper_offline") == 1,
             "悄悄话目标不存在记 chat_whisper_offline");
-        That(events.Count(row => row.GetProperty("Kind").GetString() == "chat_megaphone_rejected") == 3,
-            "文字与引用的两个错误道具槽和一个越界槽各记一次chat_megaphone_rejected");
+        That(events.Count(row => row.GetProperty("Kind").GetString() == "chat_megaphone_rejected") == 7,
+            "原有3个消费拒绝及GM14文字空/错/越界槽、引用错源各记录一次拒绝");
         var normalDeliveries = events.Where(row => row.GetProperty("Kind").GetString() == "chat_delivered" &&
             row.GetProperty("Detail").GetProperty("Kind").GetString() == "Normal").ToArray();
         That(normalDeliveries.All(row=>!row.GetProperty("Detail").GetProperty("LayerFallback").GetBoolean()),
