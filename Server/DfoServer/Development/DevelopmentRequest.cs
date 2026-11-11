@@ -91,7 +91,9 @@ internal enum DevelopmentAction
     DirectMarriage,
     GuildCreateInfo,
     GuildCreate,
-    NpcFavorMax
+    NpcFavorMax,
+    LuckyProfession,
+    ReturningAdventurer
 }
 
 internal sealed record DevelopmentRequest(DevelopmentAction Action, string Account, string Name, int Primary, int Secondary)
@@ -116,6 +118,8 @@ internal sealed record DevelopmentRequest(DevelopmentAction Action, string Accou
         ["recharge"] = (DevelopmentAction.Recharge, false, 2, 2),
         ["recharge-status"] = (DevelopmentAction.RechargeStatus, false, 0, 0),
         ["npc-favor-max"] = (DevelopmentAction.NpcFavorMax, true, 0, 0),
+        ["lucky-profession"] = (DevelopmentAction.LuckyProfession, true, 0, 0),
+        ["returning-adventurer"] = (DevelopmentAction.ReturningAdventurer, true, 0, 0),
         ["wallet"] = (DevelopmentAction.Wallet, true, 0, 0),
         ["currency"] = (DevelopmentAction.Currency, true, 3, 3),
         ["item-categories"] = (DevelopmentAction.ItemCategories, false, 0, 0),
@@ -496,6 +500,7 @@ internal sealed record DevelopmentRequest(DevelopmentAction Action, string Accou
             return;
         if (!CharacterName.IsValid(Name))
             throw new InvalidDataException("角色名无效");
+        if (Action is DevelopmentAction.LuckyProfession or DevelopmentAction.ReturningAdventurer) return;
         if (Action == DevelopmentAction.Gold && Primary < 0 || Action == DevelopmentAction.Item && (Primary <= 0 || Secondary <= 0))
             throw new InvalidDataException("金币、道具ID或数量无效");
         if (Action is DevelopmentAction.BlackDiamond or DevelopmentAction.GoldCard && Primary is < 0 or > 3650)
@@ -504,7 +509,7 @@ internal sealed record DevelopmentRequest(DevelopmentAction Action, string Accou
             ToProgressEdit().Validate();
     }
 
-    public bool Writes => Action == DevelopmentAction.Event ? Event?.Operation != "status" :
+    public bool Writes => Action is DevelopmentAction.LuckyProfession or DevelopmentAction.ReturningAdventurer ? true : Action == DevelopmentAction.Event ? Event?.Operation != "status" :
         Action == DevelopmentAction.Profession ? true :
         Action is DevelopmentAction.SupportCompanion or DevelopmentAction.SupportCompanions or DevelopmentAction.SupportCompanionProfile ? Primary >= 0 :
         Action is DevelopmentAction.CashShopExpiration or DevelopmentAction.CashShopUsablePeriod or DevelopmentAction.InfiniteFatigue or DevelopmentAction.PcRoom or DevelopmentAction.SummonWangFugui or DevelopmentAction.SummonGuangbing or DevelopmentAction.SummonFemaleCrusader or DevelopmentAction.SummonEnchantress ? Primary >= 0 :

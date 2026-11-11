@@ -370,3 +370,9 @@ GM通过`GET /api/events/catalog`读取服务端`ServerEventDefinition.Registere
 沿现有名称、用途、条件、默认状态和SupportsSchedule提供活动控制能力。
 
 奖励额度刷新包含改版魔兽的阶段及终局两张账本，按 UTC+8 06:00 日界、周四06:00周界归档当前键；保留实际发奖、成绩和回执身份，不重复发奖。在线额度修订后，后续服务日投影及重新打开选图读取更新后的1444计数。
+
+## 职业幸运与回归账号
+
+`lucky-profession <角色名>` 将所选角色的基础职业设置为全服活动职业，覆盖该职业全部转职，按原生组队表选择Buff；不是只给此角色加个人幸运标志。`returning-adventurer <角色名>` 将该角色所属账号设为回归冒险家，期限读取原生资源（当前28天）。两命令均支持既有 `account <账号>` 前缀，校验角色归属与owner，并在设置持久成功后返回实际 `account/characterId/name/job/scope/returningUntil/text` 凭据；失败不回通用成功。重新进图及后续原生投影读取新设置。
+
+职业设置scope为profession，回归为account；前者期限为0，后者为绝对Unix秒。依赖当前PVF显式装配的AdventurerBenefitService，缺资源或旧服务端必须明确失败。范围和未接入的回归奖励见[模块说明](../模块/职业幸运与回归福利.md)。

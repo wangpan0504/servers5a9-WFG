@@ -500,6 +500,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
                             mailbox?.Alarm(context,invitation);
                         }
                         await dailyFatigue.RefreshAsync();
+                        AdventurerBenefitProjection.Post(context);
                         if (context.PcRoomTimePoint is { } onlineRewards) await onlineRewards.RefreshAsync();
                         if (context.WeeklyAttendance is { } weekly) await weekly.RefreshAsync(force: request.Opcode == (ushort)CmdPacketType.SET_PLAY_RESULT);
                         await revival.RefreshAsync();

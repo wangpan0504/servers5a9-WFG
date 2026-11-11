@@ -178,6 +178,7 @@ internal sealed partial class DungeonHandler
         if (notice.Kind == PartyDungeonNoticeKind.MemberLeft)
         {
             await context.Notify(NotiPacketType.USER_LEAVE, TownPackets.RemoveActor(notice.Peer), "party_dungeon_member_left");
+            AdventurerBenefitProjection.Post(context);
             GuildDungeonPartyBuffProjection.Post(context);
             await PublishPartyHostAsync(context, notice.Members, () => notice.Recipient.IsCurrent() &&
                 context.Session.PartyDungeon is { } instance && instance.Members.Contains(notice.Recipient));
@@ -373,6 +374,7 @@ internal sealed partial class DungeonHandler
                     await context.Notify(NotiPacketType.DIE_STATE, DungeonPackets.CharacterLife(member, (byte)0), "anton_rejoin_dead_member", Current);
                 // 组队副本加载确认同样重建Actor，按当前网吧身份补发特权buff。
                 await PcRoomBuffProjection.PostAsync(context, Current);
+                AdventurerBenefitProjection.Post(context, force: true);
                 town.GuildEconomy?.Post(context, force: true);
                 await GuildTrainingProjection.PostAsync(context);
                 await BossSelectionBuffProjection.PostAsync(context, force: true, canSend: Current);

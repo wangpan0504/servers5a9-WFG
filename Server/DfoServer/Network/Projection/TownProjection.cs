@@ -279,6 +279,7 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
             TownPackets.Player(context.Session.ReadSkillCharacter(c), stats.Compute(context.Session.ReadSkillCharacter(c)), context.Session.ReadAdventureLevel(), context.Channel, appearanceTime), "player");
         await PrivilegeServiceProjection.PostAsync(context, initialization: true);
         await PcRoomBuffProjection.PostAsync(context);
+        AdventurerBenefitProjection.Post(context, clear: true, force: true);
         await GuildTrainingProjection.PostAsync(context, clear: true);
         await BossSelectionBuffProjection.PostAsync(context, force: true);
         await HellLegendBuffProjection.PostAsync(context, force: true);

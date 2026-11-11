@@ -171,6 +171,7 @@ internal static class TcpRegressionTests
         ("party-dungeon", PartyDungeonTcpTests.RunAsync),
         ("helper-hell-rotation", PartyDungeonTcpTests.RunHelperHellAsync),
         ("guild-dungeon-party", PartyDungeonTcpTests.RunGuildPartyBuffAsync),
+        ("adventurer-benefits", PartyDungeonTcpTests.RunAdventurerBenefitsAsync),
         ("monster-battle-level", FormalDungeonTcpTests.RunBattleLevelsAsync),
         ("monster-ai", FormalDungeonTcpTests.RunMonsterAiAsync),
         ("dungeon-tournament", FormalDungeonTcpTests.RunTournamentAsync),
@@ -571,6 +572,7 @@ internal static class TcpRegressionTests
         ("cargo", CargoTcpTests.RunAsync),
         ("cargo-purchase", CargoPurchaseTcpTests.RunAsync),
         ("shop", ShopTcpTests.RunAsync),
+        ("anton-entry-material", ShopTcpTests.RunAntonEntryMaterialAsync),
         ("cash-shop", CashShopTcpTests.RunAsync),
         ("battle-pass-skill-material", async (_, _, resources) =>
         {
