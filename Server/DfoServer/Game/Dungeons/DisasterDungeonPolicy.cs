@@ -5,7 +5,7 @@ namespace DfoServer.Game.Dungeons;
 // 哈林灾难领域。六张 dgn 都没有疲劳标签，官方公告的 8 点门槛和每房 3 点不能写成 StartFatigue：
 // StartFatigue 会在入场一次扣光，并关掉逐房扣点。
 // 实图同时要求编号 5341–5345 和类型 disaster dungeon：只认类型会在入口 5340 一旦有迷宫时按房收费；只认编号会在类型改掉后继续收费。
-// 通关固定给礼盒 490012200。etc/dungeonetc/disasterdungeon.etc 的
+// 默认难度2在翻牌给礼盒490012200，不在Boss死亡时重复直发。etc/dungeonetc/disasterdungeon.etc 的
 // [basic reward list by dungeon difficulty] 难度 2 原行是
 // `normal` 10000 -1 490012200 `gold` 0 -1 490012200。
 // 入口 disaster.dgn 的 [designate dungeon difficulty] 与 [difficulty] 都是 2。
@@ -47,8 +47,10 @@ internal static class DisasterDungeonPolicy
         IsPlayable(definition) && !practice && !definition.DisableFatigueConsumption &&
         !definition.IsTutorial && !definition.IsClassExperience;
 
-    public static SpecialDungeonClearReward? ClearReward(DungeonDefinition definition) =>
-        IsPlayable(definition) ? Reward : null;
+    public static bool HasCrystalCard(DungeonDefinition definition, byte difficulty) => IsPlayable(definition) && difficulty == 2;
+
+    public static SpecialDungeonClearReward? ClearReward(DungeonDefinition definition, byte difficulty = 0) =>
+        IsPlayable(definition) && !HasCrystalCard(definition, difficulty) ? Reward : null;
 
     // 剩余 0 由调用方先返回 fatigue-exhausted，这里不另造“图内耗尽禁止过房”。
     // 无限疲劳跳过门槛，与入场一次性疲劳同一口径。

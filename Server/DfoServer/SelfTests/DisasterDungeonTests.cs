@@ -96,6 +96,21 @@ internal static class DisasterDungeonTests
             ordinary.SpecialClearReward?.Items.Any(row => row.ItemId == DisasterDungeonPolicy.CrystalBoxId) != true,
             "普通副本不套灾难领域疲劳和礼盒");
         var box = items.Items.Get(DisasterDungeonPolicy.CrystalBoxId);
+        var cards = new DungeonCardRewardPolicy(SelfTestCatalogs.DropRules(pvf), DungeonItemDropCatalog.Create([]),
+            items.Items, items.GoldLimits, items.EpicPieces, prices: SelfTestCatalogs.CardPrices(pvf));
+        for (int id = 5341; id <= 5345; id++)
+        {
+            var definition = catalog.Get(id);
+            That(DungeonEntryPlan.TryCreate(catalog, hero, checked((uint)id), 0, 2, out var plan, out _, draw: _ => 0, quests: quests) &&
+                plan!.SpecialClearReward is null, "默认难度2不在Boss死亡另发结晶礼盒，防止与翻牌重复");
+            var card = cards.Prepare(definition, 2, 0, _ => 0, DateTimeOffset.UnixEpoch);
+            That(card.Item is { ItemId: 490012200, Count: 1 } && card.RuleId == "disaster-crystal-card-v1" &&
+                card.Items().Count() == 1, "难度2翻牌冻结一个真实490012200礼盒");
+            var delivery = cards.PlanDelivery(hero with { Inventory = InventorySnapshot.Empty }, [card], hero.Level,
+                utcNow: DateTimeOffset.UnixEpoch);
+            That(delivery.Inventory.After.Items.Count(item => item.Core.ItemId == 490012200) == 1,
+                "结晶礼盒通过既有选牌发放计划进入背包");
+        }
         var crystal = items.Items.Get(DisasterDungeonPolicy.CrystalId);
         var booster = items.Boosters.Get(DisasterDungeonPolicy.CrystalBoxId);
         That(box.AttachType.Trim('`', ' ', '\r', '\n') == "[account]" && crystal.AttachType.Trim('`', ' ', '\r', '\n') == "[account]" &&
