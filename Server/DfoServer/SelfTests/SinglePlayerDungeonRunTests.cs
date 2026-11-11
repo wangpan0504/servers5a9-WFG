@@ -105,6 +105,26 @@ internal static partial class SinglePlayerDungeonRunTests
         startFatigueRun.Move(startFatigueRun.Snapshot.Identity,Guid.NewGuid(),boss.Position);
         startFatigueRun.CompleteLoading(startFatigueRun.Snapshot.Identity,Guid.NewGuid());
         That(startFatigueRun.Snapshot.ConsumedFatigue == 10,"入场一次性疲劳之后的首次房间不再逐房计点");
+        That(fatigue.Entry.RoomFatigueCost == 1 && fatigue.Entry.MinimumEntryFatigue == 0,
+            "普通计划逐房基数仍是 1，没有额外入场门槛");
+        That(SinglePlayerDungeonRun.TryCreate(fatigue.Entry with { RoomFatigueCost = 3, MinimumEntryFatigue = 8 }, 4, 400,
+                fatigueRoute, authority, out var disasterFatigueRun, out _),
+            "灾难领域逐房基数仍建立同一条普通路线");
+        var disasterFatigue = disasterFatigueRun!;
+        disasterFatigue.CompleteLoading(disasterFatigue.Snapshot.Identity, Guid.NewGuid());
+        That(disasterFatigue.Snapshot.ConsumedFatigue == 3, "灾难领域首次房间应耗按基数 3 累计");
+        disasterFatigue.Move(disasterFatigue.Snapshot.Identity, Guid.NewGuid(), friendly.Position);
+        That(disasterFatigue.Snapshot.ConsumedFatigue == 3, "过房预留不提前计灾难领域疲劳");
+        disasterFatigue.CompleteLoading(disasterFatigue.Snapshot.Identity, Guid.NewGuid());
+        That(disasterFatigue.Snapshot.ConsumedFatigue == 6, "灾难领域新房间再计 3 点");
+        disasterFatigue.Move(disasterFatigue.Snapshot.Identity, Guid.NewGuid(), start.Position);
+        disasterFatigue.CompleteLoading(disasterFatigue.Snapshot.Identity, Guid.NewGuid());
+        That(disasterFatigue.Snapshot.ConsumedFatigue == 6, "回访已加载房间不重复计灾难领域疲劳");
+        That(SinglePlayerDungeonRun.TryCreate(fatigue.Entry with { StartFatigue = 10, RoomFatigueCost = 3 }, 5, 500, fatigueRoute, authority,
+                out var disasterStartRun, out _) &&
+            disasterStartRun!.CompleteLoading(disasterStartRun.Snapshot.Identity, Guid.NewGuid()).Outcome == DungeonRunOutcome.Accepted &&
+            disasterStartRun.Snapshot.ConsumedFatigue == 10,
+            "入场一次性疲劳仍只计 N，不改乘逐房基数");
         var original = run.Snapshot;
         That(original.LivingMonsters.SequenceEqual(new ushort[] { 10, 11 }) && run.CurrentLivingMonster(10) is { IsBlocking: true } &&
             run.CurrentLivingMonster(11) is null, "snapshot retains the friendly actor while combat qualification excludes it");

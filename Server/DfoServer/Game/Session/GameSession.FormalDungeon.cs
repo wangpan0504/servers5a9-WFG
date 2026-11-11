@@ -737,6 +737,11 @@ internal sealed partial class GameSession
             if (storedFatigue.Remaining < entry.StartFatigue || FatigueForClient(expected).Remaining < entry.StartFatigue)
                 return RejectFormal("start-fatigue-insufficient:" + entry.StartFatigue);
         }
+        // 灾难领域等逐房副本的入场门槛。剩余 0 已在上面返回 fatigue-exhausted。
+        // 图内耗尽后的下一房间仍沿原通用语义，这里不另加拦截。
+        if (DisasterDungeonPolicy.EntryFatigueRejection(entry.MinimumEntryFatigue, InfiniteFatigue,
+                expected.Fatigue?.Remaining, FatigueForClient(expected).Remaining) is { } minimumFatigue)
+            return RejectFormal(minimumFatigue);
         var ordinaryReturn = entry.RaidEntry is not null ? CurrentDungeonSelection?.ReturnPosition ?? formalDungeon?.OrdinaryReturnPosition : entry.IsTrainingRoom || entry.IsClassExperience ? expected.Position :
             entry.IsTutorial ? tutorialReturn : entry.IsOrdinary ? towns.SelectionReturn(expected.Position, expected.CompletedQuests.ToHashSet()) : null;
         if (entry.IsOrdinary && ordinaryReturn is null) return RejectFormal("ordinary-return-location-missing");

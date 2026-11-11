@@ -647,7 +647,11 @@ internal sealed partial class SinglePlayerDungeonRun
                 if (!HasLoadedHopeArea(area)) consumedFatigue = checked(consumedFatigue + (uint)hope.FatigueValue);
             }
             else if (entry.StartFatigue > 0 ? first : !allRooms.Any(room => room.Loaded && room.Plan.Room.Map.Id == current.Plan.Room.Map.Id))
-                consumedFatigue = checked(consumedFatigue + (entry.StartFatigue == 0 ? 1u : entry.StartFatigue));
+            {
+                // 入场一次性疲劳只在首次加载计 N。逐房基数默认 1，灾难领域为 3；0 仍按 1，避免漏字段后免费。
+                uint roomCost = entry.StartFatigue > 0 ? entry.StartFatigue : entry.RoomFatigueCost == 0 ? 1u : entry.RoomFatigueCost;
+                consumedFatigue = checked(consumedFatigue + roomCost);
+            }
         }
         acceptedActions.Add(actionId, new(expected, "loaded", null));
         current.Loaded = true;

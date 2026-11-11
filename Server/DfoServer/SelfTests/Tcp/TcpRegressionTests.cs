@@ -381,6 +381,8 @@ internal static class TcpRegressionTests
         {
             QuestReplayTests.RunCore();
             DungeonEntryPlanTests.Run(resources.Archive);
+            DisasterDungeonTests.Run(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources,
+                resources.Quests, resources.Learning);
             DungeonEntryCostTests.Run(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources,
                 resources.Quests, resources.Learning);
             return Task.CompletedTask;

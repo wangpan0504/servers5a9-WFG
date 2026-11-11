@@ -120,6 +120,11 @@ internal sealed record DungeonEntryPlan(
     public bool UsesFatigue => RequiresFatigueOwner && !DisableFatigueConsumption;
     // #511 普通入场的 [use fatigue only start dungeon] N：入场提交时一次扣 N，之后首次房间不再逐房扣点。0 = 沿用逐房一点。
     public ushort StartFatigue { get; init; }
+    // 逐房基础疲劳。普通图为 1；灾难领域实图为 3。0 按 1 处理，避免旧计划漏字段后免费。
+    // 燃烧只乘在账本 Cost 上。应耗统计仍加这个基数，与普通图「统计 +1、燃烧账本 +2」同一口径。
+    public ushort RoomFatigueCost { get; init; } = 1;
+    // 入场门槛。0 表示只沿用「剩余为 0 则 fatigue-exhausted」。灾难领域为 8：剩余 1–7 走 start-fatigue-insufficient:8。
+    public ushort MinimumEntryFatigue { get; init; }
     public OperationHopeAdmission? Hope { get; init; }
     public DimensionDungeonAdmission? Dimension { get; init; }
     public (byte Job, byte Grow)? DimensionRewardProfession { get; init; }
@@ -751,7 +756,7 @@ internal sealed record DungeonEntryPlan(
             IsTayberrs = definition.IsTayberrs,
             IsTayberrsStory = definition.IsTayberrsStory,
             SpecialClearReward = !practice && !definition.IsTutorial && !definition.IsClassExperience && !definition.DisableClearReward && !lostLand
-                ? definition.SpecialClearReward : null,
+                ? definition.SpecialClearReward ?? DisasterDungeonPolicy.ClearReward(definition) : null,
             DisableItemDrops = definition.DisableItemDrops || definition.IsTayberrsStory,
             IsOrdinaryLuke = definition.IsOrdinaryLuke,
             IsOrdinaryPrey = definition.IsOrdinaryPrey, IsOrdinaryAnton = definition.IsOrdinaryAnton,
@@ -822,6 +827,9 @@ internal sealed record DungeonEntryPlan(
             HellPartyMode = hellParty ? (byte)1 : (byte)0,
             // 时空裂缝入场一次扣 6 点疲劳（用户指定的本服规则）；PVF 没有声明分段数，不能沿用逐房间一点。
             StartFatigue = cosmo ? definition.StartFatigue ?? (ushort)0 : infernoParty ? (ushort)6 : (ushort)0,
+            // 灾难领域 dgn 没有疲劳标签。门槛和逐房基数写在计划上，不能改成 StartFatigue。
+            RoomFatigueCost = DisasterDungeonPolicy.AppliesFatigue(definition, practice) ? DisasterDungeonPolicy.RoomFatigue : (ushort)1,
+            MinimumEntryFatigue = DisasterDungeonPolicy.AppliesFatigue(definition, practice) ? DisasterDungeonPolicy.EntryMinimumFatigue : (ushort)0,
             InitializationCounterSupported = !definition.IsClassExperience && !practice && maze.LayeredMaps.Count == 0 && maze.StoryStages.Count == 0 &&
                 !definition.RawSections.Any(section => section.Tag is "mercenary broker dungeon" or "dnfaos dungeon")
         };
