@@ -93,6 +93,11 @@ internal sealed partial class GameSession
         public EpicPieceShopState? EpicPieceShop { get; set; }
         public PendingEpicPieceShop? PendingEpicPieceShop { get; set; }
         public DungeonRunIdentity? EpicPieceShopPresentation { get; set; }
+        public SecretShopState? SecretShop { get; set; }
+        public bool SecretShopQuoted { get; set; }
+        public bool SecretShopOpen { get; set; }
+        public PendingSecretShopPurchase? PendingSecretShopPurchase { get; set; }
+        public DungeonRunIdentity? SecretShopPresentation { get; set; }
         public Dictionary<(DungeonMap Map, int Template, int Ordinal), PendingQuestScene> QuestSceneEvents { get; } = [];
         public QuestDropResources? QuestDrops { get; init; }
         public QuestDropPlan? PendingQuestDrop { get; set; }

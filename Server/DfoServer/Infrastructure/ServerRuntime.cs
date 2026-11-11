@@ -117,7 +117,7 @@ internal static class ServerRuntime
         Func<int, int>? evildomHiddenDraw = null, Func<CashShopPromotionCatalog>? promotions = null, bool enablePromotionPage = false,
         Random? fiendwarMazeRandom = null, CashShopPromotionConfiguration? promotionConfiguration = null,
         Func<int, ItemTemplate>? promotionItemResolver = null, bool epicRoad2019Enabled = false, DungeonCatalog? dungeonCatalog = null,
-        bool enableMonsterMockBattle = true)
+        bool enableMonsterMockBattle = true, SecretShopCatalog? secretShopRules = null)
     {
         quests = quests.WithCreatures(itemResources.Creatures).WithItems(itemResources.Items);
         var questStages = QuestStageGraph.Build(quests);
@@ -638,6 +638,8 @@ internal static class ServerRuntime
         DungeonPassiveDropPolicy? passiveDrops = null;
         SpringTreasureDropPolicy? springTreasure = null;
         EpicPieceShopService? epicPieceShop = null;
+        SecretShopService? secretShop = (secretShopRules ?? itemResources.SecretShop) is { } secretRules ?
+            new(secretRules, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces) : null;
         AssaultModeCatalog? assaultMode = null;
         OperationHopeCatalog? operationHope = null;
         RiftNamedEpicDropPolicy? riftNamedEpics = null;
@@ -798,7 +800,8 @@ internal static class ServerRuntime
                 evildomWar: warCatalog, lukeRaid: lukeRun, lukeLifecycle: repository, antonRaid: antonRun, preyRaid: preyRun,
                 evildomRewards: warPolicy, evildomRewardStore: repository, imperialArena: imperialArenaProjection, fiendwarRaid: fiendwarRun, raidStart: raidStart,
                 strongwayRoute: strongwayRoutes, strongwayMatching: strongwayMatching,
-                strongwayProjection: strongwayProjection, strongwayRewards: strongwayRewards, altarProjectionBusy: SqliteBusyRetry.IsBusy);
+                strongwayProjection: strongwayProjection, strongwayRewards: strongwayRewards, altarProjectionBusy: SqliteBusyRetry.IsBusy,
+                secretShop: secretShop);
             strongwayProjection.Depart = (context, holds) => ((DungeonHandler)dungeon).DepartStrongway2019Async(context, holds);
             strongwayHandler = new(strongwayMatching, strongwayProjection,
                 new Strongway2019MatchingEntryService(strongwayMatching, parties, repository, repository, clock),
@@ -1112,6 +1115,7 @@ internal static class ServerRuntime
         settlement?.Register(commands);
         questReplay?.Register(commands);
         if (epicPieceShop is not null) new EpicPieceShopHandler(epicPieceShop, inventoryProjection, log).Register(commands);
+        if (secretShop is not null) new SecretShopHandler(secretShop, inventoryProjection, log).Register(commands);
         if (pcRoomTimePoint is not null) new PcRoomTimePointHandler(log).Register(commands);
         if (dailyAttendance is not null) new DailyAttendanceHandler(log).Register(commands);
         new ReturningAdventurerHandler(inventoryProjection, log).Register(commands);

@@ -397,6 +397,7 @@ internal sealed partial class DungeonHandler
                 if (scene.Snapshot.Phase == SinglePlayerDungeonPhase.Settlement)
                     await DungeonSettlementProjection.EnableAsync(context);
                 await PublishEpicPieceShopAsync(context, prepare: false);
+                await PublishSecretShopAsync(context, prepare: false);
                 // 首次场景安装在30之后才完整可用；重放真实参与表和HP，不沿用加载前已写帧的去重缓存。
                 RaidCombatProjection.RestoreStatusForScene(context, Current);
                 RaidCombatProjection.PostPreyDungeonTime(context, scene);

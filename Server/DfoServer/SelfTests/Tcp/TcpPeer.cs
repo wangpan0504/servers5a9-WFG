@@ -241,7 +241,13 @@ internal sealed partial class TcpPeer : IDisposable
     public WirePacket Read()
     {
         if (pushedBack is { } packet) { pushedBack = null; return packet; }
-        return ReadCore(channelNumber);
+        var current = ReadCore(channelNumber);
+        if (fixture?.DefaultSecretShopSuppressed == true && current is { Kind: 0, Opcode: 279 })
+        {
+            TestCheck.Bytes(current.Body, [232, 3, 0, 0], "无关业务显式零出现目录仍收到完整279无商人1000通知");
+            current = ReadCore(channelNumber);
+        }
+        return current;
     }
     // 服务端在ACK、房间通知与补发buff之后才发36，读到房间通知时它尚未上路；
     // 是否发送取决于真实疲劳规则，无包时必须尽快返回，不能把可选通知拖成5秒socket超时。
