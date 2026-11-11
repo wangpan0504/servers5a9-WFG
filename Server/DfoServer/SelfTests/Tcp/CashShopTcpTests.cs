@@ -22,6 +22,7 @@ internal static partial class CashShopTcpTests
         Inventory.CashShopTests.RunCore();
         Inventory.CashShopTests.Run(resources.Towns, resources.Characters, resources.ItemResources);
         await RestrictionsAsync(source, root, resources);
+        await CapacitiesAsync(source, root, resources);
         await global::DfoServer.BattlePassCertificatePublicationRace.RunAsync(resources);
         await global::DfoServer.BattlePassOrdinaryCashPublicationRace.RunAsync(resources);
         var originalTemplate = resources.ItemResources.Items.Get(490705385);
