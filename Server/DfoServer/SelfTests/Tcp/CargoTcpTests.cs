@@ -129,12 +129,11 @@ internal static class CargoTcpTests
                 Equals(saved, weaponCore), "account storage changes owner while preserving complete core and UID");
             peer.Send(20, Build(w => { w.Write(8); w.Write(new byte[] { 8, 20, 16, 12, 24, 0, 32, 0 }); }));
             peer.Expect(1, 20, [1, 4, 0, 0, 0, 8, 12, 16, 0]);
-            var clearSorted = peer.Expect(0, 1681).Body;
-            That(clearSorted[0] == 12 && U16(clearSorted, 1) == 1 && U16(clearSorted, 3) == 0 && U32(clearSorted, 5) == uint.MaxValue,
-                "账号仓库整理先用1681清除将重新载入的目标槽");
-            var sorted = peer.Expect(0, 1681).Body;
-            That(sorted[0] == 12 && U16(sorted, 1) == 2 && U16(sorted, 3) == 0 && U32(sorted, 5) == weaponId && U32(sorted, 128) == uint.MaxValue,
-                "account sorting publishes new slot and clears previous slot");
+            var sorted = peer.Expect(0, 13).Body;
+            Cargo(sorted, 12, 8, 750, 1);
+            That(U16(sorted, 9) == 0 && U32(sorted, 11) == weaponId,
+                "账号仓库整理用NOTI13把武器落到槽0，不发14/1681新物品标记");
+            peer.Barrier(packet => That(packet.Opcode is not (14 or 1681), "账号仓库整理之后不再补差量"));
             Transfer(peer, 0, 121, 3299, 17, 12, 1, 1, 17);
             That(peer.Expect(0, 14).Body[0] == 0 && peer.Expect(0, 14).Body[0] == 12, "partial deposit updates both stacks");
             Transfer(peer, 0, 121, 3299, 2, 12, 7, 0, 2, actualTargetSlot: 1);

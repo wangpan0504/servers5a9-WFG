@@ -74,12 +74,13 @@ internal static class ClearAvatarTcpTests
                 peer.Send(19, Move(row.Clone, row.Slot, row.Original));
                 peer.Expect(1, 19, Build(w => { w.Write((byte)1); w.Write((byte)1); w.Write((short)0);
                     w.Write(1); w.Write((byte)3); w.Write(row.Slot); }));
-                var cleared = peer.Expect(0, 1681).Body;
+                var wornList = peer.Expect(0, 13).Body;
+                That(wornList[0] == 1 && wornList.Length == 5 + 165 * U16(wornList, 3),
+                    "克隆换装用Avatar的NOTI13，不发14/1681新物品标记");
                 if (row.Original != 0)
                 {
-                    var returned = peer.Expect(0, 1681).Body;
-                    That(U32(cleared, 5) == uint.MaxValue && U32(returned, 5) == row.Original,
-                        "被覆盖时装退回原包裹格，先清旧克隆图标再完整回填，不能丢失原物品");
+                    That(Enumerable.Range(0, U16(wornList, 3)).Any(index => U32(wornList, 5 + index * 165 + 2) == row.Original),
+                        "被覆盖时装仍在全量里，不能丢失原物品");
                     peer.Expect(0, 1449, Sources(row.Slot, 0));
                 }
                 // 换装改变1号橱窗内容：投影在Actor前按槽补发0x063F，客户端装扮栏缓存跟随新穿戴。
@@ -105,10 +106,9 @@ internal static class ClearAvatarTcpTests
                     }));
                     peer.Expect(1, 19, Build(w => { w.Write((byte)1); w.Write((byte)1); w.Write((short)0);
                         w.Write(1); w.Write((byte)1); w.Write((short)2); }));
-                    var delta = peer.Expect(0, 14).Body;
-                    That(delta[0] == 1 && U16(delta, 1) == 2 && U32(delta, 5) == uint.MaxValue && U32(delta, 170) == row.Original,
-                        "原上衣移格仍同步完整原件与清槽，不只更新克隆标记");
                     peer.Expect(0, 1449, Sources(row.Slot, 2));
+                    peer.Barrier(packet => That(packet.Opcode is not (13 or 14 or 1681),
+                        "时装同容器整件移格只回ACK和来源表，不把已有原件标成新物品"));
                     peer.Barrier();
                 }
             }
@@ -141,8 +141,9 @@ internal static class ClearAvatarTcpTests
             }));
             peer.Expect(1, 19, Build(w => { w.Write((byte)1); w.Write((byte)3); w.Write((short)3);
                 w.Write(1); w.Write((byte)1); w.Write((short)1); }));
-            That(U32(peer.Expect(0, 1681).Body, 5) == uint.MaxValue && U32(peer.Expect(0, 1681).Body, 5) == cases[0].Clone,
-                "脱下装扮先清ACK图标再完整回填，保留图标effect但不发送获得播报14");
+            var unequipped = peer.Expect(0, 13).Body;
+            That(unequipped[0] == 1 && Enumerable.Range(0, U16(unequipped, 3)).Any(index => U32(unequipped, 5 + index * 165 + 2) == cases[0].Clone),
+                "脱下装扮用NOTI13回填原件，不发送14/1681新物品标记");
             peer.Expect(0, 1449, Sources(3, -1));
             That(peer.Expect(0, 0x063F).Body[0] == 0, "脱下装扮同样补发1号橱窗单条");
             peer.Expect(0, 2); peer.Expect(0, 2);
@@ -153,7 +154,7 @@ internal static class ClearAvatarTcpTests
         {
             peer.Select(roles[0].Slot); peer.Barrier();
             peer.Send(19, MoveFrom(1, cases[0].Clone, 0));
-            peer.Expect(1, 19); peer.Expect(0, 1681); peer.Expect(0, 0x063F);
+            peer.Expect(1, 19); peer.Expect(0, 13); peer.Expect(0, 0x063F);
             Verify(peer.Expect(0, 2).Body, peer.Expect(0, 2).Body, cases[0].Name, 3, cases[0].Clone, 0, 0);
             peer.Barrier();
             var detail = JsonSerializer.Deserialize<AvatarDetail>((string)fixture.Query("""
@@ -168,7 +169,7 @@ internal static class ClearAvatarTcpTests
                 w.Write((byte)3); w.Write((short)3); w.Write(cases[0].Clone); w.Write(1);
                 w.Write((byte)1); w.Write((short)1); w.Write(0); w.Write(0); w.Write(-1); w.Write((ushort)0);
             }));
-            peer.Expect(1, 19); peer.Expect(0, 1681); peer.Expect(0, 1681); peer.Expect(0, 0x063F);
+            peer.Expect(1, 19); peer.Expect(0, 13); peer.Expect(0, 0x063F);
             peer.Expect(0, 2); peer.Expect(0, 2); peer.Barrier();
         }
         // 已有克隆卸下后覆盖另一真实实例，必须重采样该实例，而不是沿用旧来源UID。
@@ -176,9 +177,9 @@ internal static class ClearAvatarTcpTests
         {
             peer.Select(roles[0].Slot); peer.Barrier();
             peer.Send(19, MoveFrom(3, cases[0].Original, 0));
-            peer.Expect(1, 19); peer.Expect(0, 1681); peer.Expect(0, 0x063F); peer.Expect(0, 2); peer.Expect(0, 2); peer.Barrier();
+            peer.Expect(1, 19); peer.Expect(0, 13); peer.Expect(0, 0x063F); peer.Expect(0, 2); peer.Expect(0, 2); peer.Barrier();
             peer.Send(19, MoveFrom(1, cases[0].Clone, cases[0].Original));
-            peer.Expect(1, 19); peer.Expect(0, 1681); peer.Expect(0, 1681);
+            peer.Expect(1, 19); peer.Expect(0, 13);
             peer.Expect(0, 1449, Sources(3, 1)); peer.Expect(0, 0x063F); peer.Expect(0, 2); peer.Expect(0, 2); peer.Barrier();
             var detail = JsonSerializer.Deserialize<AvatarDetail>((string)fixture.Query("""
                 SELECT a.detail FROM inventory_avatar_details a JOIN character_inventory_slots s ON s.item_uid=a.item_uid
@@ -195,7 +196,7 @@ internal static class ClearAvatarTcpTests
                 peer.Send(19, MoveFrom(1, id, 0));
                 peer.Expect(1, 19, Build(w => { w.Write((byte)1); w.Write((byte)1); w.Write((short)1);
                     w.Write(1); w.Write((byte)3); w.Write((short)3); }));
-                peer.Expect(0, 1681); peer.Expect(0, 1681);
+                peer.Expect(0, 13);
                 peer.Expect(0, 1449); peer.Expect(0, 0x063F); peer.Expect(0, 2); peer.Expect(0, 2);
                 peer.Barrier();
             }

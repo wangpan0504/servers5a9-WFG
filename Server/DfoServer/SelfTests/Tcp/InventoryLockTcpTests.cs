@@ -41,7 +41,7 @@ internal static partial class InventoryTcpTests
             That(Snapshot(fixture) == before, "duplicate safety lock does not allocate another ID");
             peer.Send(19, MoveItem(3, 12, weaponId, 1, 0, 64, 0));
             peer.Expect(1, 19, MoveAck(3, 12, 1, 0, 64));
-            WearDelta(peer, reloadMain: true);
+            WearDelta(peer);
             peer.Expect(0, 251, [1, 0, 0, 64, 0, 1]);
             peer.Send(713, [0, 64, 0]);
             peer.Expect(1, 713, [1, 0, 64, 0]);
@@ -60,14 +60,14 @@ internal static partial class InventoryTcpTests
                 "locked equipment remains original instance in quick bar");
             peer.Send(19, MoveItem(0, 8, weaponId, 1, 3, 12, 0));
             peer.Expect(1, 19, MoveAck(0, 8, 1, 3, 12));
-            WearDelta(peer);
+            WearDelta(peer, emptyQuick: true);
             peer.Expect(0, 251, [1, 0, 3, 12, 0, 1]);
             peer.Send(713, [3, 12, 0]);
             peer.Expect(1, 713, [1, 3, 12, 0]);
             peer.Expect(1, 714, [1, 3, 12, 0]);
             peer.Send(19, MoveItem(3, 12, weaponId, 1, 0, 64, 0));
             peer.Expect(1, 19, MoveAck(3, 12, 1, 0, 64));
-            WearDelta(peer, reloadMain: true);
+            WearDelta(peer);
             peer.Expect(1, 713, [1, 0, 64, 0]);
             peer.Expect(0, 251, [1, 0, 0, 64, 0, 1]);
             peer.Send(19, MoveItem(0, 64, weaponId, 1, 3, 12, 0));
@@ -124,15 +124,17 @@ internal static partial class InventoryTcpTests
         }
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]], "TCP locking database integrity");
 
-        static void WearDelta(TcpPeer peer, bool reloadMain = false)
+        static void WearDelta(TcpPeer peer, bool emptyQuick = false)
         {
-            var cleared = reloadMain ? peer.Expect(0, 1681).Body : null;
-            var main = peer.Expect(0, 1681).Body;
-            That(main[0] == 0 && main.Length == 126, "锁定装备穿脱仍同步完整条目和图标，获得通知独立关闭");
-            if (cleared is not null)
-                That(cleared.Length == 126 && cleared[0] == 0 && U16(cleared, 1) == 1 &&
-                    U16(cleared, 3) == U16(main, 3) && U32(cleared, 5) == uint.MaxValue && U32(main, 5) != uint.MaxValue,
-                    "带安全锁装备卸下先清ACK对象再静默完整写回，后续仍恢复原锁");
+            if (emptyQuick)
+            {
+                var emptied = peer.Expect(0, 14).Body;
+                That(emptied[0] == 0 && U16(emptied, 3) is >= 3 and <= 8 && U32(emptied, 5) == uint.MaxValue,
+                    "锁定装备穿出快捷栏先清空3–8，再全量载入");
+            }
+            var main = peer.Expect(0, 13).Body;
+            That(main[0] == 0 && main.Length == 5 + 123 * U16(main, 3),
+                "锁定装备穿脱用NOTI13全量载入，不发14/1681新物品标记");
             peer.Expect(0, 2);
             peer.Expect(0, 2);
         }

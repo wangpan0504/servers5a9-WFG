@@ -51,16 +51,12 @@ internal static class AuraSkinTcpTests
             byte[] sortAuras = [6, 0, 0, 0, 16, 1, 24, 8, 32, 0];
             peer.Send(20, sortAuras);
             peer.Expect(1, 20, [1, 4, 0, 0, 0, 8, 1, 16, 0]);
-            var clearedAuras = peer.Expect(0, 1681).Body;
-            var sortedAuras = peer.Expect(0, 1681).Body;
-            That(clearedAuras.Length == 333 && clearedAuras[0] == 1 && U16(clearedAuras, 1) == 2 &&
-                U32(clearedAuras, 5) == uint.MaxValue && U32(clearedAuras, 170) == uint.MaxValue,
-                "光环整理沿Avatar完整条目清槽，使用1681而非获得播报或全量载入");
-            That(sortedAuras.Length == 333 && sortedAuras[0] == 1 && U16(sortedAuras, 1) == 2 &&
-                U16(sortedAuras, 3) == 0 && U32(sortedAuras, 5) == firstAura &&
-                U16(sortedAuras, 168) == 1 && U32(sortedAuras, 170) == secondAura && AuraAssets() == auraAssets,
-                "光环整理重新载入图标effect，UID、完整核心和Avatar详情保持原样");
-            peer.Barrier();
+            var sortedAuras = peer.Expect(0, 13).Body;
+            That(sortedAuras[0] == 1 && U16(sortedAuras, 3) == 2 && sortedAuras.Length == 5 + 165 * 2 &&
+                U16(sortedAuras, 5) == 0 && U32(sortedAuras, 7) == firstAura &&
+                U16(sortedAuras, 170) == 1 && U32(sortedAuras, 172) == secondAura && AuraAssets() == auraAssets,
+                "光环整理用Avatar的NOTI13重载，UID和详情保持原样，不发14/1681新物品标记");
+            peer.Barrier(packet => That(packet.Opcode is not (14 or 1681), "光环整理之后不再补差量"));
             string sortedState = State();
             peer.Send(20, sortAuras);
             peer.Expect(1, 20, [1, 4, 0, 0, 0, 8, 1, 16, 0]);
@@ -167,13 +163,9 @@ internal static class AuraSkinTcpTests
         if (!accepted) { peer.Expect(1, 19, [0, 23, 0, 1, 3]); peer.Barrier(); return; }
         peer.Expect(1, 19, Build(writer =>
         { writer.Write((byte)1); writer.Write((byte)1); writer.Write(bag); writer.Write(1); writer.Write((byte)3); writer.Write(worn); }));
-        var delta = peer.Expect(0, 1681).Body;
-        if (fromId == 0 || toId != 0)
-        {
-            That(U32(delta, 5) == uint.MaxValue, "卸装或互换先无播报清除ACK留下的包裹图标");
-            delta = peer.Expect(0, 1681).Body;
-        }
-        That(delta[0] == 1, "装扮穿脱保留完整差量和图标effect，不走获得播报");
+        var delta = peer.Expect(0, 13).Body;
+        That(delta[0] == 1 && delta.Length == 5 + 165 * U16(delta, 3),
+            "装扮穿脱用NOTI13全量载入，不发14/1681新物品标记");
         // 光环在装备栏0..11内，换装改变当前橱窗内容，投影在Actor前补发0x063F。
         That(peer.Expect(0, 0x063F).Body[0] == 0, "城镇光环装卸后补发1号橱窗单条，装扮栏缓存跟随穿戴");
         That(peer.Expect(0, 2).Body[0] == 0 && peer.Expect(0, 2).Body[0] == 1,
