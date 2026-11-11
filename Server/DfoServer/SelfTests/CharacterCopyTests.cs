@@ -27,6 +27,10 @@ internal static partial class CharacterCopyTests
                 $"INSERT INTO account_daily_attendance_claims VALUES('copy-account',0,0,20261104,{source.Id},1,50001,2,1)");
             string attendanceDays = f.Snapshot("account_daily_attendance_days");
             string attendanceClaims = f.Snapshot("account_daily_attendance_claims");
+            f.Sql("INSERT INTO account_returning_mission_progress VALUES('copy-account',2000000000,1,7);" +
+                $"INSERT INTO account_returning_reward_claims VALUES('copy-account',2000000000,4,1,0,{source.Id},50001,2,123456)");
+            string returningProgress = f.Snapshot("account_returning_mission_progress");
+            string returningClaims = f.Snapshot("account_returning_reward_claims");
             source = f.LoadSource();
             string sourceJson = JsonSerializer.Serialize(source);
             var copy = f.Copy("CopyOne");
@@ -70,6 +74,10 @@ internal static partial class CharacterCopyTests
                 f.Snapshot("account_daily_attendance_claims") == attendanceClaims &&
                 f.Scalar($"SELECT count(*) FROM account_daily_attendance_claims WHERE recipient_id={copy.Id}") == 0,
                 "角色复制保留账号签到与原收件事实，不为新角色复制领奖资格");
+            That(f.Snapshot("account_returning_mission_progress") == returningProgress &&
+                f.Snapshot("account_returning_reward_claims") == returningClaims &&
+                f.Scalar($"SELECT count(*) FROM account_returning_reward_claims WHERE recipient_id={copy.Id}") == 0,
+                "角色复制保留账号回归进度及原收件事实，不重置或复制回归领奖资格");
             var reopened = new CharacterRepository(f.Path);
             var loaded = reopened.LoadCharacter(f.Owner, copy.Slot);
             That(JsonSerializer.Serialize(copy) == JsonSerializer.Serialize(loaded), "仓储重开后新角色完整加载一致");

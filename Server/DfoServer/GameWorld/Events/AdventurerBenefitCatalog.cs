@@ -22,6 +22,7 @@ internal sealed class AdventurerBenefitCatalog
     public int ReturningPeriodSeconds { get; }
     public int ReturningBuff { get; }
     public int ExistingBuff { get; }
+    public LuckyCharacterCatalog? Lucky { get; private init; }
     readonly ImmutableDictionary<int, int> experienceRates;
     public ImmutableArray<uint> BuffIds => MemberBuffs.Concat(ProfessionBuffs).Select(row => (uint)row.BuffId)
         .Append((uint)ReturningBuff).Append((uint)ExistingBuff).Distinct().Order().ToImmutableArray();
@@ -31,7 +32,7 @@ internal sealed class AdventurerBenefitCatalog
         new(pvf.ReadTokens(ProfessionPath), pvf.ResolveString),
         new(pvf.ReadTokens(ReturningPath), pvf.ResolveString),
         new(pvf.ReadTokens(ReturningEventPath), pvf.ResolveString),
-        new(pvf.ReadTokens("etc/variousbufflist.etc"), pvf.ResolveString), pvf.ResolveString) { }
+        new(pvf.ReadTokens("etc/variousbufflist.etc"), pvf.ResolveString), pvf.ResolveString) { Lucky = new(pvf); }
 
     internal AdventurerBenefitCatalog(PvfTokenDocument profession, PvfTokenDocument returning, PvfTokenDocument promotion,
         PvfTokenDocument buffs, Func<int, string> resolve)

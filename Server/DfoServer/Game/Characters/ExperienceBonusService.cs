@@ -9,7 +9,8 @@ namespace DfoServer.Game.Characters;
 
 internal sealed class ExperienceBonusService(ItemCatalog items, RecoveryConsumableCatalog consumables,
     ExperienceBonusCatalog rules, IExperienceBonusProvider? provider = null,
-    Action<ExperienceBonusRequest, InventoryItem>? missingTemplate = null, TimeProvider? clock = null)
+    Action<ExperienceBonusRequest, InventoryItem>? missingTemplate = null, TimeProvider? clock = null,
+    DfoServer.Game.Events.AdventurerBenefitService? adventurerBenefits = null)
 {
     readonly TimeProvider timer = clock ?? TimeProvider.System;
     long nextMissingTemplateWarning;
@@ -21,11 +22,23 @@ internal sealed class ExperienceBonusService(ItemCatalog items, RecoveryConsumab
             throw new InvalidDataException("经验加成上下文无效");
         if (context.Rates.Any(rate => rate.Source is ExperienceBonusSource.GrowthContract or ExperienceBonusSource.Potion or
             ExperienceBonusSource.QuestPotion or ExperienceBonusSource.BlackDiamond or ExperienceBonusSource.InternetCafe or
-            ExperienceBonusSource.Equipment or ExperienceBonusSource.Avatar or ExperienceBonusSource.Creature))
+            ExperienceBonusSource.Equipment or ExperienceBonusSource.Avatar or ExperienceBonusSource.Creature or
+            ExperienceBonusSource.LuckyCharacter or ExperienceBonusSource.LuckyParty))
             throw new InvalidDataException("外部系统不能重复提供已有owner的经验资格");
         var rates = context.Rates.ToList();
         var character = request.Character;
         long now = request.UnixSeconds;
+        if (adventurerBenefits is { Catalog.Lucky: { } lucky } && adventurerBenefits.IsLucky(character.Job, character.GrowType, now))
+        {
+            int percent = request.Event switch
+            {
+                ExperienceEvent.Kill => lucky.KillExperiencePercent,
+                ExperienceEvent.Clear => lucky.ClearExperiencePercent,
+                ExperienceEvent.Quest => lucky.QuestExperiencePercent,
+                _ => 0
+            };
+            if (percent > 0) rates.Add(new(ExperienceBonusSource.LuckyCharacter, percent));
+        }
         if (GrowthContractPolicy.Active(character, growth, now))
             rates.Add(new(ExperienceBonusSource.GrowthContract, growth!.ExperiencePercent));
         var equipped = character.Inventory.Items.Where(item => item.Position.List == InventoryListType.Equipment &&

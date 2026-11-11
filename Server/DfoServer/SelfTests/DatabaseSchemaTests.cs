@@ -267,6 +267,7 @@ internal static partial class DatabaseSchemaTests
             ConsumableStatesUpgrade(root);
             BossSelectionBuffUpgrade(root);
             VariousBuffUpgrade(root);
+            ReturningAdventurerUpgrade(root);
             BlacklistCountUpgrade(root);
             IncountNumberingUpgrade(root);
             Quest704NumberingUpgrade(root);

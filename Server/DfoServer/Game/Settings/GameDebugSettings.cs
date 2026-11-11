@@ -21,6 +21,7 @@ internal sealed record SupportCompanionConfiguration(int SelectionMask, string W
 internal sealed class GameDebugSettings
 {
     public DfoServer.Game.Events.AdventurerBenefitService? AdventurerBenefits { get; init; }
+    public DfoServer.Game.Events.ReturningAdventurerService? ReturningAdventurers { get; internal set; }
     readonly object supportGate = new();
     readonly Action<SupportCompanionConfiguration>? persistSupport;
     readonly object fatigueGate = new();

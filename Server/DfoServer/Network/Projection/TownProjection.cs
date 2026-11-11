@@ -222,7 +222,7 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
         await context.Notify(NotiPacketType.USERINFO,
             TownPackets.Actor(context.Session.ReadSkillCharacter(expected), grade, context.Channel,
                 timer.GetUtcNow().ToUnixTimeSeconds(), context.Session.ReadAdventureName(),
-                premiumPcRoom: context.Session.PremiumPcRoom), "pvp_grade_recovered", Current);
+                premiumPcRoom: context.Session.PremiumPcRoom, returningAdventurerType: context.Session.ReturningAdventurerType), "pvp_grade_recovered", Current);
     }
 
     public async Task OtherPlayerAsync(GameConnectionContext context, DfoServer.Game.Session.PublicCharacterSnapshot snapshot,
@@ -232,7 +232,7 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
         var now = timer.GetUtcNow();
         var actor = TownPackets.Actor(character, snapshot.PvpGrade, snapshot.Channel, now.ToUnixTimeSeconds(), snapshot.AdventureName,
             snapshot.Phase == DfoServer.Game.Session.SessionPhase.Town ? ActorSceneState.Town : ActorSceneState.Dungeon,
-            snapshot.PremiumPcRoom);
+            snapshot.PremiumPcRoom, returningAdventurerType: snapshot.ReturningAdventurerType);
         var player = TownPackets.OtherPlayer(character, stats.Compute(character), snapshot.AdventureLevel,
             snapshot.Channel, now);
         // 公开属性依赖同一目标的Actor身份，不能复用本人Player或接收者的资产。
@@ -268,9 +268,11 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
             await settings.PreloadGameOptionsAsync(context, settingReceipt);
         var appearanceTime = timer.GetUtcNow();
         bool premiumPcRoom = context.Session.PremiumPcRoom;
+        // 原生Player初始化消费幸运名单，必须先于本人Actor及技能表建立资格。
+        AdventurerBenefitProjection.PostLucky(context);
         await context.Notify(NotiPacketType.USERINFO,
             TownPackets.Actor(context.Session.ReadSkillCharacter(c), context.Session.ReadPvpGrade(c), context.Channel, appearanceTime.ToUnixTimeSeconds(), context.Session.ReadAdventureName(),
-                premiumPcRoom: premiumPcRoom), "actor");
+                premiumPcRoom: premiumPcRoom, returningAdventurerType: context.Session.ReturningAdventurerType), "actor");
         context.Premiums?.RecordPremiumAppearance(c, appearanceTime.ToUnixTimeSeconds(), premiumPcRoom);
         // Actor先建立本人对象；穿戴表装载前恢复装备准入技能，避免光剑、拳套、扫把被客户端按空技能树卸下。
         if (c.Learning.Initialized)

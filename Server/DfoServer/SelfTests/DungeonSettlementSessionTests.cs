@@ -41,6 +41,7 @@ internal static class DungeonSettlementSessionTests
         var definition = dungeons.Get(3);
         var maps = definition.Mazes.Single(maze => maze.ConnectsQuest(3145)).MapSpecification!;
         var expectedReward = clear.Calculate(definition, 0, 99);
+        ZeroExperience();
         DungeonSettlementTests.RunSortedStackCards(pvf, itemResources);
         CommittedSettlement();
         ReturnWithoutSettlement();
@@ -66,6 +67,29 @@ internal static class DungeonSettlementSessionTests
         EquipmentRarityCards();
         GmEpicCards();
         Console.WriteLine($"PASS {TestCheck.Count - before} 通关Session经验、冻结报告、空翻牌及返回断言（非实机）");
+
+        void ZeroExperience()
+        {
+            var isolated = DungeonCatalog.Load(pvf);
+            var definitions = (System.Collections.Concurrent.ConcurrentDictionary<int, Lazy<DungeonDefinition>>)
+                typeof(DungeonCatalog).GetField("definitions", System.Reflection.BindingFlags.Instance |
+                    System.Reflection.BindingFlags.NonPublic)!.GetValue(isolated)!;
+            definitions[3] = new(() => definition with
+                { RawSections = [.. definition.RawSections, new("experience increasing point", [new PvfToken(0, 0)])] });
+            using var f = new Fixture("ZeroSession", towns, characters, learning, quests);
+            f.SelectEntry();
+            Check(f.Session.EnterFormalDungeon(3, 3145, 0, isolated, rooms) is { Entry.ExperienceWeight: 0 },
+                "正式Session入场冻结显式零经验权重");
+            ClearRun(f);
+            var previous = f.Read();
+            var result = f.Session.SettleFormalDungeon(f.Created.Id, 99, 99, [91, 92], isolated, clear, growth);
+            Check(result.Outcome == DungeonRunOutcome.Accepted && result.Reward?.TotalExperience == 0 &&
+                f.Settlements == 1 && f.Read().Learning.Experience == previous.Learning.Experience,
+                "Session零经验结算通过成长预检、Run及文件库三处门禁，保存唯一凭证");
+            var replay = f.Session.SettleFormalDungeon(f.Created.Id, 99, 99, [91, 92], isolated, clear, growth);
+            Check(replay.Outcome == DungeonRunOutcome.Duplicate && f.Settlements == 1,
+                "Session零经验结算重放不再增加凭证或经验");
+        }
 
         void DisabledClearCards()
         {

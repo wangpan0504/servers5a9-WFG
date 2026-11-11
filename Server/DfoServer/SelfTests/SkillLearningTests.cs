@@ -12,6 +12,7 @@ internal static class SkillLearningTests
 {
     public static void RunCore()
     {
+        SkillVariantTests.Run();
         int checks = Count;
         SkillLearningCommand Request(ushort id = 5, byte context = 0, byte mode = 0) => new(context, mode, [new(id, false, 1)]);
         var definitions = new Dictionary<ushort, SkillLearningDefinition>

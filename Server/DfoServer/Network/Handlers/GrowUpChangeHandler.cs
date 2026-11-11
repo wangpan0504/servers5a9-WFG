@@ -43,7 +43,7 @@ internal sealed class GrowUpChangeHandler(GrowUpChangeService service, Character
         var plan = result.Plan!;
         // ACK785 result0 的 012999A60 按本地当前职业重建穿戴/技能显示，所以先安装真实Actor、两树与Player。
         await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(character, context.Session.ReadPvpGrade(character), context.Channel,
-            adventureName: context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom), "growup_change_actor", Guard);
+            adventureName: context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom, returningAdventurerType: context.Session.ReturningAdventurerType), "growup_change_actor", Guard);
         await SkillProjection.PublishAsync(context, character, "growup_change_skills", "growup_change_combo", Guard);
         await level.PlayerAsync(context, character, "growup_change_player", Guard);
         var changed = new InventoryResult(true, 0, plan.Inventory)

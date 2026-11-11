@@ -43,6 +43,8 @@ internal static partial class FormalDungeonTcpTests
         That(pcRoom.AccelerationPercent == 100 && bonusRules.InternetCafePercent == 20,
             "本版资源独立声明燃烧100%及通关网吧20%，不合并或重复乘算");
         await fixture.StartAsync();
+        That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort, "infinite-fatigue on", out var fatigueReply) &&
+            fatigueReply.StartsWith("OK ", StringComparison.Ordinal), "剧情燃烧夹具显式启用其要求的无限疲劳，不依赖旧默认");
         That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort, "pc-room on", out var reply) &&
             reply == "OK {\"premiumPcRoom\":true}", "隔离服务开启网吧资格");
         using var peer = Open(fixture);

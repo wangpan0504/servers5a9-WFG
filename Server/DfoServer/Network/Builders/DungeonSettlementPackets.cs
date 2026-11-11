@@ -115,7 +115,8 @@ internal static class DungeonSettlementPackets
     // 结果页加成分项按实机哨兵探针及匹配原码逐行投影：基础块+8为通关组队、+12为扮装；
     // 22个加成槽中1秘药、2黑钻、3网吧、5宠物、6冒险团、8通关成长契约、9通关疲劳燃烧、11通关公会、
     // 15杀怪疲劳燃烧、16疲劳Buff、17杀怪成长契约、19装备、20杀怪公会；槽7与14由客户端合并成
-    // “归来的勇士”，槽0/4/10/12/13/18/21当前无对应到账来源。显示值只取本次已到账的同一份分项。
+    // “归来的勇士”，槽0/4/10/12/13/18/21当前无对应到账来源。幸运角色和队伍奖励另取+123/+131。
+    // 显示值只取本次已到账的同一份分项。
     public static byte[] EmptyCardReward(DungeonClearExperienceReward reward, uint monsterExperience,
         uint monsterGrowthContractExperience = 0, uint monsterEquipmentExperience = 0,
         IReadOnlyList<DungeonObjectExperience>? objectExperience = null, uint monsterBossExperience = 0,
@@ -145,6 +146,9 @@ internal static class DungeonSettlementPackets
         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(77), monsterFatigueBurningExperience);
         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(85), monsterGrowthContractExperience);
         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(93), monsterEquipmentExperience);
+        // 02394367读取+123后经02394529写结果页索引15（73485幸运角色），+131写索引16（73486队伍奖励）。
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(123), Part(reward, ExperienceBonusSource.LuckyCharacter));
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(131), Part(reward, ExperienceBonusSource.LuckyParty));
         // 杀怪经验明细：u32 条数 + 每条（对象键、基础经验），客户端按对象键归并到怪物类型后显示各自经验。
         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(151), checked((uint)entries.Count));
         for (int index = 0; index < entries.Count; index++)

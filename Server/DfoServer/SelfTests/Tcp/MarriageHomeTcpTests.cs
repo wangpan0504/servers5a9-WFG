@@ -314,7 +314,8 @@ internal static class MarriageHomeTcpTests
             // 36 FATIGUE、14 UPDATE_ITEM_LIST、21 ACCEPTABLE_QUEST_LIST、356 CLEAR_QUEST_LIST、574 ACCEPTED_QUEST 来自 QuestCycleAsync；
             // 550 DUNGEON_ENTER_COUNT_INFO、1343 ADVENTURE_INFO、1349 ADVENTURE_LV_EXP 来自 LegacyServiceDayAsync；
             // 1536 ASSAULT_MODE_DAILY_INFO 来自 AssaultServiceDayAsync。720 WEEKLY_DUNGEON_INFO_RESETDAILY 同为日切通知。
-            That(packet.Kind == 0 && packet.Opcode is 2 or 3 or 4 or 6 or 14 or 21 or 22 or 23 or 24 or 36 or 356 or 541 or 550 or 574 or 720 or 1003 or 1005 or 1011 or 1012 or 1014 or 1015 or 1016 or 1017 or 1018 or 1343 or 1349 or 1379 or 1536 or 1681 ||
+            // 832/833为深渊日切状态；装备穿脱改用13静默重建已有物品，仍精确检查Actor/Player中的婚姻字段。
+            That(packet.Kind == 0 && packet.Opcode is 2 or 3 or 4 or 6 or 13 or 14 or 21 or 22 or 23 or 24 or 36 or 356 or 541 or 550 or 574 or 720 or 832 or 833 or 1003 or 1005 or 1011 or 1012 or 1014 or 1015 or 1016 or 1017 or 1018 or 1343 or 1349 or 1379 or 1536 or 1681 ||
                 packet.Kind == 1 && (packet.Opcode is >= 1034 and <= 1056 or 19 or 21), $"婚房只接收所属协议及场景通知，实际{packet.Kind}/{packet.Opcode}");
             packets.Add(packet);
         }

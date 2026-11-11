@@ -1,4 +1,5 @@
 using DfoServer.GameWorld.Dungeons;
+using DfoServer.GameWorld.Items;
 
 namespace DfoServer.Game.Dungeons;
 
@@ -11,7 +12,7 @@ namespace DfoServer.Game.Dungeons;
 // 入口 disaster.dgn 的 [designate dungeon difficulty] 与 [difficulty] 都是 2。
 // 五张实图 dgn 和 etc/itemdropinfo_clearreward.etc 都不写这个编号。
 // 礼盒 [etc] 打开后是 20 个账号绑定的 10309039，数量由开箱逻辑处理，这里不拆成 20 个散件。
-// 小地图物件破坏没有服务端事件，闪耀的精炼时空石不在这里发。
+// 原生控制器按破坏数保留63489–63493之一，并以rewrite清除其余四只；仅保留石头的正常死亡掉一盒。
 internal static class DisasterDungeonPolicy
 {
     public const string TypeName = "disaster dungeon";
@@ -23,6 +24,39 @@ internal static class DisasterDungeonPolicy
     public const int CrystalBoxId = 490012200;
     public const int CrystalId = 10309039;
     public const int CrystalCount = 20;
+
+    public static bool IsRewardStone(DungeonEntryPlan entry, DungeonPlannedMonster monster) =>
+        entry.DungeonId is >= FirstPlayableId and <= LastPlayableId && entry.IsOrdinary &&
+        !entry.IsPractice && !entry.IsTutorial && !entry.IsClassExperience && !entry.DisableItemDrops &&
+        entry.RaidEntry is null && monster.MonsterId is >= 63489 and <= 63493 &&
+        monster.CanReportDeath && !monster.IsFriendly && !monster.IsSpecialChild &&
+        monster.AiCharacter is null && monster.SourceMap is { } map && entry.IsTerminalMap(map) &&
+        monster.Source?.Path.Equals($"monster/newmonsters/harlem/disaster/disasterstone/disasterstone{monster.MonsterId - 63488}.mob",
+            StringComparison.OrdinalIgnoreCase) == true;
+
+    // 五种MOB没有[item]；恢复本服对应档礼盒，盒内精炼石数量仍由真实礼盒资源随机。
+    public static DungeonDropGenerationPlan? PrepareStoneDrop(DungeonEntryPlan entry, DungeonPlannedMonster monster,
+        Func<int, ItemTemplate> resolveItem)
+    {
+        if (!IsRewardStone(entry, monster)) return null;
+        int id = 490012195 + monster.MonsterId - 63489;
+        var box = resolveItem(id);
+        if (box.Id != id || box.Kind != ItemKind.Consumable || box.StackLimit < 1 || !box.Expiration.SupportsCreation)
+            throw new InvalidDataException("灾难时空石奖励缺少可创建的对应档礼盒");
+        return new("disaster-stone-box-local-v1;" + monster.Source!.Path,
+            [new(1, new DungeonItemDropPool([new DungeonWeightedDropItem(box, 1)]), 1, 1, ProbabilityDenominator: 1)]);
+    }
+
+    public static bool CanRewardStone(SinglePlayerDungeonRun run, NativeDungeonCombatAuthority authority,
+        PreparedDungeonDeath pending)
+    {
+        if (!IsRewardStone(run.Entry, pending.Monster) || !authority.WasReportedWithoutRewrite(pending.Death)) return false;
+        var alternatives = run.CurrentMonsterPlan.Monsters.Where(monster => IsRewardStone(run.Entry, monster) &&
+            monster.ObjectKey != pending.Monster.ObjectKey).ToArray();
+        // 原生RewardCheck先清除四档，再留下一个可攻击档；缺少清除事实不能仅凭客户端选择的模板领奖。
+        return alternatives.Length == 4 && alternatives.Select(monster => monster.MonsterId).Distinct().Count() == 4 &&
+            alternatives.All(monster => authority.WasClearedWithRewrite(run, monster.ObjectKey));
+    }
 
     public static bool IsPlayable(DungeonDefinition definition) =>
         definition.Id is >= FirstPlayableId and <= LastPlayableId && IsDisaster(definition);
