@@ -10,7 +10,7 @@ namespace DfoServer;
 
 internal static partial class DisasterDungeonTests
 {
-    static void VerifyStoneReward(QuestSceneTests.Fixture fixture, FormalDungeonReceipt receipt, int tier,
+    static FormalDungeonReceipt VerifyStoneReward(QuestSceneTests.Fixture fixture, FormalDungeonReceipt receipt, int tier,
         DungeonKillExperienceCatalog kills, CharacterGrowthCatalog growth, ItemResources items)
     {
         var start = receipt.Snapshot.CurrentMap.Position;
@@ -84,6 +84,7 @@ internal static partial class DisasterDungeonTests
             fixture.Read().Inventory.Items.Where(item => item.Core.ItemId is >= 490012195 and <= 490012199).Sum(item => item.Core.Count) == 1 &&
             fixture.Session.PickFormalDungeonItem(ground.Reservation.GroundKey, items.Items, items.EpicPieces, items.GoldLimits).Outcome == DungeonRunOutcome.Rejected,
             "真实拾取落库一盒，重复领取不多发");
+        return death.Receipt!;
 
         void FailGrowth() => fixture.Sql("CREATE TRIGGER disaster_stone_fail AFTER INSERT ON character_dungeon_growth_receipts BEGIN SELECT RAISE(ABORT,'disaster stone rollback'); END");
     }

@@ -182,6 +182,7 @@ internal static class TcpRegressionTests
         ("marriage", MarriageTcpTests.RunAsync),
         ("marriage-wedding", MarriageWeddingTcpTests.RunAsync),
         ("marriage-home", MarriageHomeTcpTests.RunAsync),
+        ("marriage-channel", RaidChannelLandingTcpTests.RunMarriageAsync),
         ("marriage-dungeon", PartyDungeonTcpTests.RunMarriageAsync),
         ("tutorial", TutorialTcpTests.RunAsync),
         ("channel-entry", ChannelEntryTcpTests.RunAsync),
@@ -424,6 +425,11 @@ internal static class TcpRegressionTests
         }),
         ("particular-hell-socket", FormalDungeonTcpTests.RunParticularHellAsync),
         ("sleepy-hollow-socket", FormalDungeonTcpTests.RunSleepyHollowAsync),
+        ("week-dungeon-rewards", (_, _, resources) =>
+        {
+            WeekDungeonRewardTests.Run(resources);
+            return Task.CompletedTask;
+        }),
         ("pandemonium-regional-drops", FormalDungeonTcpTests.RunRegionalDropsAsync),
         ("sleepy-hollow-materials", (_, _, resources) =>
         {
@@ -789,6 +795,7 @@ internal static class TcpRegressionTests
     static readonly HashSet<string> TargetedOnly = new(StringComparer.Ordinal)
     {
         "otherverse-drop-rules",
+        "week-dungeon-rewards",
         "rift-daily-rules", "particular-hell-entry",
         "tayberrs-settlement",
         "champion-policy", "epic-road-admission",

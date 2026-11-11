@@ -102,7 +102,7 @@ internal sealed class SettingsHandler(ClientSettingsService settings, ServerLog 
         {
             await context.Notify(NotiPacketType.USERINFO,
                 TownPackets.Actor(character, context.Session.ReadPvpGrade(character), context.Channel, adventureName: context.Session.ReadAdventureName(),
-                    premiumPcRoom: context.Session.PremiumPcRoom, returningAdventurerType: context.Session.ReturningAdventurerType), "emotion_actor", Guard);
+                    premiumPcRoom: context.Session.PremiumPcRoom, returningAdventurerType: context.Session.ReturningAdventurerType, marriage: context.MarriageAppearance), "emotion_actor", Guard);
             context.Owner.Execute(() =>
             {
                 if (Guard() && phase == SessionPhase.Town && !context.BlocksTownActions) projection.Refresh(context);

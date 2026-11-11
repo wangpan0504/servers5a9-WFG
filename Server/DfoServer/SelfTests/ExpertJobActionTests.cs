@@ -22,6 +22,15 @@ internal static class ExpertJobActionTests
             scripts.DisjointRules.OwnMachineBigWinPercent(9) == 5,
             "当前PVF分解师完整八列、四色池和9级自用5个百分点加成已装配");
         var items = resources.Items;
+        var purple = items.Get(10400) with { Rarity = 2, MinimumLevel = 95, Grade = 95 };
+        var npcRewards = DisjointResultCalculator.Calculate(resources.Disjoint, purple, new Random(37));
+        var machineGold = ExpertJobCraft.DisjointProducts(1, scripts.DisjointRules, purple,
+            InventoryRewardGrantService.Create(purple), _ => 0);
+        var machineNormal = ExpertJobCraft.DisjointProducts(1, scripts.DisjointRules, purple,
+            InventoryRewardGrantService.Create(purple), _ => 9999);
+        That(npcRewards.All(row => row.ItemId != 3262) && machineGold.Contains(new InventoryReward(3262, 30)) &&
+            machineNormal.All(row => row.ItemId != 3262) && machineNormal.Any(row => row.ItemId == 3166),
+            "普通NPC表没有金色；玩家机器紫装大成功按实际EXJ出金色，普通抽样不保底");
         That(items.Get(20238) is { Rarity: 3, BossDrop: true } && items.Get(10114).BossDrop == false,
             "当前PVF牛头兵项链的boss drop分类与普通装备区分");
         var policy = new ExpertJobCompatibility();

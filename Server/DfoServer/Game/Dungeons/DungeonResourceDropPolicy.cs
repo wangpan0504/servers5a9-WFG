@@ -34,7 +34,7 @@ internal sealed class DungeonResourceDropPolicy(DungeonDropRuleCatalog rules, Du
         bool ordinaryLuke = entry.IsOrdinaryLuke && entry.DungeonId is >= 5101 and <= 5106 && entry.IsOrdinary && !entry.IsPractice;
         if (ordinaryLuke && special?.OrdinaryLukeCards.Count != 24)
             throw new NotSupportedException("普通卢克缺少已批准的24张专属卡片资源合同");
-        var plans = new Dictionary<(int MonsterId, int Level, byte Type, byte SpawnType, int HellRolls, bool Boss, bool Wave, bool CanReward, bool CosmoBoss, bool LegendRare, bool SleepyHollowBoss, bool DimensionTerminal, bool RiftRewards, bool RegionalReward, bool AssaultMaterial, bool EpicRoadSimulated, bool CarbonCrystal), DungeonDropGenerationPlan>();
+        var plans = new Dictionary<(int MonsterId, int Level, byte Type, byte SpawnType, int HellRolls, bool Boss, bool Wave, bool CanReward, bool CosmoBoss, bool LegendRare, bool SleepyHollowBoss, bool DimensionTerminal, bool RiftRewards, bool RegionalReward, bool AssaultMaterial, bool EpicRoadSimulated, bool CarbonCrystal, bool WeekDungeonReward), DungeonDropGenerationPlan>();
         var epicEquipment = harlemEpics?.Pool(entry);
         var dropMultipliers = entry.DropControlCaptured ? entry.DropMultipliers : dropControl?.Current.Resolve(entry);
         bool regionalDrops = regional?.Applies(entry) == true;
@@ -48,12 +48,13 @@ internal sealed class DungeonResourceDropPolicy(DungeonDropRuleCatalog rules, Du
                 riftEpics?.Matches(entry, monster) == true,
                 regionalDrops && PandemoniumRegionalDropPolicy.CanReward(monster), assaultMaterials?.Matches(entry, monster) == true,
                 epicRoadSimulated?.Matches(entry, monster) == true,
-                carbonCrystal is not null && CarbonCrystalDropPolicy.CanReward(entry, monster));
+                carbonCrystal is not null && CarbonCrystalDropPolicy.CanReward(entry, monster), WeekDungeonRewardPolicy.Matches(entry, monster));
             if (plans.TryGetValue(key, out var existing)) return existing;
             // APC 不套普通怪概率；深渊奖励与不带奖励的普通计划分别保存。
-            var plan = monster.SpawnType > 3
+            var plan = WeekDungeonRewardPolicy.Prepare(entry, monster, (id, type) =>
+                Prepare(id, monster.CandidateLevel, type, entry.Difficulty, entry.BasisLevel, entry.PartyMemberCount)) ?? (monster.SpawnType > 3
                 ? new DungeonDropGenerationPlan("hell-party-apc", [], amplification: amplification)
-                : Prepare(monster.MonsterId, monster.CandidateLevel, monster.RewardType, entry.Difficulty, entry.BasisLevel, entry.PartyMemberCount);
+                : Prepare(monster.MonsterId, monster.CandidateLevel, monster.RewardType, entry.Difficulty, entry.BasisLevel, entry.PartyMemberCount));
             if (riftEpics is not null) plan = riftEpics.Extend(plan, entry, monster);
             if (monster.HellRewardRolls > 0 && hellRewards is not null)
                 plan = hellRewards.Extend(plan, entry.BasisLevel ?? monster.CandidateLevel, entry.HellPartyMode,

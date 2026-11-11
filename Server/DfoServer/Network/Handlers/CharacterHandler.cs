@@ -59,7 +59,7 @@ internal sealed partial class CharacterHandler(CharacterCatalog characters, Town
         }
         await context.Reply(CmdPacketType.CHANGE_PVP_PRIVATE_TO_NOMAL, [1], "pvp_private_converted");
         await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(converted, context.Session.ReadPvpGrade(converted), context.Channel,
-            adventureName: context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom, returningAdventurerType: context.Session.ReturningAdventurerType), "pvp_private_converted_actor");
+            adventureName: context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom, returningAdventurerType: context.Session.ReturningAdventurerType, marriage: context.MarriageAppearance), "pvp_private_converted_actor");
         log.Write("pvp_private_converted", new { Connection = context.Id, Character = converted.Id, converted.Revision });
         return CommandResult.Handled;
     }

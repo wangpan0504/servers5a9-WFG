@@ -77,7 +77,7 @@ internal static partial class TownPackets
 
     public static byte[] Actor(Character character, DfoServer.Game.Pvp.PvpDisplayGrade pvpGrade, ChannelIdentity channel = default, long? utcSeconds = null,
         string adventureName = "", ActorSceneState sceneState = ActorSceneState.Town, bool premiumPcRoom = false,
-        ushort returningAdventurerType = 0)
+        ushort returningAdventurerType = 0, MarriageAppearance? marriage = null)
     {
         if (character.BlacklistCount < 0)
             throw new InvalidDataException("角色被拉黑计分不能为负数");
@@ -101,6 +101,10 @@ internal static partial class TownPackets
             {
                 state[23] = relationship.State;
                 state[24] = relationship.RingLevel;
+                // 0267FB97/0267FBDF同样覆盖Data+3EC；不能用零分重建已布置婚房的角色。
+                if (relationship.State == 4 && !relationship.Furniture.IsEmpty && marriage is null)
+                    throw new InvalidOperationException("已布置婚房的Actor缺少装饰分目录");
+                System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(state.AsSpan(25), marriage?.Score(character) ?? 0);
             }
             // 0267F78D将状态+44h写入Data+488；023BC931据此安装真实组队栏边框。
             System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(state.AsSpan(68),
