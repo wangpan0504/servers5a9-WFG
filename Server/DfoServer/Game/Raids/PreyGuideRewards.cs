@@ -19,7 +19,7 @@ internal sealed class PreyGuideRewards(RaidScript script, ItemCatalog items, Boo
         !offer.PreyDisplay.IsDefaultOrEmpty && offer.PreyDisplay.Length == offer.Grants.Length && offer.Grants.Length <= 32 &&
         offer.PreyDisplay.Select((row, index) => row.Matches(offer with { Grants = [offer.Grants[index]] })).All(value => value);
 
-    internal LukeRaidCompletionPolicy Create(bool pcroom, Func<int, int>? draw = null, decimal epicMultiplier = 1)
+    internal LukeRaidCompletionPolicy Create(bool pcroom, Func<int, int>? draw = null, decimal epicMultiplier = 1, bool privilege = false)
     {
         if (!script.Issues.IsEmpty || script.Phases.Length != 2) throw new InvalidDataException("普雷引导奖励声明不完整");
         var phases = ImmutableArray.CreateBuilder<LukePhaseCompletionPolicy>(2);
@@ -33,7 +33,8 @@ internal sealed class PreyGuideRewards(RaidScript script, ItemCatalog items, Boo
                 foreach (var row in rows)
                 {
                     Require(row);
-                    if (kind != "pcroom_card" || pcroom) fixedGrants.AddRange(containers.ResolveAll(row.ItemId, draw));
+                    if (kind == "pcroom_card" && !pcroom || kind == "privilege_card" && !privilege) continue;
+                    fixedGrants.AddRange(containers.ResolveAll(row.ItemId, draw));
                 }
             }
             var squad = phase.Rewards.Where(row => row.Kind == "squad_item").ToArray();

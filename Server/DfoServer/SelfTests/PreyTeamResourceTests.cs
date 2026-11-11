@@ -178,8 +178,23 @@ internal static class PreyTeamResourceTests
             containers.ResolveAll(zeroWeight.Phases[index].Rewards.First(row => row.Kind == "squad_item" && row.RawB > 0).ItemId, _ => 0))).All(value => value),
             "零权重条目保留但不参与抽中，不因其存在硬拒整个奖励配置");
         var guide = PreyGuideScript.Parse(tokens, symbols, archive.ResolveString);
-        That(new PreyGuideRewards(guide, items.Items, items.Boosters).Create(false, _ => 0).Source == PreyGuideRewards.Source,
+        var guideRewards = new PreyGuideRewards(guide, items.Items, items.Boosters);
+        That(guideRewards.Create(false, _ => 0).Source == PreyGuideRewards.Source,
             "原引导入口保留原来源与奖励解释");
+        var guidePlain = guideRewards.Create(false, _ => 0);
+        var guidePrivilege = guideRewards.Create(false, _ => 0, privilege: true);
+        That(guidePlain.Phases[1].Rewards.Offers.Single(row => row.Kind == 1).Grants.SequenceEqual([new InventoryReward(10308807, 90)]) &&
+            guidePrivilege.Phases[1].Rewards.Offers.Single(row => row.Kind == 1).Grants.Length == 2,
+            "引导固定牌仅在特权有效时追加特权奖励");
+        var guideContainers = new RaidRewardContainers(guide, items.Items, items.Boosters);
+        foreach (var (id, count) in new[] { (10309344, 6), (10309345, 7), (10309346, 8), (10309347, 13) })
+            That(guideContainers.ResolveAll(id, _ => 0).SequenceEqual([new InventoryReward(10308559, count)]),
+                "引导普通牌按实际配方展开：" + id);
+        That(guideContainers.ResolveAll(10309348, _ => 0).SequenceEqual(
+            [new InventoryReward(10308559, 8), new InventoryReward(10308690, 10)]) &&
+            guideContainers.ResolveAll(10309351, _ => 0).SequenceEqual(
+            [new InventoryReward(10308559, 6), new InventoryReward(10308715, 1)]),
+            "引导金牌和武器自选盒均保留全部产物");
         Console.WriteLine($"PASS {Count - before} 普雷普通奖励资源断言");
     }
 }
