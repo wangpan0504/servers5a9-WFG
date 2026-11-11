@@ -28,6 +28,15 @@ internal static class DisasterDungeonTests
         var entrance = new DungeonDefinition(DisasterDungeonPolicy.EntranceId, "dungeon/disaster.dgn", 93, 105, [], [])
             { DungeonType = DisasterDungeonPolicy.TypeName };
         var playable = entrance with { Id = DisasterDungeonPolicy.FirstPlayableId };
+        var routedEntrance = entrance with { RawSections = [new("enter random dungeon list",
+            Enumerable.Range(5341, 5).Select(id => new PvfToken(0, id)).ToArray())] };
+        That(Enumerable.Range(0, 5).Select(index => DisasterDungeonPolicy.SelectPlayable(routedEntrance, _ => index))
+            .SequenceEqual(Enumerable.Range(5341, 5)), "随机入口按PVF原顺序覆盖五张实图");
+        That(DisasterDungeonPolicy.SelectPlayable(routedEntrance, _ => throw new InvalidOperationException(), 5345) == 5345,
+            "队员复用队长实图且不再次随机");
+        Reject<InvalidDataException>(() => DisasterDungeonPolicy.SelectPlayable(routedEntrance, _ => 5), "路线随机越界拒绝");
+        Reject<InvalidDataException>(() => DisasterDungeonPolicy.SelectPlayable(routedEntrance, _ => 0, 3), "队伍实图不在列表拒绝");
+        Reject<InvalidDataException>(() => DisasterDungeonPolicy.SelectPlayable(entrance, _ => 0), "入口缺失随机列表拒绝");
         var typeOnly = new DungeonDefinition(3, "dungeon/ordinary.dgn", 1, 1, [], [])
             { DungeonType = DisasterDungeonPolicy.TypeName };
         var idOnly = new DungeonDefinition(DisasterDungeonPolicy.FirstPlayableId, "dungeon/ordinary.dgn", 93, 105, [], []);
@@ -64,13 +73,11 @@ internal static class DisasterDungeonTests
     {
         int before = Count;
         var catalog = SelfTestCatalogs.Dungeons(pvf);
-        bool entranceRejected = false;
-        try { catalog.Get(DisasterDungeonPolicy.EntranceId); }
-        catch (NotSupportedException error) { entranceRejected = error.Message == "unsupported: 未发现 maze info 资源结构"; }
-        That(entranceRejected, "5340 仍因没有 maze info 不能作为可进入副本");
+        That(catalog.Get(5340).Mazes.Count == 0 && catalog.Get(5340).EnterRandomDungeons.SequenceEqual(Enumerable.Range(5341, 5)),
+            "5340只读取入口随机列表，不伪造迷宫");
         var hero = new Character(99, 0, "Disaster", 1, new Location(38, 1, 450, 234), null) { Level = 95 };
-        That(!DungeonEntryPlan.TryCreate(catalog, hero, DisasterDungeonPolicy.EntranceId, 0, 0, out _, out var entranceReason, draw: _ => 0, quests: quests) &&
-            entranceReason == "dungeon-resource-unavailable", "5340 入场计划不可用：" + entranceReason);
+        That(!DungeonEntryPlan.TryCreate(catalog, hero, DisasterDungeonPolicy.EntranceId, 0, 2, out _, out var entranceReason, draw: _ => 0, quests: quests),
+            "5340不能跳过会话分流直接创建迷宫：" + entranceReason);
         for (int id = DisasterDungeonPolicy.FirstPlayableId; id <= DisasterDungeonPolicy.LastPlayableId; id++)
         {
             var definition = catalog.Get(id);
@@ -106,7 +113,7 @@ internal static class DisasterDungeonTests
         That(NextScriptLine(entranceScript, "[designate dungeon difficulty]") == "2" &&
             NextScriptLine(entranceScript, "[difficulty]") == "2" &&
             NextScriptLine(entranceScript, "[enter random dungeon list]") == "5341 5342 5343 5344 5345",
-            "入口脚本指定难度 2 并列出五张实图；本测试不据此实现 5340 分流");
+            "入口脚本指定难度 2 并列出五张实图");
         That(!pvf.ReadText("etc/itemdropinfo_clearreward.etc").Contains("490012200", StringComparison.Ordinal),
             "通用通关奖励表不引用 490012200");
         for (int id = DisasterDungeonPolicy.FirstPlayableId; id <= DisasterDungeonPolicy.LastPlayableId; id++)
@@ -251,6 +258,22 @@ internal static class DisasterDungeonTests
             fatigueSevenAsserted = true;
         }
         That(fatigueSevenAsserted, "任务门槛重试结束后仍未执行疲劳 7 断言");
+        var (entranceDone, entrancePosition) = DungeonEntryCostTests.Selection(towns, DisasterDungeonPolicy.EntranceId);
+        foreach (int id in completed) entranceDone.Add(id);
+        for (int route = 0; route < 5; route++)
+        {
+            using var gate = Open(towns, characters, skills, growth, quests, incounts, items, entrancePosition, [.. entranceDone], 8, null);
+            int target = route;
+            var entered = gate.Session.EnterFormalDungeon(5340, 0, 2, catalog, rooms, drops, items.Items,
+                bound => bound == 5 ? target : 0, items.EpicPieces);
+            That(entered is not null && entered.Entry.DungeonId == 5341 + route && entered.Entry.Difficulty == 2,
+                "5340正式入口选择实图" + (5341 + route) + "，实际 " + gate.Session.LastFormalDungeonRejection);
+            That(gate.Session.CompleteFormalDungeonLoading() is not null && gate.Read().Fatigue!.Remaining == 5,
+                "随机入口首房沿实图规则扣3点疲劳");
+            var entryPeriod = DungeonIncountPolicy.AccountCharges(incounts, 5341 + route, DateTimeOffset.UtcNow).First().Period;
+            That(Enumerable.Range(5340, 6).All(id => gate.Repository.LoadAccountDungeonIncount(gate.Owner, id, entryPeriod) == 1),
+                "随机入口按实图提交六行连带账号次数，各计一次");
+        }
         for (int remaining = 0; remaining <= 7; remaining++)
         {
             using var gate = Open(towns, characters, skills, growth, quests, incounts, items, position, completed,

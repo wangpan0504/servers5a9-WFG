@@ -285,6 +285,23 @@ internal sealed partial class GameSession
         GriefTowerAdmission? grief = null;
         uint selectionDungeon = dungeonId;
         if (war is not null) dungeonId = war.Battle.View.ActualDungeon(dungeonId);
+        if (dungeonId == DisasterDungeonPolicy.EntranceId)
+        {
+            var entrance = catalog.Get(DisasterDungeonPolicy.EntranceId);
+            if (questId != 0 || retry is not null || classExperience || hellParty || hellLegend || sealDoor || practice ||
+                !entrance.TryGetDesignatedDifficulty(out byte designated) || difficulty != designated)
+                return RejectFormal("disaster-entrance-mode-conflict");
+            try
+            {
+                // 选图资格仍认5340；队员复用队长已规划的实图，不各自随机。
+                int? sharedDungeon = shared is null ? null : checked((int)shared.Session.PreparedParty(shared).Dungeon.Entry.DungeonId);
+                dungeonId = checked((uint)DisasterDungeonPolicy.SelectPlayable(entrance, draw ?? Random.Shared.Next, sharedDungeon));
+                if (!DisasterDungeonPolicy.IsPlayable(catalog.Get(checked((int)dungeonId))))
+                    return RejectFormal("disaster-route-resource-mismatch");
+            }
+            catch (Exception error) when (error is InvalidDataException or NotSupportedException or FileNotFoundException)
+            { return RejectFormal("disaster-route-resource-unavailable"); }
+        }
         if (dungeonId <= int.MaxValue && catalog.GriefTower.FloorsByDungeon.TryGetValue((int)dungeonId, out var requestedGrief))
         {
             if (difficulty != 0 || retry is not null || classExperience || hellParty || hellLegend || sealDoor || practice)

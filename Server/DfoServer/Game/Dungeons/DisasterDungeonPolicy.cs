@@ -30,6 +30,18 @@ internal static class DisasterDungeonPolicy
     public static bool IsEntrance(DungeonDefinition definition) =>
         definition.Id == EntranceId && IsDisaster(definition);
 
+    public static int SelectPlayable(DungeonDefinition entrance, Func<int, int> draw, int? sharedDungeon = null)
+    {
+        var ids = entrance.EnterRandomDungeons;
+        if (!IsEntrance(entrance) || ids.Count == 0 || ids.Any(id => id is < FirstPlayableId or > LastPlayableId))
+            throw new InvalidDataException("灾难领域入口缺少合法随机实图列表");
+        if (ids.Distinct().Count() != ids.Count) throw new InvalidDataException("灾难领域随机实图重复");
+        if (sharedDungeon is { } shared)
+            return ids.Contains(shared) ? shared : throw new InvalidDataException("灾难领域队伍路线不在入口列表");
+        int at = draw(ids.Count);
+        return at >= 0 && at < ids.Count ? ids[at] : throw new InvalidDataException("灾难领域随机路线越界");
+    }
+
     // 练习、教程、职业体验和无疲劳标记不套这套门槛。回放仍是实图入场，沿用同一门槛。
     public static bool AppliesFatigue(DungeonDefinition definition, bool practice) =>
         IsPlayable(definition) && !practice && !definition.DisableFatigueConsumption &&
