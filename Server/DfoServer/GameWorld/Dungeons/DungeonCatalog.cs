@@ -161,6 +161,13 @@ internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel,
     public int DummyAppearCount => RawSections.Where(row => row.Tag == "dummy appear count").ToArray() is
         [{ Tokens: [{ Type: 0, Value: >= 0 and < ushort.MaxValue } count] }] ? count.Value : 0;
     public string? DungeonType { get; init; }
+    public IReadOnlyList<int> EnterRandomDungeons => RawSections.Where(row => row.Tag == "enter random dungeon list").ToArray() switch
+    {
+        [] => [],
+        [var row] when row.Tokens.Count > 0 && row.Tokens.All(token => token.Type == 0 && token.Value > 0) =>
+            row.Tokens.Select(token => token.Value).ToArray(),
+        _ => throw new InvalidDataException("随机副本列表必须是唯一非空整数段")
+    };
     // 仅三个正式泰波尔斯模式，任务版与升级版继续走各自合同。
     public bool IsTayberrs => Id is 291100320 or 291100322 or 5349 && WarriorsDungeon == "Tayberrs";
     public bool IsTayberrsStory => Id == 291100321 &&
@@ -819,7 +826,10 @@ internal sealed class DungeonCatalog
         }
 
         Finish();
-        if (mazes.Count == 0)
+        // 灾难领域5340只承载选图与随机实图列表；允许读取元数据，不为入口伪造迷宫。
+        bool disasterEntrance = id == 5340 && dungeonType == "disaster dungeon" &&
+            sections.Any(section => section.Tag == "enter random dungeon list" && section.Tokens.Count > 0);
+        if (mazes.Count == 0 && !disasterEntrance)
             throw new NotSupportedException("unsupported: 未发现 maze info 资源结构");
         return new(id, path, minimum, basis, Freeze(mazes), Freeze(sections))
         {
