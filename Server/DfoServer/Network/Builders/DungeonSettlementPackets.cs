@@ -114,13 +114,14 @@ internal static class DungeonSettlementPackets
 
     // 结果页加成分项按实机哨兵探针及匹配原码逐行投影：基础块+8为通关组队、+12为扮装；
     // 22个加成槽中1秘药、2黑钻、3网吧、5宠物、6冒险团、8通关成长契约、9通关疲劳燃烧、11通关公会、
-    // 15杀怪疲劳燃烧、16疲劳Buff、17杀怪成长契约、19装备、20杀怪公会；槽7与14由客户端合并成
-    // “归来的勇士”，槽0/4/10/12/13/18/21当前无对应到账来源。幸运角色和队伍奖励另取+123/+131。
+    // 12杀怪组队、15杀怪疲劳燃烧、16疲劳Buff、17杀怪成长契约、19装备、20杀怪公会；槽7与14由客户端合并成
+    // “归来的勇士”，槽0/4/10/13/18/21当前无对应到账来源。幸运角色和队伍奖励另取+123/+131。
     // 显示值只取本次已到账的同一份分项。
     public static byte[] EmptyCardReward(DungeonClearExperienceReward reward, uint monsterExperience,
         uint monsterGrowthContractExperience = 0, uint monsterEquipmentExperience = 0,
         IReadOnlyList<DungeonObjectExperience>? objectExperience = null, uint monsterBossExperience = 0,
-        uint monsterFatigueBurningExperience = 0)
+        uint monsterFatigueBurningExperience = 0, uint monsterGuildExperience = 0, uint monsterFatigueBuffExperience = 0,
+        uint monsterPartyExperience = 0)
     {
         // 所有翻牌奖励为空。固定经验字段和杀怪明细来自已经提交的同一次结算。
         // 本版固定尾部含八个独立bool，不能套用其他版本的210B正文。
@@ -143,9 +144,13 @@ internal static class DungeonSettlementPackets
         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(49), Part(reward, ExperienceBonusSource.GrowthContract));
         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(53), Part(reward, ExperienceBonusSource.FatigueBurning));
         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(61), Part(reward, ExperienceBonusSource.Guild));
+        // 0239408E读槽12，0239443A写杀怪数组索引0；039E4B85以C004“组队奖励”命名该行。
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(65), monsterPartyExperience);
         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(77), monsterFatigueBurningExperience);
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(81), monsterFatigueBuffExperience);
         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(85), monsterGrowthContractExperience);
         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(93), monsterEquipmentExperience);
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(97), monsterGuildExperience);
         // 02394367读取+123后经02394529写结果页索引15（73485幸运角色），+131写索引16（73486队伍奖励）。
         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(123), Part(reward, ExperienceBonusSource.LuckyCharacter));
         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(131), Part(reward, ExperienceBonusSource.LuckyParty));
@@ -190,11 +195,13 @@ internal static class DungeonSettlementPackets
         DungeonCardOptions? options = null,DungeonCardReward? blackDiamond = null,
         uint monsterGrowthContractExperience = 0, uint monsterEquipmentExperience = 0,
         IReadOnlyList<DungeonObjectExperience>? objectExperience = null, uint monsterBossExperience = 0, byte slot = 0,
-        uint monsterFatigueBurningExperience = 0)
+        uint monsterFatigueBurningExperience = 0, uint monsterGuildExperience = 0, uint monsterFatigueBuffExperience = 0,
+        uint monsterPartyExperience = 0)
     {
         if (slot >= 8) throw new ArgumentOutOfRangeException(nameof(slot));
         var empty = EmptyCardReward(reward, monsterExperience, monsterGrowthContractExperience, monsterEquipmentExperience,
-            objectExperience, monsterBossExperience, monsterFatigueBurningExperience);
+            objectExperience, monsterBossExperience, monsterFatigueBurningExperience, monsterGuildExperience, monsterFatigueBuffExperience,
+            monsterPartyExperience);
         if (card is null) return empty;
         card.Validate();
         var free = Display(card);

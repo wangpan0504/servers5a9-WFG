@@ -16,10 +16,12 @@ internal static class ExclusiveDropPackets
         int? enteredDungeonId, DungeonCardOptions? options = null, DungeonCardReward? blackDiamond = null,
         uint monsterGrowthContractExperience = 0, uint monsterEquipmentExperience = 0,
         IReadOnlyList<DungeonObjectExperience>? objectExperience = null, uint monsterBossExperience = 0, byte slot = 0,
-        uint monsterFatigueBurningExperience = 0)
+        uint monsterFatigueBurningExperience = 0, uint monsterGuildExperience = 0, uint monsterFatigueBuffExperience = 0,
+        uint monsterPartyExperience = 0)
     {
         ExclusiveTableNotice.RejectUnproven(ExclusiveNotice.ClearCard, enteredDungeonId);
         return DungeonSettlementPackets.CardReward(reward, monsterExperience, card, options, blackDiamond, monsterGrowthContractExperience,
-            monsterEquipmentExperience, objectExperience, monsterBossExperience, slot, monsterFatigueBurningExperience);
+            monsterEquipmentExperience, objectExperience, monsterBossExperience, slot, monsterFatigueBurningExperience,
+            monsterGuildExperience, monsterFatigueBuffExperience, monsterPartyExperience);
     }
 }

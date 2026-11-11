@@ -127,7 +127,7 @@ internal static class AdventurePackets
     });
     // 客户端按胶囊格数展示可领取次数；经验上限可能覆盖多格，但显示不能超过资源声明的最大格数。
     public static uint Claims(AdventureState state, AdventureCatalog catalog) =>
-        (uint)Math.Min(catalog.Capsule.MaximumGauges, state.CapsuleExperience / catalog.Capsule.MinimumExperience);
+        (uint)Math.Min(catalog.Capsule.MaximumGauges, state.CapsuleExperience / catalog.Capsule.GaugeExperience);
 
     public static byte[] Candidates(IReadOnlyList<AdventureMember> rows, byte region) => Build(writer =>
     {

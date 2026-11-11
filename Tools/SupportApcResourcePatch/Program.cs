@@ -3,6 +3,12 @@ using System.Text.Json;
 using PvfLib;
 
 Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+if (args is ["prepare-support-damage", var damagePvf, var damageOutput])
+{
+    using var source = PvfArchive.Open(damagePvf);
+    SupportDamageDelta.Write(source, damageOutput);
+    return;
+}
 if (args is ["prepare-support-opening", var openingPvf, var openingOutput])
 {
     using var source = PvfArchive.Open(openingPvf);
