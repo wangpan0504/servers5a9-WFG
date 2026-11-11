@@ -9,6 +9,9 @@ internal sealed record ReturningAdventurerReceipt(long Until, Func<bool> IsCurre
 
 internal sealed partial class GameSession
 {
+    public ushort ReturningAdventurerType => debugSettings?.AdventurerBenefits?.ReturningUntil(owner.Account,
+        (timeProvider ?? TimeProvider.System).GetUtcNow().ToUnixTimeSeconds()) > 0 ? (ushort)1 : (ushort)0;
+
     ImmutableArray<uint> projectedAdventurerBuffs = [];
     long adventurerBuffRevision;
     long adventurerBuffEpoch;

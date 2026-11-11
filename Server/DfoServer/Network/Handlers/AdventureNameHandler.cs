@@ -53,7 +53,7 @@ internal sealed class AdventureNameHandler(AdventureNameService service, Adventu
         {
             await context.Notify(NotiPacketType.USERINFO,
                 TownPackets.Actor(selected, context.Session.ReadPvpGrade(selected), context.Channel, adventureName: result.Snapshot!.State.Name,
-                    premiumPcRoom: context.Session.PremiumPcRoom), "adventure_name_actor", Guard);
+                    premiumPcRoom: context.Session.PremiumPcRoom, returningAdventurerType: context.Session.ReturningAdventurerType), "adventure_name_actor", Guard);
             context.Owner.Execute(() =>
             {
                 if (Guard()) town.Refresh(context);

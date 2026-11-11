@@ -22,7 +22,14 @@ internal static partial class PartyDungeonTcpTests
         var identity = group.All()[0].Single(packet => packet is { Kind: 0, Opcode: 1761 });
         That(identity.Body.Length == 16 && U32(identity.Body) == 1 && U32(identity.Body, 12) > clock.Now.ToUnixTimeSeconds(),
             "真实账号回归身份按原生16B通知同步到客户端");
-        group.Join(); group.Enter(3, 0); group.Load();
+        group.Join(); group.Enter(3, 0);
+        var entered = group.LastPackets;
+        bool ReturningActor(WirePacket packet, ushort id, ushort type) => packet is { Kind: 0, Opcode: 2 } &&
+            packet.Body.Length > 158 && packet.Body[0] == 0 && U16(packet.Body, 121) == id &&
+            U16(packet.Body, packet.Body.Length - 37) == type;
+        That(entered.All(rows => rows.Any(packet => ReturningActor(packet, hero.Id, 1))),
+            "组队进图各客户端Actor携带新回归头像身份");
+        group.Load();
         var loaded = group.LastPackets;
         bool Buff(WirePacket packet, uint id) => packet is { Kind: 0, Opcode: 487 } &&
             Enumerable.Range(0, packet.Body[0]).Any(index => U32(packet.Body, 1 + index * 16) == id);
@@ -50,6 +57,8 @@ internal static partial class PartyDungeonTcpTests
         // 1347的ACK早于自动刷新；下一请求的ACK才能证明前一次刷新已完成。
         var expiredTail = group.All();
         for (int at = 0; at < expired.Length; at++) expired[at] = [.. expired[at], .. expiredTail[at]];
+        That(expired.All(rows => rows.Any(packet => ReturningActor(packet, hero.Id, 0))),
+            "到期对本人及队友刷新原生头像身份且不重建战斗Player");
         That(expired[0].Any(packet => packet is { Kind: 0, Opcode: 488 } &&
             Enumerable.Range(0, packet.Body[0]).Any(index => U32(packet.Body, 1 + index * 4) == 1273)) &&
             !expired[0].Any(packet => Buff(packet, 1273)), "到期刷新删除回归Buff且不重新安装");

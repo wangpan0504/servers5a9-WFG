@@ -41,7 +41,7 @@ internal sealed class GuildProjection(InventoryProjection inventory, TownPresenc
             GuildPackets.Entered(guild.Id, character.Id, guild.Name, character.Name), "guild_enter", CanSend);
         await context.Notify(NotiPacketType.USERINFO,
             TownPackets.Actor(character, context.Session.ReadPvpGrade(character), context.Channel, adventureName: context.Session.ReadAdventureName(),
-                premiumPcRoom: context.Session.PremiumPcRoom), "guild_actor", CanSend);
+                premiumPcRoom: context.Session.PremiumPcRoom, returningAdventurerType: context.Session.ReturningAdventurerType), "guild_actor", CanSend);
         await context.Notify(NotiPacketType.GUILD_MEMBER_INFO, [guild.Grade], "guild_member_grade", CanSend);
         await context.Notify(NotiPacketType.GUILD_INFO, GuildPackets.Information(guild, context.Channel.ServerIndex,
             panels?.Read(context.Owner, character.Id, context.Channel.ServerIndex)), "guild_information", CanSend);

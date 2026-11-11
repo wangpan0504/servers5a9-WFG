@@ -13,6 +13,17 @@ internal static class AdventurerBenefitTests
 {
     public static void RunCore()
     {
+        var character = new DfoServer.Game.Characters.Character(1, 0, "ReturnActor", 0, new(0, 0, 0, 0), null);
+        byte[] ordinary = TownPackets.Actor(character, 0, utcSeconds: 1000);
+        foreach (ushort type in new ushort[] { 1, 2 })
+        {
+            byte[] returning = TownPackets.Actor(character, 0, utcSeconds: 1000, returningAdventurerType: type);
+            That(returning.Length == ordinary.Length &&
+                Enumerable.Range(0, ordinary.Length).Where(at => ordinary[at] != returning[at]).SequenceEqual([ordinary.Length - 37]) &&
+                System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(returning.AsSpan(returning.Length - 37)) == type,
+                "新回归头像只修改原生u16身份，不增字节、不覆盖熟练进度或旧活动身份");
+        }
+        Reject<InvalidDataException>(() => TownPackets.Actor(character, 0, returningAdventurerType: 3), "拒绝未定义的新回归身份");
         Bytes(AdventurerBenefitPackets.Returning(0), new byte[16], "原生正常身份清空16B状态");
         Bytes(AdventurerBenefitPackets.Returning(0x12345678), Convert.FromHexString("01000000010000000000000078563412"),
             "原生回归身份1和绝对期限独立金样，提示已展示不等于领取奖励");

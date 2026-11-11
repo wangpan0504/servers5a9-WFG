@@ -117,7 +117,7 @@ internal sealed class PremiumContractProjection(GameConnectionContext context, C
         // 两种身份各自刷新；保留副本场景位，再以Player恢复完整本人属性。
         await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(character, context.Session.ReadPvpGrade(character), context.Channel, now, captured.Name,
             captured.Phase is SessionPhase.Dungeon or SessionPhase.Settlement ? ActorSceneState.Dungeon : ActorSceneState.Town,
-            state.PcRoom), "premium_identity_actor", () => sent = CanSend());
+            state.PcRoom, returningAdventurerType: context.Session.ReturningAdventurerType), "premium_identity_actor", () => sent = CanSend());
         if (!sent) return;
         sent = false;
         await context.Notify(NotiPacketType.USERINFO, TownPackets.Player(character, stats.Compute(character),
