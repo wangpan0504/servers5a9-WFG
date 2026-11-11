@@ -82,7 +82,7 @@ internal sealed class InventoryPlan
     public InventoryPlan WithAfter(InventorySnapshot after, InventoryCharacterPrecondition? precondition = null,
         ImmutableArray<ItemUseIntent>? usedItems = null, long? promotionCatalogRevision = null,
         InventoryEventPrecondition? requiredEvent = null, IReadOnlyList<InventoryItem>? overflowItems = null,
-        string? overflowMailSender = null, string? overflowMailText = null) => new(Before, after, Reason,
+        string? overflowMailSender = null, string? overflowMailText = null, uint? cloneTitleItemIdAfter = null) => new(Before, after, Reason,
         precondition ?? CharacterPrecondition, overflowItems ?? OverflowItems)
     {
         PreserveMaterials = PreserveMaterials,
@@ -91,7 +91,7 @@ internal sealed class InventoryPlan
         DailyItemMails = DailyItemMails,
         ResetItemIds = ResetItemIds,
         EquipmentSlotFlagsAfter = EquipmentSlotFlagsAfter,
-        CloneTitleItemIdAfter = CloneTitleItemIdAfter,
+        CloneTitleItemIdAfter = cloneTitleItemIdAfter ?? CloneTitleItemIdAfter,
         UnlockSkillTree = UnlockSkillTree,
         CashShopRename = CashShopRename,
         GuildHongbaoPurchase = GuildHongbaoPurchase,

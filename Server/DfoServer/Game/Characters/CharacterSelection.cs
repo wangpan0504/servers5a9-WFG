@@ -105,7 +105,7 @@ internal static class CharacterSelection
             InventoryExpiryService.Plan(character.Inventory, (clock ?? TimeProvider.System).GetUtcNow().ToUnixTimeSeconds()));
         if (items is not null)
             character = InventoryService.Commit(repository, owner, character,
-                InventoryCloneAppearanceService.PlanCleanup(character, items));
+                InventoryCloneAppearanceService.PlanCleanup(character, items, (clock ?? TimeProvider.System).GetUtcNow().ToUnixTimeSeconds()));
         if (items is not null && repository is IAccountMaterialStore materials)
             character = materials.ReconcileAccountMaterials(owner, character, AccountMaterialService.Legacy(character, items),
                 items.RaidAccountMaterialLimits, (clock ?? TimeProvider.System).GetUtcNow());

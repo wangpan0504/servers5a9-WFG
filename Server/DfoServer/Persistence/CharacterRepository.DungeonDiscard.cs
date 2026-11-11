@@ -44,12 +44,16 @@ internal sealed partial class CharacterRepository
         {
             if (current.Id != expected.Id || current.Revision != expected.Revision + 1 ||
                 current.DungeonState != (state with { NextObjectKey = key + 1 }) ||
+                current.CloneTitleItemId != (plan.Inventory.CloneTitleItemIdAfter ?? expected.CloneTitleItemId) ||
                 !SameInventory(current.Inventory, new(plan.Inventory.After, plan.Inventory.After, "discard-replay")))
                 throw new InvalidDataException("地面丢弃恢复版本或完整结果改变");
             return current;
         }
         if (current.DungeonState != state) throw new InvalidOperationException("地面丢弃的副本owner改变");
-        var inventory = new InventoryPlan(plan.Inventory.Before, plan.Inventory.After, action, plan.Inventory.CharacterPrecondition);
+        var inventory = new InventoryPlan(plan.Inventory.Before, plan.Inventory.After, action, plan.Inventory.CharacterPrecondition)
+        {
+            CloneTitleItemIdAfter = plan.Inventory.CloneTitleItemIdAfter
+        };
         var committed = CommitInventoryInTransaction(db, tx, owner, current, expected, inventory);
         using var command = db.CreateCommand();
         command.Transaction = tx;
