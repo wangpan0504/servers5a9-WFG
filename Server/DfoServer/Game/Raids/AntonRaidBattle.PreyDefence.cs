@@ -40,7 +40,8 @@ internal sealed partial class AntonRaidBattle
 
     void RecordPreyDefenceEntry(RaidDungeonRun run)
     {
-        if (run.Phase != 0 || CapturePreyLanding(current, 5) is not { } landing || run.Dungeon != landing.Dungeon) return;
+        if (run.Phase != 0 || CapturePreyLanding(current, 5) is not { } landing || run.Dungeon != landing.Dungeon ||
+            run.PreyArea is { } area && area != landing.Arrival.FromArea) return;
         if (preyDefenceArrival?.Landing != landing) preyDefenceArrival = new(landing, null);
         // 正式安装就是成功接战；随后撤退已单独处罚，不能再按本次漏守重复扣血。
         preyDefenceArrival.Entered = true;
@@ -65,10 +66,11 @@ internal sealed partial class AntonRaidBattle
             arrival.Resolved = true;
             if (!IsPreyLandingCurrent(arrival.Landing) || arrival.Entered || dungeonRuns.Values.Any(run => run.Installed &&
                 run.Phase == current.Phase && !run.Cleared && run.Active.Count != 0 &&
-                run.Dungeon == arrival.Landing.Dungeon && !current.PreyExpelledRuns.Contains(run.Id))) return;
+                run.Dungeon == arrival.Landing.Dungeon && (run.PreyArea is null || run.PreyArea == arrival.Landing.Arrival.FromArea) &&
+                !current.PreyExpelledRuns.Contains(run.Id))) return;
             var before = current;
             // 漏守只扣血，保留阻击；下圈新的到站generation会重新判定。
-            var candidate = DamagePreyShip(before, PreyHeader("[defence fail]"));
+            var candidate = DamagePreyShip(before, PreyHeader("[defence fail]"), collision: true);
             if (candidate.PhaseExpired) candidate = ExpelAll(candidate);
             CommitBattleCandidate(before, candidate);
             if (!ReferenceEquals(before, current)) changed = current;

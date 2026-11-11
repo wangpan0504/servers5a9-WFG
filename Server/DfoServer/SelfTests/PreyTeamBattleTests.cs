@@ -33,8 +33,7 @@ internal static class PreyTeamBattleTests
         That(reserved.All(position => position is >= 301 and <= 316) && reserved.Distinct().Count() == towers.Length &&
             reserved.All(position => battle.View.Symbols[$"[area_{position - 300}]"] == 0),
             "准备结束公布不同的空白生成点，两塔不能预告同一位置");
-        // 为后续两塔生成分支腾出模板；实际初始阻击的存在和准入已在上面独立核对。
-        RemoveDefenceAreas(battle, script);
+        // 保留开局阻击；后续生成仍须在两塔预告空格落地，不能因同种模板已存在而漏掉整波。
         for (int index = 0; index < towers.Length; index++)
         {
             Expire(new(500, towers[index].Id));
@@ -55,6 +54,10 @@ internal static class PreyTeamBattleTests
             .Select(slot => new KeyValuePair<string, int>($"[area_{slot}]", 300 + slot))) };
         var battle = new AntonRaidBattle(markerScript, kind: RaidKind.Prey, preyRandom: new Random(17), preyGuide: false);
         foreach (var actor in actors.Take(3)) That(battle.JoinStart(actor), "普通模式登记本团原角色");
+        var preparing = battle.View;
+        That(battle.CompletePreyBoardingPreparation(actors[0]) is null && ReferenceEquals(preparing, battle.View) &&
+            battle.PreyPreparationPending(preparing) && battle.PreyPreparationSeconds(preparing) is > 0,
+            "提前登船36只确认场景就绪，不能消耗仍在进行的开场准备计时");
         var located = battle.View;
         That(battle.ReportPreyTownLocation(actors[0], 2) is null &&
             battle.ReportPreyTownLocation(actors[0], 1) is null && battle.ReportPreyTownLocation(actors[0], 4) is null &&
@@ -335,9 +338,13 @@ internal static class PreyTeamBattleTests
             "普通普雷保留自身模式、船体和伊希斯初始HP");
         var positions = Enumerable.Range(1, 16).Select(slot => battle.View.Symbols[$"[area_{slot}]"]).Where(id => id != 0).ToArray();
         That(positions.Length == 6 && positions.Distinct().Count() == 6 && positions.Order().SequenceEqual(new[] { 10, 11, 12, 13, 14, 15 }) &&
-            new[] { 1, 5, 9, 13 }.Select((slot, index) => battle.View.Symbols[$"[area_{slot}]"] == 12 + index &&
+            new[] { 1, 5, 9, 13 }.Select(slot => battle.View.Symbols[$"[area_{slot}]"] is >= 12 and <= 15 &&
                 battle.View.Symbols[$"[area_{slot}_dgn_type]"] == 4).All(value => value),
-            "四圣地固定在1/5/9/13，其余初始据点随机布局；合成资源只有一种阻击时不补造第二种");
+            "四圣地位置固定在1/5/9/13，怪物与其余初始据点随机分配；合成资源只有一种阻击时不补造第二种");
+        That(Enumerable.Range(0, 12).Select(seed =>
+            new AntonRaidBattle(Script(), kind: RaidKind.Prey, preyRandom: new Random(seed), preyGuide: false)
+                .View.Symbols["[area_1]"]).Distinct().Count() > 1,
+            "不同攻坚实例的同号圣地可以分配不同怪物，不再按资源声明顺序固定");
         That(battle.View.Dungeons[10] == RaidDungeonState.Open &&
             battle.DungeonSnapshot(battle.View).Single(row => row.Id == 10).State == RaidDungeonState.Open,
             "初始真实阻击的Open状态与AREA一致，不误投影为Hide");
@@ -372,15 +379,31 @@ internal static class PreyTeamBattleTests
         Expire(new(10001, 150));
         That(battle.View.Symbols["[merchant]"] == 0, "独立raid timer按自己的结束事件关闭商人");
 
-        battle.SetMechanism(battle.Instance, battle.View.Revision, "[slenikon hp]", 7500);
+        // 使用独立合成实例开启商人后立即过阶段；本夹具的500计时器是一次性事件，不能重复消费。
+        clock = new LukeRaidClockTests.Clock();
+        battle = new AntonRaidBattle(Script(), kind: RaidKind.Prey, clock: clock, preyRandom: new Random(7), preyGuide: false);
+        Expire(new(9000, 0));
+        Expire(new(500, 11));
+        var merchant = new RaidTimer(10001, 150);
+        long merchantGeneration = battle.View.TimerGenerations[merchant];
+        That(battle.PreyTimerSeconds(battle.View, merchant) is > 0, "商人专用计时器可投影原生剩余秒数");
+
+        battle.SetMechanism(battle.Instance, battle.View.Revision, "[slenikon hp]", 1500);
+        Expire(new(9001, 0));
+        That(battle.View.Symbols["[slenikon armor level]"] == 2, "一阶段体力穿过两档边界后铠甲完全破碎");
         battle.SetMechanism(battle.Instance, battle.View.Revision, "[first complete]", 1);
         That(battle.View.State == AntonRaidBattleState.Reward, "普通一阶段CLEAR PHASE产生奖励状态");
         That(battle.AdvanceAfterRewards(battle.Instance, battle.View.Revision) is not null && battle.View.Phase == 1 &&
-            battle.View.Symbols["[slenikon hp]"] == 10000 && battle.View.Symbols["[slenikon armor level]"] == 0 &&
-            battle.View.Symbols["[isys hp]"] == 10000, "普通二阶段船体按资源最大值回满并恢复装甲，伊希斯状态继承");
+            battle.View.Symbols["[slenikon hp]"] == 10000 && battle.View.Symbols["[slenikon armor level]"] == 2 &&
+            battle.View.Symbols["[isys hp]"] == 10000, "普通二阶段船体回满，保留一阶段铠甲破碎及伊希斯状态");
         That(battle.View.Symbols["[area_20_dgn_type]"] == 6, "普通二阶段资源AREA写入同步Boss区域类型");
+        That(battle.View.Symbols["[merchant]"] != 0 && battle.View.TimerGenerations[merchant] == merchantGeneration,
+            "二阶段继承同一商人计时义务，不重新赠送期限或丢失到期事件");
+        Expire(merchant);
+        That(battle.View.Symbols["[merchant]"] == 0, "跨阶段商人到期后关闭，不永久驻留");
         Expire(new(9001, 0));
-        That(battle.View.Symbols["[slenikon hp]"] == 9983, "普通二阶段每秒损失HP DECREASE第二列17点");
+        That(battle.View.Symbols["[slenikon hp]"] == 9983 && battle.View.Symbols["[slenikon armor level]"] == 2,
+            "普通二阶段每秒损失17点体力，已破碎铠甲不会因高体力恢复");
         battle.SetMechanism(battle.Instance, battle.View.Revision, "[isys hp in dungeon]", 8000);
         Expire(new(2, 211));
         That(battle.View.Symbols["[isys hp]"] == 8000 && battle.View.Symbols["[isys groggy]"] == 0 &&
@@ -529,7 +552,8 @@ internal static class PreyTeamBattleTests
                 Set("[isys hp]", 10000), Set("[isys hp in dungeon]", 10000)),
             Rule(If("[prepare raid]", 1), new("[reserve spawn]", 0, 11, null, null, null, [11, 180]),
                 Timer("[set timer]", 500, 11, 180), Timer("[raid timer]", 1, 150, 30)),
-            Rule(Timer("[check timer end]", 500, 11), new("[spawn]", 0, 11, null, null, null, [11]), Set("[merchant]", 3)),
+            Rule(Timer("[check timer end]", 500, 11), new("[spawn]", 0, 11, null, null, null, [11]), Set("[merchant]", 3),
+                Timer("[raid timer]", 1, 150, 30)),
             Rule(Timer("[check raid timer end]", 1, 150), Set("[merchant]", 0)),
             Rule(If("[first complete]", 1), Clear())
         ], []);

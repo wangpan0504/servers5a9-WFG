@@ -95,7 +95,7 @@ internal static class RaidCombatPackets
         return stream.ToArray();
     }
 
-    // 015BCB50：op1无尾部，op5只读真实副本编号。
+    // 015BCB50：op1无尾部，触发原生五秒警报及音效；op5只读真实副本编号。
     internal static byte[] PreyStatus(int operation, int? dungeon = null)
     {
         if (operation == 1 && dungeon is null) return [1, 0, 0, 0];
