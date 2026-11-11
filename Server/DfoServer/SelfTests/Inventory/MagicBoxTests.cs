@@ -357,6 +357,11 @@ internal static class MagicBoxTests
 
     public static void RunRewardRowCore()
     {
+        var unrestricted = BoosterCatalog.ParseUsePlaces("[stackable type]\n`[random upgradable legacy]` 1\n");
+        var townOnly = BoosterCatalog.ParseUsePlaces("[action usable place]\n`[village]`\n");
+        That(unrestricted.Allows(new(StackableUsePlace.Dungeon)) && unrestricted.Allows(new(StackableUsePlace.Village)) &&
+            townOnly.Allows(new(StackableUsePlace.Village)) && !townOnly.Allows(new(StackableUsePlace.Dungeon)),
+            "随机盒未声明地点时允许副本，显式城镇限制不能在副本放行");
         const int boxId = 912091;
         const int rewardId = 912092;
         const int limit = 10;
