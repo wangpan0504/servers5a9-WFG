@@ -64,7 +64,7 @@ internal static partial class CashShopTcpTests
             FormalDungeonTcpTests.EntryTown(peer);
             FormalDungeonTcpTests.Enter(peer);
             FormalDungeonTcpTests.Load(peer, fatigue: false);
-            peer.Expect(0, 36, [0, 0, 156, 0, 0, 0, 156, 0, 0, 0]);
+            peer.Expect(0, 36, [0, 0, 156, 0, 0, 0, 0, 0, 0, 0]);
             var mileage = MileageBefore(fixture, units * ExpectedCashMileage(items.CashShop.Product(100004)!));
             peer.Send(64, request);
             for (int row = 0; row < units; row++)

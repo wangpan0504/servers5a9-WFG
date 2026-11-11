@@ -326,6 +326,11 @@ internal static class TcpRegressionTests
             QuestAdventureSettlementTests.Run(resources.Towns,resources.Archive,resources.Characters,resources.ItemResources,resources.Quests,resources.Learning);
             await FormalDungeonTcpTests.RunTrainQuestAsync(options,root,resources);
         }),
+        ("quest-mainline", (_, _, resources) =>
+        {
+            QuestMainlineTests.Run(resources.Towns,resources.Archive,resources.Characters,resources.ItemResources,resources.Quests,resources.Learning);
+            return Task.CompletedTask;
+        }),
         ("story-scenes", (_, _, resources) =>
         {
             QuestSceneTests.Run(resources.Towns,resources.Archive,resources.Characters,resources.ItemResources,resources.Quests,resources.Learning);

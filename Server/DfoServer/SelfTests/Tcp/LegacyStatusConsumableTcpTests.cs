@@ -81,7 +81,7 @@ internal static class LegacyStatusConsumableTcpTests
             peer.Send(515, ActionBody(action));
             peer.Expect(1, 515, [1, 68, 0, 0, 58, 0, 0, 0]);
             var fatigue = repository.LoadCharacter(reader, role.Slot).Fatigue!;
-            peer.Expect(0, 36, Build(w => { w.Write((ushort)49); w.Write((ushort)156); w.Write((ushort)0); w.Write((ushort)107); w.Write((ushort)0); }));
+            peer.Expect(0, 36, Build(w => { w.Write((ushort)49); w.Write((ushort)156); w.Write((ushort)0); w.Write((ushort)0); w.Write((ushort)0); }));
             peer.Barrier();
             That(fatigue.Used == 49 && fatigue.Remaining == 107, "重复类型疲劳药先消费回执，再同步同次提交的1点疲劳绝对余额");
             var cooling = action with { Slot = 69 };

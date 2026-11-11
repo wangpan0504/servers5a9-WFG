@@ -68,7 +68,7 @@ internal static partial class FormalDungeonTcpTests
             else
             {
                 peer.Expect(0,28); peer.Expect(0,29); Load(peer, fatigue: false);
-                peer.Expect(0,36,[140,0,156,0,0,0,16,0,0,0]); peer.Barrier();
+                peer.Expect(0,36,[140,0,156,0,0,0,0,0,0,0]); peer.Barrier();
                 That(fixture.Query("SELECT used,remaining FROM character_fatigue WHERE character_id=$p0",peer.Id) is [[140L,16L]],
                     "修炼场返回后普通首房仍准确扣1点，原疲劳余额不变形");
                 peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]); peer.Expect(0,24); RefreshedQuests(peer); peer.Barrier();

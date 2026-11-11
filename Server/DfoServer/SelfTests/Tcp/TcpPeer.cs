@@ -254,8 +254,10 @@ internal sealed partial class TcpPeer : IDisposable
         if (packet is { Kind: 0, Opcode: 36 })
         {
             TestCheck.That(packet.Body.Length == 10, "正式疲劳通知保留五个u16的10字节合同");
-            TestCheck.That(U16(packet.Body, 0) + U16(packet.Body, 6) == U16(packet.Body, 2),
-                "正式疲劳通知已用与剩余之和等于上限");
+            var battery = fixture!.Query("SELECT COALESCE((SELECT buff FROM character_fatigue_battery WHERE character_id=$p0),0)", Id);
+            TestCheck.That(U16(packet.Body, 0) <= U16(packet.Body, 2) &&
+                U16(packet.Body, 6) == Convert.ToInt64(battery.Single()[0]),
+                "疲劳已用不超过上限，第四WORD独立匹配已提交电量");
             return;
         }
         pushedBack = packet;
@@ -783,7 +785,7 @@ internal sealed partial class TcpPeer : IDisposable
         switch (packet.Opcode)
         {
             case 36:
-                var fatigue = fixture!.Query("SELECT used,maximum,used_maximum,remaining,context_auxiliary FROM character_fatigue WHERE character_id=$p0", Id).Single();
+                var fatigue = fixture!.Query("SELECT f.used,f.maximum,f.used_maximum,COALESCE(b.buff,0),f.context_auxiliary FROM character_fatigue f LEFT JOIN character_fatigue_battery b ON b.character_id=f.character_id WHERE f.character_id=$p0", Id).Single();
                 TestCheck.Bytes(packet.Body, Build(w => { foreach (var field in fatigue) w.Write(checked((ushort)Convert.ToInt64(field))); }), "在线疲劳通知与已提交余额一致");
                 break;
             case 99:

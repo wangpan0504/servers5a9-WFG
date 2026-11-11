@@ -15,6 +15,8 @@ internal static class FatigueDailyResetTcpTests
 {
     public static async Task RunAsync(ServerOptions options, string root, TcpTestResources resources)
     {
+        FatigueBatteryTests.RunResources(resources);
+        await FormalDungeonTcpTests.RunFatigueAccelerationExperienceAsync(options, Path.Combine(root, "battery"), resources, false, true);
         ServerItemCycleTests.RunResource(resources.Archive);
         var zone = TimeZoneInfo.Utc;
         var clock = new DailyBoosterTestClock(DateTimeOffset.Parse("2030-05-02T05:59:59Z"), zone);
@@ -82,7 +84,7 @@ internal static class FatigueDailyResetTcpTests
             {
                 // 不发送屏障或心跳，直接等定时通知，证明持续在线且没有新请求也会刷新。
                 var packet = client.Expect(0,36).Body;
-                Bytes(packet, Build(w => { foreach (ushort value in new ushort[] { 0, 156, 23, 156, 11 }) w.Write(value); }),
+                Bytes(packet, Build(w => { foreach (ushort value in new ushort[] { 0, 156, 23, 0, 11 }) w.Write(value); }),
                     "原生NOTI36即时同步新日疲劳，不改附属字段、不切换客户端状态");
                 var notices = PartyDungeonTcpTests.Drain(client);
                 That(!notices.Any(row => row is { Kind:0,Opcode:550 }) &&
