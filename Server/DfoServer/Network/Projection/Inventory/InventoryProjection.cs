@@ -97,6 +97,10 @@ internal sealed partial class InventoryProjection(CharacterStatComputer stats, T
         bool rebuildMoveList = silentMoveList.HasValue && changedSlots.Where(slot => slot.List == silentMoveList)
             .Select(plan.BeforeIndex.Find).Any(item => item is { Core.IsStackable: true } &&
                 receipt.Index.FindUid(item.Uid)?.Core.Count != item.Core.Count);
+        bool quickEquipmentMoved = silentMoveList == InventoryListType.Main && changedSlots.Any(slot =>
+            QuickSlotEquipmentRules.IsQuickSlot(slot) &&
+            (plan.BeforeIndex.Find(slot)?.Core.Kind == ItemKind.Equipment ||
+             receipt.Index.Find(slot)?.Core.Kind == ItemKind.Equipment));
         bool creatureDetailsChanged = silentMoveList != InventoryListType.Pet &&
             changedSlots.Any(slot => !(inPlaceCreature && slot == creatureSlot) && receipt.Index.Find(slot)?.Creature is not null);
         bool reloadCreature = plan.Reason is "hatch_creature_egg" or "creature_change" or "creature_group_convert";
@@ -132,8 +136,9 @@ internal sealed partial class InventoryProjection(CharacterStatComputer stats, T
         {
             if (list == silentMoveList)
             {
-                // ACK19已移动整件；数量变化才用13载入。1681仍会执行STK的新物品图标标记，不能代替无动画同步。
-                if (rebuildMoveList)
+                // 普通整件移动沿用ACK19；快捷栏装备还须发布已提交列表，避免本地移格后没有可见图标。
+                // 用13重载保留已有物品语义；离开快捷栏的空格先清除，防止全量遗漏空格而残留旧纹章。
+                if (rebuildMoveList || quickEquipmentMoved)
                 {
                     var emptySlots = slots.Where(slot => slot.List == list && receipt.Index.Find(slot) is null).ToArray();
                     if (emptySlots.Length != 0)
