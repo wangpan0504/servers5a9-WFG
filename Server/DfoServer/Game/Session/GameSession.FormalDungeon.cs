@@ -1407,6 +1407,8 @@ internal sealed partial class GameSession
             pendingQuestReplay = null;
             SetState(dungeon.Run.Phase == SinglePlayerDungeonPhase.Settlement ? SessionPhase.Settlement : SessionPhase.Dungeon);
             return FormalReceipt() with { LostLandStarted = lostLandStarted,
+                BossRushStart = dungeon.BossRush is { } rush && dungeon.Run.LastLoadingFact is { IsInitialLoading: true }
+                    ? rush.Hud(dungeon.StartedTimestamp) : null,
                 FatigueEnergySlots = QuickSlotEquipmentEnergy.ChangedSlots(expected.Inventory, Selected!.Inventory),
                 BattlePassMissionClock = expected.Fatigue is {} oldFatigue && Selected?.Fatigue is {} newFatigue && newFatigue.Remaining < oldFatigue.Remaining ? timeProvider ?? TimeProvider.System : null };
         });

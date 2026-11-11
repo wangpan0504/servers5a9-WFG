@@ -13,6 +13,8 @@ internal sealed record FormalDungeonReceipt(Character Character, long Generation
     public TimeProvider? BattlePassMissionClock { get; init; }
     public ImmutableArray<InventorySlot> FatigueEnergySlots { get; init; } = [];
     public bool LostLandStarted { get; init; }
+    // 仅首次真实加载成功时冻结，过房或重复加载不重新启动本地倒计时。
+    public BossRushHud? BossRushStart { get; init; }
     public ImmutableArray<ushort> PartyActors { get; init; } = [];
     public ImmutableArray<DfoServer.Game.Guild.GuildDungeonMembership> GuildMemberships { get; init; } = [];
     public byte PartySlot { get; init; }
