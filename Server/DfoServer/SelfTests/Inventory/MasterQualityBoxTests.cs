@@ -12,6 +12,7 @@ internal static class MasterQualityBoxTests
     public static void RunCore()
     {
         int before = Count;
+        RunGoldRules();
         var epic = EquipmentQualityBox.Parse(10150863, new PvfDocument("""
             [rarity]
             4
@@ -64,5 +65,23 @@ internal static class MasterQualityBoxTests
             !service.ResetQuality(Role(core with { ItemId = title.Id }), new(4, title.Id, 6, 0, false)).Accepted,
             "稀有装备和史诗称号仍拒绝且不消耗箱子");
         Console.WriteLine($"PASS MasterQualityBoxTests core ({Count - before} checks)");
+    }
+
+    internal static void RunGoldRules()
+    {
+        const string declaration = "[stackable type]\n`[gold kaleido]` 0\n[usable equip type]\n`[weapon]`\n[/usable equip type]\n";
+        foreach (string action in new[] { "", "[action type]\n`[kaleido]` 0\n[/action type]\n" })
+        {
+            var gold = EquipmentQualityBox.Parse(1, new PvfDocument(declaration + action));
+            That(gold is { Fixed: true, MinimumPercent: 100, MaximumPercent: 100 } &&
+                gold.EquipmentSlots.SequenceEqual(new byte[] { 12 }) &&
+                gold.Roll(_ => 0) == 999_999_998 && gold.Roll(max => max - 1) == 999_999_998,
+                "黄金stackable身份优先于缺省或普通动作，两端均为固定最高品级并保留部位限制");
+        }
+        foreach (string stackable in new[] { "`[gold kaleido]` 1", "`[gold kaleido]` 0 1", "`[cera package]` 0", "`[etc]` 0" })
+            That(EquipmentQualityBox.Parse(1, new PvfDocument("[name]\n`黄金品级调整箱`\n[stackable type]\n" + stackable)) is null,
+                "不按黄金名称、礼包或非零/多余参数授予黄金箱策略: " + stackable);
+        That(EquipmentQualityBox.Parse(1, new PvfDocument("[action type]\n`[gold kaleido box]` 0\n[/action type]\n")) is
+            { Fixed: true, MinimumPercent: 100, MaximumPercent: 100 }, "保留既有黄金action声明兼容");
     }
 }

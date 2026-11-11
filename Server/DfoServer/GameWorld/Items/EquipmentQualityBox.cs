@@ -14,8 +14,10 @@ internal sealed record EquipmentQualityBox(int MinimumPercent, int MaximumPercen
         StackableActionDeclaration.TryRead(script, out var raw);
         var action = StackableActionCatalog.Arguments(raw);
         bool fixedRange = raw?.Label == "[fixed probability kaleido]";
-        bool gold = action?.Label == "[gold kaleido box]";
-        // 本版旧商城15/897没有action type；活动版本由PVF动作声明识别。黄金箱说明是取最高品级。
+        bool gold = action?.Label == "[gold kaleido box]" ||
+            Regex.IsMatch(script.Section("stackable type"), @"^\s*`\[gold kaleido\]`\s+0\s*$");
+        // 黄金箱以真实 stackable 声明识别；旧资源可无动作，也可同时声明普通 kaleido 动作。
+        // 本版旧商城15/897没有action type；其余普通活动版本由PVF动作声明识别。
         // 大师级调整箱同样没有 kaleido 动作，只声明 [variable need material] 指向旧箱 15/897。
         if (!fixedRange && !gold && action?.Label != "[kaleido]" && !(id is 15 or 897 && !script.Has("action type")))
             return Master(script);
