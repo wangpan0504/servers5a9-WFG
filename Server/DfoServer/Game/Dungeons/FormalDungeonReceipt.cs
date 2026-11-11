@@ -105,6 +105,9 @@ internal sealed record DungeonSettlementPresentation(uint ClearTimeMilliseconds,
     public uint MonsterGrowthContractExperience { get; init; }
     public uint MonsterEquipmentExperience { get; init; }
     public uint MonsterFatigueBurningExperience { get; init; }
+    public uint MonsterGuildExperience { get; init; }
+    public uint MonsterFatigueBuffExperience { get; init; }
+    public uint MonsterPartyExperience { get; init; }
     // 本实例实际到账的领主基础经验合计；客户端结果页“领主”行只读该口径，不取对象明细。
     public uint MonsterBossExperience { get; init; }
     // 按击杀顺序累计；为空时客户端只能显示特殊怪物行而显示不出各自经验。

@@ -210,7 +210,8 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
                 result.Presentation!.MonsterExperience, result.Card, checked((int)receipt.Entry.DungeonId), result.Options, result.BlackDiamond,
                 result.Presentation.MonsterGrowthContractExperience, result.Presentation.MonsterEquipmentExperience,
                 result.Presentation.MonsterExperienceEntries, result.Presentation.MonsterBossExperience, receipt.PartySlot,
-                result.Presentation.MonsterFatigueBurningExperience);
+                result.Presentation.MonsterFatigueBurningExperience, result.Presentation.MonsterGuildExperience,
+                result.Presentation.MonsterFatigueBuffExperience, result.Presentation.MonsterPartyExperience);
             if (context.Session.PartyDungeon is { } instance)
             {
                 instance.StartCards(context.Session);

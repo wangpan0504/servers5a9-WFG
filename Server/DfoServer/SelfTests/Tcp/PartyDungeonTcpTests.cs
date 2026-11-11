@@ -195,6 +195,9 @@ internal static partial class PartyDungeonTcpTests
             // 只准备普通路线的前置资格；战斗、奖励和清图均经过真实生产协议。
             fixture.Sql("INSERT INTO character_completed_quests(character_id,quest_id) VALUES($p0,3145)", peer.Id);
             fixture.Sql("UPDATE characters SET revive_coins=1 WHERE id=$p0", peer.Id);
+            // 全路线拾取与经验校验准备合法扩展容量，避免低等级携带上限先截断随机金币。
+            fixture.Sql("UPDATE characters SET gold_carry_limit=$p0 WHERE id=$p1",
+                DfoServer.Game.Currency.CurrencyService.ExpandedLimit(4), peer.Id);
             if (checkFrames)
             {
                 int member = Array.IndexOf(participants, peer);
@@ -300,11 +303,15 @@ internal static partial class PartyDungeonTcpTests
             That(rejected[alpha].Any(p => p is { Kind: 1, Opcode: 16 } && p.Body.SequenceEqual(new byte[] { 0, 22, 0, failedSlot })) &&
                 rejected.Values.All(rows => rows.All(p => p.Opcode is not (28 or 29))) && fixture.Snapshot() == before,
                 "组队疲劳不足的拒绝指向实际失败成员槽，整队不扣费或安装实例");
-            That(DfoServer.Network.Management.DevelopmentGmClient.TryExecute(fixture.Options.GmPort, "infinite-fatigue on", out _),
+            That(DfoServer.Network.Management.DevelopmentGmClient.TryExecute(fixture.Options.GmPort,
+                $"account {(rejectRetry ? "partyalpha" : "partybeta")} infinite-fatigue on", out _),
                 "随后开启无限疲劳，验证同一队伍拒绝后仍可重新入场");
         }
         alpha.Send(16, selection);
         var entered = All(alpha); var enteredA = entered[alpha];
+        That(enteredA.Any(p => p is { Kind: 0, Opcode: 29 }),
+            "多人普通路线入场必须成功，实际回应：" + string.Join(";", enteredA.Select(p =>
+                $"{p.Kind}/{p.Opcode}:{Convert.ToHexString(p.Body)}")));
         var map = enteredA.Single(p => p is { Kind: 0, Opcode: 29 }).Body;
         foreach (var rows in entered.Values)
         {
@@ -315,6 +322,7 @@ internal static partial class PartyDungeonTcpTests
             "加载前不提前扣逐房疲劳");
         var maze = SelfTestCatalogs.Dungeons(resources.Archive).Get(3).Mazes[enteredA.Single(p => p.Opcode == 28).Body[7]];
         var visited = new HashSet<DungeonPoint>();
+        var partyExperience = participants.ToDictionary(peer => peer, _ => 0u);
         int consumablePickups = 0;
         for (int room = 0; room < 30; room++)
         {
@@ -414,6 +422,7 @@ internal static partial class PartyDungeonTcpTests
                         U32(experience, 9) == basis - basis / (uint)count && U32(experience, 25) == 0 &&
                         U32(experience, 34) == 0 && U32(experience, 42) == 0,
                         "真实多人击杀按PVF拆出队伍播报，累计经验仍与原奖励账本相同，不串入契约或疲劳分量");
+                    partyExperience[peer] = checked(partyExperience[peer] + U32(experience, 9));
                 }
                 var deaths = reported.ToDictionary(row => row.Key,
                     row => row.Value.Single(p => p is { Kind: 0, Opcode: 38 } && U16(p.Body) == key));
@@ -436,7 +445,10 @@ internal static partial class PartyDungeonTcpTests
                     var pickups = All(peer); var received = pickups[peer];
                     That(received.Any(p => p is { Kind: 1, Opcode: 43, Body: [1] }) &&
                         received.Any(p => p is { Kind: 0, Opcode: 39 } && U32(p.Body) == ground) &&
-                        pickups.Where(row => !ReferenceEquals(row.Key, peer)).All(row => !row.Value.Any(p => p is { Kind: 0, Opcode: 39 })), "每人独立领取，另一客户端的地面物品不被清除");
+                        pickups.Where(row => !ReferenceEquals(row.Key, peer)).All(row => !row.Value.Any(p => p is { Kind: 0, Opcode: 39 })),
+                        $"每人独立领取，另一客户端的地面物品不被清除，角色={peer.Id} 地面={ground} 道具={U32(loot.Body, at + 6)} 回应=" +
+                        string.Join(";", pickups.SelectMany(row => row.Value.Select(p =>
+                            $"{row.Key.Id}:{p.Kind}/{p.Opcode}:{Convert.ToHexString(p.Body)}"))));
                     if (U32(loot.Body, at + 6) == 0)
                     {
                         uint goldAmount = U32(loot.Body, at + 10);
@@ -487,6 +499,9 @@ internal static partial class PartyDungeonTcpTests
                         (member.Id, checked((byte)(99 - index * 20)))).ToArray());
                     peer.Send(46, report);
                     var settledPackets = Drain(peer);
+                    That(U32(settledPackets.Single(p => p is { Kind: 0, Opcode: 35 }).Body, 65) == partyExperience[peer] &&
+                        partyExperience[peer] > 0,
+                        "结果页组队奖励等于本人各次已到账击杀通知的组队分量，重复死亡不累计");
                     var playResult = settledPackets.Single(p => p is { Kind: 0, Opcode: 34 }).Body;
                     That(playResult.Length == 9 + 7 * count && playResult[6] == 99 - slot * 20 && playResult[8] == count &&
                         Enumerable.Range(0, count).All(i => U16(playResult, 9 + 7 * i) == participants[i].Id) &&
@@ -553,7 +568,8 @@ internal static partial class PartyDungeonTcpTests
                 if (checkFrames || count == 4) VerifyIndependentPaidCards();
                 if (rejectRetry)
                 {
-                    That(DfoServer.Network.Management.DevelopmentGmClient.TryExecute(fixture.Options.GmPort, "infinite-fatigue off", out _),
+                    That(DfoServer.Network.Management.DevelopmentGmClient.TryExecute(fixture.Options.GmPort,
+                        $"account {(rejectRetry ? "partyalpha" : "partybeta")} infinite-fatigue off", out _),
                         "结算时恢复队员的真实零疲劳，验证再挑战失败");
                     string entries = fixture.Snapshot("SELECT * FROM character_dungeon_state ORDER BY character_id");
                     string fatigue = fixture.Snapshot("SELECT * FROM character_fatigue ORDER BY character_id");
