@@ -10,7 +10,8 @@ using DfoServer.Network.Protocol;
 namespace DfoServer.Network.Handlers;
 
 internal sealed class RaidCombatHandler(IRaidRewardStore rewards, ItemCatalog items, GoldLimitCatalog gold,
-    EpicPieceCatalog pieces, InventoryProjection inventory, ServerLog log, TimeProvider? clock = null, ILukeRaidLifecycleStore? lifecycle = null) : IGameCommandModule
+    EpicPieceCatalog pieces, InventoryProjection inventory, ServerLog log, TimeProvider? clock = null, ILukeRaidLifecycleStore? lifecycle = null,
+    TownProjection? town = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -226,7 +227,11 @@ internal sealed class RaidCombatHandler(IRaidRewardStore rewards, ItemCatalog it
                     receipt.Prepared.Kind, Reason = missing });
         }
         if (receipt.Prepared is { RaidType: RaidKind.Prey, Source: PreyGuideRewards.Source })
+        {
             await RaidCombatProjection.PublishPreyGuideResultsAsync(context, receipt);
+            if (town is not null)
+                await RaidCombatProjection.ReturnCompletedPreyGuideWaitingAsync(context, town, receipt);
+        }
         else if (receipt.Prepared.RaidType is RaidKind.Prey or RaidKind.Fiendwar && DisplayGuard())
             await context.Notify(NotiPacketType.RAID_REWARD_LIST, PreyRewardPackets.Reward(receipt.Prepared.Character, receipt.Offer, receipt.Prepared.RaidType),
                 "prey_reward_display", DisplayGuard);
