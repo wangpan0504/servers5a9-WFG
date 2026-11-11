@@ -1,5 +1,6 @@
 using DfoServer.Game.Party;
 using DfoServer.Game.Session;
+using DfoServer.GameWorld.Channels;
 
 namespace DfoServer.Game.Chat;
 
@@ -29,13 +30,13 @@ internal interface IChatDirectoryStore
 /// <summary>
 /// 聊天投递计划：把 <see cref="ChatSend"/> 翻译成"投给谁"的规则，只读快照与成员表，不碰物品、不发包。
 /// 物品校验与扣减在调用方（Network/Handlers 的聊天处理器）完成（Game 层不依赖 Network）；
-/// 两种喇叭只有在扣减成功后才调用这里，所以本类不重复检查库存。
+/// 普通喇叭扣减成功、1120无限喇叭只读资格通过后才调用这里，本类不重复检查库存。
 /// <para>
 /// 协议事实（反汇编 + 实机收包，见 <c>Docs/协议/聊天.md</c>）：<c>NOTI 0x000C</c> 正文是
 /// <c>[u8 显示 type][u16 层 id][u8 v][u32 CP936 字节数][CP936 文本]</c>，客户端按长度读文本（<c>0 &lt; len &lt; 0x100</c>）；
 /// 显示 type 由 <see cref="ChatWire"/> 映射（队伍2、普通/悄悄话3、公会6）；
-/// 正式通知使用真实发言人编号和来源服务器分组，不把接收者编号或请求引用当作发言人。两种喇叭走
-/// <c>NOTI 0x0076</c> 喇叭页签（发言人 + 正文，type11/13由Network侧Builder选定，
+/// 正式通知使用真实发言人编号和来源服务器分组，不把接收者编号或请求引用当作发言人。喇叭走
+/// <c>NOTI 0x0076</c> 喇叭页签（发言人 + 正文，type11/13/14由Network侧Builder选定，
 /// 三条串非空与 29/511/16 字节上限也在那里截断）。物品链接 <c>CMD 0x01A8</c> 的正文由
 /// 物品链接原样投递，不做 CP936 往返；文本与 148 字节记录一起进
 /// <see cref="ChatNotice"/>，由 Network 侧决定发 <c>0x172</c>（可点击）还是退化 <c>0x0C</c>。
@@ -51,6 +52,13 @@ internal sealed class ChatService(IChatDirectoryStore directory, IChatDelivery d
     // 实机样本里两种喇叭 arg 分别是背包槽位，道具 id 由客户端资源固定为 36/37。
     public const int ServerMegaphoneItemId = 36;
     public const int ChannelMegaphoneItemId = 37;
+    public const int OfficialMegaphoneItemId = 1120;
+
+    // 028FB170→028FB090检查LOGIN写入客户端+1010的模式；不能以未投影的原始Type放行。
+    // 原生5会归一为4，两者均不在允许集合中，不改变这里的结果。
+    public static bool AllowsOfficialMegaphone(ChannelEntry? channel) => channel?.LoginType is
+        22 or 23 or 32 or 25 or 45 or 50 or 62 or 63 or 19 or 11 or 17 or 21 or 27 or 28 or 33 or 36 or
+        40 or 39 or 53 or 42 or 47 or 43 or 46 or 48 or 49 or 56 or 51 or 52 or 55 or 54 or 61 or 64;
 
     /// <summary>把请求 type 翻译成逻辑种类；未定义的 type 返回 false，由调用方按未处理拒绝。</summary>
     public static bool TryKind(byte type, out ChatKind kind)
@@ -63,17 +71,19 @@ internal sealed class ChatService(IChatDirectoryStore directory, IChatDelivery d
             ChatRequestType.LegacyCharacterWhisper => ChatKind.Whisper,
             ChatRequestType.ServerMegaphone => ChatKind.ServerMegaphone,
             ChatRequestType.ChannelMegaphone => ChatKind.ChannelMegaphone,
+            ChatRequestType.Official1120Megaphone => ChatKind.OfficialMegaphone,
             _ => null
         };
         kind = selected ?? default;
         return selected is not null;
     }
 
-    /// <summary>喇叭对应的背包道具 id；非喇叭返回 0（调用方据此不做扣减）。</summary>
+    /// <summary>喇叭对应的源道具id；1120只读验证，36/37扣1，非喇叭返回0。</summary>
     public static int MegaphoneItemId(ChatKind kind) => kind switch
     {
         ChatKind.ServerMegaphone => ServerMegaphoneItemId,
         ChatKind.ChannelMegaphone => ChannelMegaphoneItemId,
+        ChatKind.OfficialMegaphone => OfficialMegaphoneItemId,
         _ => 0
     };
 
@@ -106,7 +116,8 @@ internal sealed class ChatService(IChatDirectoryStore directory, IChatDelivery d
             ChatKind.Party => Party(request, sender, source, textBytes, itemRecords),
             ChatKind.Guild => Guild(request, sender, textBytes, itemRecords),
             ChatKind.Whisper => Whisper(request, sender, textBytes, itemRecords),
-            ChatKind.ServerMegaphone or ChatKind.ChannelMegaphone => Megaphone(sender, kind, request.Text, textBytes, itemRecords),
+            ChatKind.ServerMegaphone or ChatKind.ChannelMegaphone or ChatKind.OfficialMegaphone =>
+                Megaphone(sender, kind, request.Text, textBytes, itemRecords),
             _ => ChatDispatch.Rejected("unsupported-type")
         };
     }
@@ -188,15 +199,15 @@ internal sealed class ChatService(IChatDirectoryStore directory, IChatDelivery d
     }
 
     /// <summary>
-    /// 两种喇叭：走已实测可见的 <c>NOTI 0x0076</c> 喇叭页签（<c>发言人 : 正文</c>，类型由 Network 侧按种类选定：
-    /// 服务器喇叭type11投同分组的全部频道，频道喇叭type13只投同分组同频道，均携带真实来源身份。
+    /// 喇叭统一复用 <c>NOTI 0x0076</c> 正文合同，类型由Network侧按种类选定：
+    /// 服务器type11及GM1120/type14投同分组全部频道，频道type13只投同分组同频道，均携带真实来源身份。
     /// </summary>
     ChatDispatch Megaphone(ChatOrigin sender, ChatKind kind, string text, byte[]? textBytes = null, byte[]? itemRecords = null)
     {
         var notice = new ChatNotice(kind, sender.CharacterId, sender.ChannelNumber,
             Megaphone: new MegaphoneText(sender.Name, text) { Channel = sender.Scene.Channel, Actor = sender.CharacterId })
             { Origin = sender, Guard = sender.IsCurrent, TextBytes = textBytes, ItemRecords = itemRecords };
-        int recipients = kind == ChatKind.ServerMegaphone
+        int recipients = kind is ChatKind.ServerMegaphone or ChatKind.OfficialMegaphone
             ? Deliver(sender, recipient => recipient.Scene.Channel.ServerIndex == sender.Scene.Channel.ServerIndex, notice)
             : Deliver(sender, recipient => recipient.Scene.Channel == sender.Scene.Channel, notice);
         return new(true, recipients);
