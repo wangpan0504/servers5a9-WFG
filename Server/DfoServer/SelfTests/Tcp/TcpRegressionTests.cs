@@ -733,6 +733,7 @@ internal static class TcpRegressionTests
             return Task.CompletedTask;
         }),
         ("booster-selection", BoosterSelectionTcpTests.RunAsync),
+        ("returning-adventurer-items", ReturningAdventurerItemTcpTests.RunAsync),
         ("booster-equipment", BoosterEquipmentTcpTests.RunAsync),
         ("authentication", AuthenticationTcpTests.RunAsync),
         ("native-login", NativeLoginTcpTests.RunAsync),
@@ -815,6 +816,7 @@ internal static class TcpRegressionTests
         "levelup-ticket-rules",
         "levelup-table-rules",
         "experience-consumable-rules",
+        "returning-adventurer-items",
         "legacy-status-rules",
         "stackable-actions",
         "gift-selection-tcp", "gift-selection-resources", "sea-rage-weapon-gift", "similar-gift-type", "dungeon-entry-plan", "assault-hunt-quest", "hosted-dungeon-eligibility", "quest-continuation", "quest-manual-skip", "quest-ticket", "quest-specified-ticket", "quest-awakening-ticket",
