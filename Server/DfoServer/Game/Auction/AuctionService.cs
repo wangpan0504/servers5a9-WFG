@@ -1054,7 +1054,7 @@ internal sealed class AuctionService(IAuctionListingStore store, AuctionCategory
     /// 模板解析 + 可上架判定。判定口径与邮箱/仓库共用同一套物品模块字段（`TradeRestriction`、`SealFlag`、
     /// `Attr` 的高 3 位交易次数、`AttachType`、租赁标记、`ExpireTime`），**不新建第二套可交易判定**：
     ///   - 已锁定（排序锁 / 装备安全锁）拒绝 —— 锁定的实例不允许离开背包；
-    ///   - 已到期或**带期限**（租赁 / `ExpireTime > 0`）拒绝 —— 计时道具不能挂到拍卖行；
+    ///   - 已到期或**带期限**（租赁 / `ExpireTime > 0`）拒绝 —— 计时道具不能挂到拍卖行；邮箱已对普通相对/绝对期限放行，拍卖不跟随；
     ///   - `TradeRestriction != 0` 拒绝 —— 包含任务道具与各类绑定实例（PVF 的绑定标记落到这个字段）；
     ///   - `AttachType` 非 `free`：`trade limit` 要求还有剩余交易次数、`sealing`/`seal` 要求已解封、
     ///     `account` 等账号绑定类**一律拒绝**（拍卖行必然跨账号）。

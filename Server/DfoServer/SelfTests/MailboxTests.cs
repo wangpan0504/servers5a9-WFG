@@ -59,6 +59,21 @@ internal static class MailboxTests
             "租赁装备即使未填写期限也不可寄送");
         TestCheck.That(MailboxService.TransferError(new(1, stack.Position, bound), resources.Items.Get(3175), "a", "b",
             DateTimeOffset.UtcNow.ToUnixTimeSeconds()) == MailboxError.NotTradable, "匹配资源中3175为绑定材料，继续拒绝寄送");
+        var blackIron = resources.Items.Get(10008094);
+        long ticketNow = nowForPlan.ToUnixTimeSeconds();
+        var blackIronCore = InventoryRewardGrantService.Create(blackIron, utcNow: nowForPlan);
+        var blackIronItem = new InventoryItem(1, stack.Position, blackIronCore);
+        var accountAmplify = resources.Items.Get(490704584);
+        var accountAmplifyItem = new InventoryItem(1, stack.Position, InventoryRewardGrantService.Create(accountAmplify, utcNow: nowForPlan));
+        TestCheck.That(blackIron.Name.Contains("黑铁装备增幅券") && blackIron.AttachType.Contains("[free]", StringComparison.OrdinalIgnoreCase) &&
+            blackIron.Expiration is { Days: 30, AbsoluteTime: 0, DailyDelete: 0, WeeklyDeleteDay: null } &&
+            blackIronCore.ExpireTime == blackIron.Expiration.Resolve(nowForPlan) && blackIronCore.ExpireTime > ticketNow &&
+            MailboxService.TransferError(blackIronItem, blackIron, "a", "b", ticketNow) == MailboxError.None &&
+            MailboxService.TransferError(blackIronItem, blackIron, "a", "b", blackIronCore.ExpireTime) == MailboxError.ExpiredItem &&
+            accountAmplify.AttachType.Contains("[account]", StringComparison.OrdinalIgnoreCase) && accountAmplify.Expiration.Days == 30 &&
+            MailboxService.TransferError(accountAmplifyItem, accountAmplify, "a", "b", ticketNow) == MailboxError.AccountBound &&
+            MailboxService.TransferError(accountAmplifyItem, accountAmplify, "a", "a", ticketNow) == MailboxError.None,
+            "赛丽亚魔盒10008094为30天free增幅券，未到期可跨账号寄送；490704584仍只允许同账号");
         var sent = f.Sender.SendMail(f.Service, request);
         TestCheck.That(sent.Accepted && sent.Inventory!.Receipt is { } receipt && f.Sender.CanPublishInventory(receipt) &&
             f.Sender.Selected!.Inventory.Gold == original.Inventory.Gold - 1000 - expectedFee &&

@@ -54,6 +54,10 @@ internal sealed partial class CharacterRepository
             var currentSecond = Require(connection, transaction, secondOwner.Account, second.Name);
             ValidateCurrentInventoryPlan(currentFirst, first, firstPlan);
             ValidateCurrentInventoryPlan(currentSecond, second, secondPlan);
+            long now = ObservedUnixSeconds();
+            if (OutgoingExpired(ticket?.FirstOffer, first, firstTransfers!, now) ||
+                OutgoingExpired(ticket?.SecondOffer, second, secondTransfers!, now))
+                throw new InventoryQualificationExpiredException();
             TransferItems(connection, transaction, firstOwner.Account, first.Id, secondOwner.Account, second.Id, secondIncoming.Values);
             TransferItems(connection, transaction, secondOwner.Account, second.Id, firstOwner.Account, first.Id, firstIncoming.Values);
             var savedFirst = CommitInventoryInTransaction(connection, transaction, firstOwner, currentFirst, first, firstPlan, firstTransfers, firstIncoming);
@@ -65,6 +69,16 @@ internal sealed partial class CharacterRepository
             }
             return (savedFirst, savedSecond);
         });
+
+    static bool OutgoingExpired(TradeOffer? offer, Character owner, IReadOnlySet<long> transfers, long now)
+    {
+        if (offer is not null)
+            return offer.Items.Any(line => line.Item.IsExpired(now));
+        foreach (var item in owner.Inventory.Items)
+            if (transfers.Contains(item.Uid) && item.IsExpired(now))
+                return true;
+        return false;
+    }
 
     static bool Matches(InventoryPlan expected, InventoryPlan actual) =>
         SameInventory(actual.After, new InventoryPlan(expected.After, expected.After, "player_trade")) &&

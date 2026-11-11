@@ -21,6 +21,10 @@ internal sealed partial class CharacterRepository(string path, DfoServer.GameWor
       DfoServer.Game.CashShopPromotions.ICashShopPromotionStore, DfoServer.Game.BattlePass.IBattlePassStore
 {
     readonly SqliteGameDatabase database = new(path);
+    // 写闸门排队期间期限仍在走。注入时钟只能把观察时刻推晚，调用方记下的旧时刻不能延长截止。
+    long ObservedUnixSeconds(long captured = 0) => Math.Max(captured, Math.Max(
+        DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+        (promotionClock ?? TimeProvider.System).GetUtcNow().ToUnixTimeSeconds()));
     public DfoServer.GameWorld.Adventure.AdventureCatalog? AdventureCatalog => adventureCatalog;
     public Character[] List(AccountOwners.Lease owner) => owner.Execute(() =>
     {

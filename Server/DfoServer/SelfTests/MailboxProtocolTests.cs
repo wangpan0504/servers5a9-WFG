@@ -174,6 +174,42 @@ internal static class MailboxProtocolTests
         TestCheck.That(MailboxService.TransferError(clean, template with { AttachType = "[account]" }, "a", "a", 1000) == MailboxError.None &&
             MailboxService.TransferError(clean, template with { AttachType = "[trade limit]" }, "a", "b", 1000) == MailboxError.None,
             "同账号与有剩余交易次数的实例允许");
+        var periodItem = clean with { Core = clean.Core with { ExpireTime = 2000 } };
+        var days = template with { Expiration = new(Days: 30) };
+        TestCheck.That(MailboxService.TransferError(periodItem, days, "a", "b", 1000) == MailboxError.None &&
+            MailboxService.TransferError(periodItem, template with { Expiration = new(AbsoluteTime: 1_700_000_000) }, "a", "b", 1000) == MailboxError.None,
+            "未到期的相对天数或绝对日期且 attach free 可以寄送");
+        TestCheck.That(MailboxService.TransferError(periodItem, days with { AttachType = "[account]" }, "a", "b", 1000) == MailboxError.AccountBound &&
+            MailboxService.TransferError(periodItem, days with { AttachType = "[account]" }, "a", "a", 1000) == MailboxError.None &&
+            MailboxService.TransferError(periodItem, days with { AttachType = "" }, "a", "b", 1000) == MailboxError.NotTradable,
+            "普通期限不放开账号绑定或未声明可交易的物品");
+        TestCheck.That(MailboxService.TransferError(periodItem, days with { Expiration = new(Days: 30, DailyDelete: 1) }, "a", "b", 1000) == MailboxError.LimitedPeriod &&
+            MailboxService.TransferError(periodItem, days with { Expiration = new(Days: 30, WeeklyDeleteDay: 0) }, "a", "b", 1000) == MailboxError.LimitedPeriod &&
+            MailboxService.TransferError(periodItem, days with { Expiration = new(Days: 30, WeeklyDeleteDay: 4) }, "a", "b", 1000) == MailboxError.LimitedPeriod &&
+            MailboxService.TransferError(periodItem, days with { Expiration = new(Days: 30, WeeklyDeleteDay: 6) }, "a", "b", 1000) == MailboxError.LimitedPeriod &&
+            MailboxService.TransferError(periodItem with { Core = periodItem.Core with { IsRental = true } }, days, "a", "b", 1000) == MailboxError.LimitedPeriod &&
+            MailboxService.TransferError(periodItem with { Core = periodItem.Core with { ExpireTime = 900 } }, days, "a", "b", 1000) == MailboxError.ExpiredItem,
+            "每日删除、每周删除、租赁和已到期的普通期限仍拒绝");
+        var unknownDaily = days with { Expiration = new(Days: 30, DailyDelete: 14) };
+        var unknownWeekly = days with { Expiration = new(AbsoluteTime: 1_700_000_000, WeeklyDeleteDay: 7) };
+        TestCheck.That(MailboxService.TransferError(periodItem, unknownDaily, "a", "b", 1000) == MailboxError.LimitedPeriod &&
+            MailboxService.TransferError(periodItem, unknownDaily, "a", "a", 1000) == MailboxError.LimitedPeriod &&
+            MailboxService.TransferError(periodItem, unknownDaily, "a", "", 1000) == MailboxError.LimitedPeriod &&
+            MailboxService.TransferError(periodItem, days with { Expiration = new(Days: 30, DailyDelete: 2) }, "a", "b", 1000) == MailboxError.LimitedPeriod &&
+            MailboxService.TransferError(periodItem, days with { Expiration = new(Days: 30, DailyDelete: -1) }, "a", "b", 1000) == MailboxError.LimitedPeriod &&
+            MailboxService.TransferError(periodItem, unknownWeekly, "a", "b", 1000) == MailboxError.LimitedPeriod &&
+            MailboxService.TransferError(periodItem, days with { Expiration = new(Days: 30, WeeklyDeleteDay: -1) }, "a", "b", 1000) == MailboxError.LimitedPeriod &&
+            MailboxService.TransferError(periodItem, days with { Expiration = new(Days: 30, WeeklyDeleteDay: 8) }, "a", "b", 1000) == MailboxError.LimitedPeriod &&
+            MailboxService.TransferError(periodItem, days with { Expiration = new(Days: 30, DailyDelete: 14, WeeklyDeleteDay: 9) }, "a", "", 1000) == MailboxError.LimitedPeriod &&
+            MailboxService.TransferError(periodItem, unknownDaily with { AttachType = "[account]" }, "a", "a", 1000) == MailboxError.LimitedPeriod &&
+            MailboxService.TransferError(periodItem, unknownWeekly with { AttachType = "[trade limit]" }, "a", "b", 1000) == MailboxError.LimitedPeriod &&
+            MailboxService.TransferError(periodItem, days with { Expiration = new(AbsoluteTime: 1_700_000_000, DailyDelete: 2), AttachType = "[sealing]" }, "a", "b", 1000) == MailboxError.LimitedPeriod &&
+            MailboxService.TransferError(periodItem, days, "a", "b", 1000) == MailboxError.None &&
+            MailboxService.TransferError(periodItem, days with { AttachType = "[account]" }, "a", "a", 1000) == MailboxError.None &&
+            MailboxService.TransferError(clean with { Core = clean.Core with { Attr = 0, ExpireTime = 2000 } }, days with { AttachType = "[trade limit]" }, "a", "b", 1000) == MailboxError.NotTradable &&
+            MailboxService.TransferError(periodItem, days with { AttachType = "[sealing]" }, "a", "b", 1000) == MailboxError.NotTradable &&
+            MailboxService.TransferError(clean, days with { Expiration = new(DailyDelete: 14) }, "a", "b", 1000) == MailboxError.None,
+            "未知或越界周期声明在邮件和交易路径保守拒绝；已知 free、同账号、交易次数和封装判定保持不变");
         var tokens = new[] { 2681762, 2681917 }.Select(id => new InventoryItem(0, new(InventoryListType.Main, 0),
             new(id, ItemKind.Material, 720))).ToImmutableArray();
         var delivery = new MailboxDelivery("tokens", new(1, "a", "Receiver", 0, 0, 60), "系统", "兑换", 17,
