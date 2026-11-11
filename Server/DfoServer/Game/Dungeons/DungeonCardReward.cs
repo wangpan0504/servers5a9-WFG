@@ -91,7 +91,8 @@ internal sealed class DungeonCardRewardPolicy(DungeonDropRuleCatalog rules, Dung
         {
             var crystalCard = new DungeonCardReward(checked((int)Math.Max(1, amount)),
                 DungeonDropCreation.Create(items.Get(DisasterDungeonPolicy.CrystalBoxId), 1, Next, now),
-                "disaster-crystal-card-v1", "etc/dungeonetc/disasterdungeon.etc;" + dungeon.Path, now.ToUnixTimeSeconds());
+                difficulty == 2 ? "disaster-crystal-card-v1" : "disaster-crystal-card-local-v2",
+                "etc/dungeonetc/disasterdungeon.etc;" + dungeon.Path, now.ToUnixTimeSeconds());
             crystalCard.Validate();
             return crystalCard;
         }
