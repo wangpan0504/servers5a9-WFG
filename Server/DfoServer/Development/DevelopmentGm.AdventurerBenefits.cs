@@ -19,7 +19,7 @@ internal static partial class DevelopmentGm
             return Ok(new { account = lease.Account, characterId = character.Id, name = character.Name, job = character.Job,
                 scope = request.Action == DevelopmentAction.LuckyProfession ? "profession" : "account", returningUntil = until,
                 text = request.Action == DevelopmentAction.LuckyProfession
-                    ? "已将当前角色的基础职业设为活动职业，适用于该职业全部转职；重新进图后按原生组队条件获得Buff。"
+                    ? "已将当前角色的基础职业设为幸运职业，适用于该职业全部转职及觉醒；重新选角后享受原生四叶草及技能Buff。"
                     : "已设置本账号为回归冒险家，期限按原生资源；重新进图后按原生组队条件获得Buff。" });
         });
     }

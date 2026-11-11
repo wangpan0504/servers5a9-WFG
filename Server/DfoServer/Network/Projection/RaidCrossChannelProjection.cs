@@ -21,7 +21,7 @@ internal static class RaidCrossChannelProjection
         bool Guard() => registry.CanPublishCross(invitation) && identity.IsUnchanged() &&
             (party is null || registry.IsCurrent(party));
         var actor = TownPackets.Actor(identity.Character, identity.PvpGrade, identity.Channel,
-            adventureName: identity.AdventureName, premiumPcRoom: identity.PremiumPcRoom);
+            adventureName: identity.AdventureName, premiumPcRoom: identity.PremiumPcRoom, returningAdventurerType: identity.ReturningAdventurerType);
         if (!send((ushort)NotiPacketType.USERINFO, actor, "raid_cross_request_actor", Guard)) return false;
         if (party is not null && !send((ushort)NotiPacketType.RAID_LIST, RaidProjection.List(party, enableLuke),
             "raid_cross_request_directory", Guard)) return false;
@@ -43,7 +43,7 @@ internal static class RaidCrossChannelProjection
         bool Guard() => registry.CanPublishCross(transfer) && identity.IsUnchanged();
         return send((ushort)NotiPacketType.USERINFO,
             TownPackets.Actor(identity.Character, identity.PvpGrade, identity.Channel, adventureName: identity.AdventureName,
-                premiumPcRoom: identity.PremiumPcRoom), "raid_cross_response_actor", Guard) &&
+                premiumPcRoom: identity.PremiumPcRoom, returningAdventurerType: identity.ReturningAdventurerType), "raid_cross_response_actor", Guard) &&
             send((ushort)NotiPacketType.RAID_LIST, RaidProjection.List(transfer.Party, enableLuke),
                 "raid_cross_response_directory", Guard) &&
             send((ushort)NotiPacketType.RAID_OTHER_CHANNEL_RESPONSE_JOIN,

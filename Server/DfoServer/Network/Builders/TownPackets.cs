@@ -76,11 +76,13 @@ internal static partial class TownPackets
         (character.DungeonState?.ProficiencyLevel ?? 0u, character.DungeonState?.ProficiencyExperience ?? 0UL);
 
     public static byte[] Actor(Character character, DfoServer.Game.Pvp.PvpDisplayGrade pvpGrade, ChannelIdentity channel = default, long? utcSeconds = null,
-        string adventureName = "", ActorSceneState sceneState = ActorSceneState.Town, bool premiumPcRoom = false)
+        string adventureName = "", ActorSceneState sceneState = ActorSceneState.Town, bool premiumPcRoom = false,
+        ushort returningAdventurerType = 0)
     {
         if (character.BlacklistCount < 0)
             throw new InvalidDataException("角色被拉黑计分不能为负数");
         if (pvpGrade.PowerTitle > 9) throw new InvalidDataException("战斗力称谓超出客户端范围");
+        if (returningAdventurerType > 2) throw new InvalidDataException("新回归系统身份超出客户端范围");
         using (var stream = new MemoryStream())
         using (var writer = new BinaryWriter(stream))
         {
@@ -162,7 +164,8 @@ internal static partial class TownPackets
             writer.Write(0u);
             writer.Write((ushort)0);
             writer.Write(new byte[2]);
-            writer.Write((ushort)0); // 02678840.
+            // 026788CF读取u16，经026788D8安装Data+418；02D83A20读取新回归系统头像身份。
+            writer.Write(returningAdventurerType);
             // 026768F0 依次读 u32 熟练等级与 u64 熟练经验，经 01A16420/01A16470 写角色
             // Data+42C/+430/+434；左下角HUD与「熟练Lv」窗口直接消费这三个字段。
             // 满级停发NOTI37后没有其他同步通道，Actor 必须投影持久化的熟练状态。
@@ -184,7 +187,9 @@ internal static partial class TownPackets
             writer.Write(character.Learning.TreeWireValue);
             writer.Write(new byte[2]);
             writer.Write(0u);
-            writer.Write(new byte[2]); // 0267F273..0267FED3.
+            // 02681958及023D6271安装Data+4A3；普通队伍、攻坚队和跨频道详情共用此技能分支标志。
+            writer.Write(CharacterSkillVariant.Read(character));
+            writer.Write((byte)0);
             return stream.ToArray();
         }
     }

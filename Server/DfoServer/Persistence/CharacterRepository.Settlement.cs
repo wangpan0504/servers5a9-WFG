@@ -127,7 +127,7 @@ internal sealed partial class CharacterRepository
                 !DailyBoosterUsage.Same(current.Inventory.DailyBoosterUses, ancient.Before))
                 throw new InvalidOperationException("远古奖励进度的角色快照已变化");
         }
-        var result = reward.TotalExperience == 0 && run.Entry.DisableMonsterAndClearExperience
+        var result = reward.TotalExperience == 0 && run.Entry.AllowsZeroClearExperience
             ? CharacterGrowthPlan.WithoutExperience(expected, catalog) : CharacterGrowthPlan.AddExperience(expected, reward.TotalExperience, catalog);
         if (!result.Success)
             throw new InvalidDataException("通关成长候选被拒绝: " + result.Failure);
@@ -169,6 +169,9 @@ internal sealed partial class CharacterRepository
                 proficiencyGained = checked((uint)proficiency.Credited);
             }
         }
+        if (!run.Entry.IsPractice && !run.Entry.IsTrainingRoom && !run.Entry.IsTutorial && !run.Entry.IsClassExperience &&
+            !run.Entry.IsQuestReplay && run.Entry.MockBattle is null)
+            RecordReturningEvent(db, tx, owner.Account, plan.TargetLevel, "dungeon clear", checked((int)prepared.Fact.DungeonId));
         // 推荐地下城通关按角色累计到u16上限，账号面板读取时求和；同一实例的重复报告已在上面提前返回。
         if (recommendedClear)
         {

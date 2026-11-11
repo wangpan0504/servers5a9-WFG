@@ -22,6 +22,7 @@ internal static class SelfTestRunner
         HelperSafetyTests.RunCore();
         WeeklyAttendanceTests.RunCore();
         AdventurerBenefitTests.RunCore();
+        ReturningAdventurerTests.RunCore();
         MonsterMockBattleTests.RunCore();
         HelperAssetSafetyTests.RunCore();
         await HelperAssetSafetyTests.RunProtocolAsync();
@@ -537,6 +538,7 @@ internal static class SelfTestRunner
     public static async Task RunAsync(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters, ItemResources itemResources)
     {
         AdventurerBenefitTests.RunResources(pvf);
+        ReturningAdventurerTests.RunResources(pvf);
         BattlePassCatalogTests.Run(pvf);
         BattlePassRewardResourceTests.RunResources(DfoServer.GameWorld.BattlePass.BattlePassCatalog.Load(pvf),
             itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, DateTimeOffset.UtcNow);

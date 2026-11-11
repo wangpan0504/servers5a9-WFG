@@ -336,6 +336,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
             PartyPackets.Failure(133, 10), "raid_peer_refused", () => actor.IsCurrent);
         session.HasMultiplePartyMembers = () => parties?.HasMultipleMembers(session) == true;
         session.CurrentParty = () => parties?.Current(session);
+        session.SkillVariantChanged = (source, guard) => SkillProjection.VariantChanged(context, source, guard);
         session.EvildomWarCleanupFailed = error => log.Write("evildom_war_cleanup_failed", new
             { Connection = connection.Id, Error = error.GetType().Name, error.Message });
         prepareDungeon?.Invoke(context);
@@ -373,7 +374,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
                         bool Guard() => session.CanPublishInventory(receipt);
                         await inventory.RefreshAsync(context, result);
                         await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(receipt.Character, context.Session.ReadPvpGrade(receipt.Character), context.Channel,
-                            adventureName: session.ReadAdventureName(), premiumPcRoom: session.PremiumPcRoom),
+                            adventureName: session.ReadAdventureName(), premiumPcRoom: session.PremiumPcRoom, returningAdventurerType: session.ReturningAdventurerType),
                             "expert_job_customer_owner_actor", Guard);
                         await context.Notify(NotiPacketType.EXPERT_JOB_INFO, info, "expert_job_customer_owner_info", Guard);
                         projection.Refresh(context);
@@ -500,7 +501,21 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
                             mailbox?.Alarm(context,invitation);
                         }
                         await dailyFatigue.RefreshAsync();
-                        AdventurerBenefitProjection.Post(context);
+                        if (AdventurerBenefitProjection.Post(context) && session.Selected is { } benefitCharacter &&
+                            session.PublicCharacter(benefitCharacter.Id) is { } benefitIdentity)
+                        {
+                            if (benefitIdentity.Phase == SessionPhase.Town) projection.Refresh(context);
+                            var notices = parties?.FrameChanged(session, benefitIdentity) ?? [];
+                            if (notices.Length > 0) parties!.Publish(notices, presenceChanged: false);
+                            else context.Sender.Post(0, (ushort)NotiPacketType.USERINFO,
+                                TownPackets.Actor(benefitIdentity.Character, benefitIdentity.PvpGrade, benefitIdentity.Channel,
+                                    adventureName: benefitIdentity.AdventureName,
+                                    sceneState: benefitIdentity.Phase is SessionPhase.Dungeon or SessionPhase.Settlement
+                                        ? ActorSceneState.Dungeon : ActorSceneState.Town,
+                                    premiumPcRoom: benefitIdentity.PremiumPcRoom,
+                                    returningAdventurerType: benefitIdentity.ReturningAdventurerType),
+                                "returning_adventurer_actor", benefitIdentity.IsCurrent);
+                        }
                         if (context.PcRoomTimePoint is { } onlineRewards) await onlineRewards.RefreshAsync();
                         if (context.WeeklyAttendance is { } weekly) await weekly.RefreshAsync(force: request.Opcode == (ushort)CmdPacketType.SET_PLAY_RESULT);
                         await revival.RefreshAsync();
