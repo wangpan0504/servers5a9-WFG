@@ -105,6 +105,24 @@ internal static class MarriageLifecycleTests
             byte[] body = DfoServer.Network.Builders.TownPackets.Actor(role with { Marriage = invalid }, 0);
             That(body[28] == 0 && body[29] == 0, "解除或不属于本人的关系不能泄漏为当前Actor婚姻身份");
         }
+        var decorated = record with { Furniture = System.Collections.Immutable.ImmutableDictionary<ushort, MarriageFurnitureStack>.Empty
+            .Add(1, new(301, 3)).Add(2, new(301, 1)).Add(3, new(302, 1)) };
+        var appearance = new DfoServer.Network.Builders.MarriageAppearance(new Dictionary<int, uint> { [301] = 200, [302] = 7 });
+        foreach (var scene in Enum.GetValues<DfoServer.Network.Builders.ActorSceneState>())
+        {
+            var body = DfoServer.Network.Builders.TownPackets.Actor(role with { Marriage = decorated }, 0,
+                sceneState: scene, marriage: appearance);
+            That(BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(30)) == 407 && body.Length == ordinary.Length,
+                "完整Actor在原生头+25携带真实装饰分，重复刷新不能用零覆盖婚房属性");
+            That(BinaryPrimitives.ReadUInt32LittleEndian(appearance.Body(role with { Marriage = decorated }).AsSpan(10)) == 407,
+                "本人Actor与远端1016共用家具计分，不乘数量且不去重");
+        }
+        foreach (var invalid in new[] { decorated with { State = 0 }, decorated with { FirstId = 3 } })
+            That(BinaryPrimitives.ReadUInt32LittleEndian(DfoServer.Network.Builders.TownPackets.Actor(
+                role with { Marriage = invalid }, 0, marriage: appearance).AsSpan(30)) == 0,
+                "解除或换角后清空装饰分，不沿用前一角色权益");
+        Reject<InvalidOperationException>(() => DfoServer.Network.Builders.TownPackets.Actor(role with { Marriage = decorated }, 0),
+            "有家具时漏装配计分目录明确失败，不能悄悄把婚房属性清零");
     }
 
     public static void Run(MarriageCatalog catalog, ItemCatalog items, DfoServer.GameWorld.Characters.CharacterDefaultAppearance defaults)

@@ -41,16 +41,17 @@ internal static partial class DisasterDungeonTests
             { DungeonType = DisasterDungeonPolicy.TypeName };
         var idOnly = new DungeonDefinition(DisasterDungeonPolicy.FirstPlayableId, "dungeon/ordinary.dgn", 93, 105, [], []);
         That(DisasterDungeonPolicy.IsEntrance(entrance) && !DisasterDungeonPolicy.IsPlayable(entrance) &&
-            DisasterDungeonPolicy.ClearReward(entrance) is null, "入口 5340 不是实图，不发通关礼盒");
+            !DisasterDungeonPolicy.HasCrystalCard(entrance, 0), "入口 5340 不是实图，不发通关礼盒");
         That(DisasterDungeonPolicy.IsPlayable(playable) && DisasterDungeonPolicy.AppliesFatigue(playable, false) &&
             !DisasterDungeonPolicy.AppliesFatigue(playable, true) && !DisasterDungeonPolicy.IsPlayable(typeOnly) &&
             !DisasterDungeonPolicy.IsPlayable(idOnly), "实图必须同时是 5341–5345 和 disaster dungeon，练习不套门槛");
-        var reward = DisasterDungeonPolicy.ClearReward(playable);
-        That(reward is { MailSender: "灾难领域", Items: [{ ItemId: DisasterDungeonPolicy.CrystalBoxId, Count: 1 }] } &&
-            reward.Items[0].Probability == SpecialDungeonClearReward.ProbabilityScale &&
-            reward.Roll(_ => 0) is [{ ItemId: DisasterDungeonPolicy.CrystalBoxId, Count: 1 }] &&
-            reward.Roll(_ => int.MaxValue) is [{ ItemId: DisasterDungeonPolicy.CrystalBoxId, Count: 1 }],
-            "通关固定发 1 个净化的异形结晶礼盒，不抽数量");
+        foreach (byte difficulty in new byte[] { 0, 1, 2 })
+            That(DisasterDungeonPolicy.HasCrystalCard(playable, difficulty) &&
+                !DisasterDungeonPolicy.HasCrystalCard(typeOnly, difficulty) &&
+                !DisasterDungeonPolicy.HasCrystalCard(idOnly, difficulty),
+                "三档结晶翻牌仅用于编号和类型匹配的实图");
+        That(!DisasterDungeonPolicy.HasCrystalCard(playable, 3) && !DisasterDungeonPolicy.HasCrystalCard(playable, byte.MaxValue),
+            "未定义的灾难难度不套三档兼容奖励");
         That(DisasterDungeonPolicy.EntryFatigueRejection(0, false, 1, 1) is null &&
             DisasterDungeonPolicy.EntryFatigueRejection(8, true, 1, 1) is null &&
             DisasterDungeonPolicy.EntryFatigueRejection(8, false, null, 8) == "fatigue-owner-missing" &&
@@ -88,8 +89,8 @@ internal static partial class DisasterDungeonTests
             That(DungeonEntryPlan.TryCreate(catalog, hero, checked((uint)id), 0, 0, out var plan, out var reason, draw: _ => 0, quests: quests) &&
                 plan is { StartFatigue: 0, RoomFatigueCost: DisasterDungeonPolicy.RoomFatigue,
                     MinimumEntryFatigue: DisasterDungeonPolicy.EntryMinimumFatigue, UsesFatigue: true, UsesRoomFatigue: true,
-                    SpecialClearReward.Items: [{ ItemId: DisasterDungeonPolicy.CrystalBoxId, Count: 1 }] },
-                id + " 计划门槛 8、每房 3、礼盒 490012200：" + reason);
+                    SpecialClearReward: null },
+                id + " 计划门槛8、每房3，结晶走翻牌而非Boss直发：" + reason);
         }
         That(DungeonEntryPlan.TryCreate(catalog, hero, 3, 0, 0, out var ordinary, out _) &&
             ordinary is { RoomFatigueCost: 1, MinimumEntryFatigue: 0 } &&
@@ -99,17 +100,32 @@ internal static partial class DisasterDungeonTests
         var cards = new DungeonCardRewardPolicy(SelfTestCatalogs.DropRules(pvf), DungeonItemDropCatalog.Create([]),
             items.Items, items.GoldLimits, items.EpicPieces, prices: SelfTestCatalogs.CardPrices(pvf));
         for (int id = 5341; id <= 5345; id++)
+        foreach (byte difficulty in new byte[] { 0, 1, 2 })
         {
             var definition = catalog.Get(id);
-            That(DungeonEntryPlan.TryCreate(catalog, hero, checked((uint)id), 0, 2, out var plan, out _, draw: _ => 0, quests: quests) &&
-                plan!.SpecialClearReward is null, "默认难度2不在Boss死亡另发结晶礼盒，防止与翻牌重复");
-            var card = cards.Prepare(definition, 2, 0, _ => 0, DateTimeOffset.UnixEpoch);
-            That(card.Item is { ItemId: 490012200, Count: 1 } && card.RuleId == "disaster-crystal-card-v1" &&
-                card.Items().Count() == 1, "难度2翻牌冻结一个真实490012200礼盒");
+            That(DungeonEntryPlan.TryCreate(catalog, hero, checked((uint)id), 0, difficulty, out var plan, out _, draw: _ => 0, quests: quests) &&
+                plan!.SpecialClearReward is null, "三档均不在Boss死亡另发结晶礼盒，防止与翻牌重复");
+            var card = cards.Prepare(definition, difficulty, 0, _ => 0, DateTimeOffset.UnixEpoch);
+            That(card.Item is { ItemId: 490012200, Count: 1 } &&
+                card.RuleId == (difficulty == 2 ? "disaster-crystal-card-v1" : "disaster-crystal-card-local-v2") &&
+                card.Items().Count() == 1, "五图三档翻牌冻结一个真实礼盒，并明确低档本服规则版本");
             var delivery = cards.PlanDelivery(hero with { Inventory = InventorySnapshot.Empty }, [card], hero.Level,
                 utcNow: DateTimeOffset.UnixEpoch);
             That(delivery.Inventory.After.Items.Count(item => item.Core.ItemId == 490012200) == 1,
                 "结晶礼盒通过既有选牌发放计划进入背包");
+            var options = cards.PrepareOptions(definition, difficulty, 0,
+                new CardMembership(BlackDiamondExpires: 1000), DateTimeOffset.UnixEpoch)!;
+            That(options.Paid.Item is { ItemId: 490012200, Count: 1 } &&
+                (definition.DisableBlackDiamondCardReward ? options.BlackDiamond is null :
+                    options.BlackDiamond?.Item is { ItemId: 490012200, Count: 1 }),
+                "三档付费与黑钻牌继承原资格，各冻结一盒，不回退普通装备池");
+            var range = ItemSlotBoundService.Range(ItemKind.Consumable, 0);
+            var full = hero with { Inventory = new InventorySnapshot([.. Enumerable.Range(range.Start, range.End - range.Start + 1)
+                .Select(slot => new InventoryItem(slot + 1, new(InventoryListType.Main, checked((short)slot)), new(1000, ItemKind.Consumable, 1)))], Expansion: 0) };
+            var overflow = cards.PlanDelivery(full, [card], full.Level, utcNow: DateTimeOffset.UnixEpoch);
+            That(overflow.MailItems is [{ ItemId: 490012200, Count: 1 }] &&
+                overflow.Inventory.After.Items.SequenceEqual(full.Inventory.Items),
+                "五图三档满消耗品页时保留整盒邮件计划，不覆盖库存、不拆散结晶");
         }
         var crystal = items.Items.Get(DisasterDungeonPolicy.CrystalId);
         var booster = items.Boosters.Get(DisasterDungeonPolicy.CrystalBoxId);
@@ -134,14 +150,6 @@ internal static partial class DisasterDungeonTests
         for (int id = DisasterDungeonPolicy.FirstPlayableId; id <= DisasterDungeonPolicy.LastPlayableId; id++)
             That(!pvf.ReadText(catalog.Get(id).Path).Contains("490012200", StringComparison.Ordinal),
                 id + " 的 dgn 本身不写礼盒编号");
-        var reward = DisasterDungeonPolicy.ClearReward(catalog.Get(DisasterDungeonPolicy.FirstPlayableId))!;
-        var holder = hero with { Inventory = InventorySnapshot.Empty };
-        var granted = InventoryRewardGrantService.TryGrantDirectItems(holder,
-            reward.Roll(_ => 0).Select(row => new InventoryReward(row.ItemId, row.Count)).ToArray(),
-            items.Items, DateTimeOffset.UnixEpoch, allowOverflowMail: true, reason: "special_dungeon_clear_reward",
-            overflowMailSender: reward.MailSender, overflowMailText: reward.MailText);
-        That(granted.Accepted && granted.Plan!.After.Items.Sum(row => row.Core.ItemId == DisasterDungeonPolicy.CrystalBoxId ? row.Core.Count : 0) == 1,
-            "通关通道可以把礼盒放进背包，不在发放时拆成 20 个结晶");
         for (int id = 490012195; id <= 490012199; id++)
         {
             var stone = items.Items.Get(id);
@@ -290,6 +298,15 @@ internal static partial class DisasterDungeonTests
             That(Enumerable.Range(5340, 6).All(id => gate.Repository.LoadAccountDungeonIncount(gate.Owner, id, entryPeriod) == 1),
                 "随机入口按实图提交六行连带账号次数，各计一次");
             VerifyStoneReward(gate, loaded!, route, kills, growth, items);
+        }
+        foreach (byte difficulty in new byte[] { 0, 1 })
+        {
+            using var low = Open(towns, characters, skills, growth, quests, incounts, items, position, completed, 156, null);
+            That(low.Session.EnterFormalDungeon(5341, 0, difficulty, catalog, rooms, drops, items.Items, _ => 0, items.EpicPieces) is not null,
+                "低档实图按本服规则正常进入：" + low.Session.LastFormalDungeonRejection);
+            var loaded = low.Session.CompleteFormalDungeonLoading()!;
+            var boss = VerifyStoneReward(low, loaded, 0, kills, growth, items);
+            VerifyLowCrystalClaim(low, boss, catalog, pvf, kills, growth, items);
         }
         for (int remaining = 0; remaining <= 7; remaining++)
         {

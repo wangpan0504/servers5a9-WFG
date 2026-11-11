@@ -13,7 +13,7 @@ internal static class SkillProjection
         var actor = TownPackets.Actor(source.SkillCharacter, source.PvpGrade, source.Channel,
             adventureName: source.AdventureName, sceneState: source.Phase is DfoServer.Game.Session.SessionPhase.Dungeon or DfoServer.Game.Session.SessionPhase.Settlement
                 ? ActorSceneState.Dungeon : ActorSceneState.Town, premiumPcRoom: source.PremiumPcRoom,
-            returningAdventurerType: source.ReturningAdventurerType);
+            returningAdventurerType: source.ReturningAdventurerType, marriage: context.MarriageAppearance);
         context.Sender.Post(0, (ushort)NotiPacketType.USERINFO, actor,
             "skill_variant_actor", () => source.IsUnchanged() && canSend());
     }

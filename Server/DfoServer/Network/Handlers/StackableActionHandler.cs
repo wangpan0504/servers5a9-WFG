@@ -376,7 +376,7 @@ internal sealed partial class StackableActionHandler(QuestCatalog quests,ItemCat
         {
             await context.Notify(NotiPacketType.USERINFO,
                 TownPackets.Actor(receipt.Character, context.Session.ReadPvpGrade(receipt.Character), context.Channel, adventureName: context.Session.ReadAdventureName(),
-                    premiumPcRoom: context.Session.PremiumPcRoom, returningAdventurerType: context.Session.ReturningAdventurerType),
+                    premiumPcRoom: context.Session.PremiumPcRoom, returningAdventurerType: context.Session.ReturningAdventurerType, marriage: context.MarriageAppearance),
                 "quest_ticket_profession_actor",Guard);
             await (levelProjection ?? throw new InvalidOperationException("觉醒券发布缺少角色投影"))
                 .PlayerAsync(context,receipt.Character,"quest_ticket_profession_player",Guard);

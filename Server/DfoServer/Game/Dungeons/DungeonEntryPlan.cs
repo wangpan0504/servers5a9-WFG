@@ -757,7 +757,7 @@ internal sealed record DungeonEntryPlan(
             IsTayberrs = definition.IsTayberrs,
             IsTayberrsStory = definition.IsTayberrsStory,
             SpecialClearReward = !practice && !definition.IsTutorial && !definition.IsClassExperience && !definition.DisableClearReward && !lostLand
-                ? definition.SpecialClearReward ?? DisasterDungeonPolicy.ClearReward(definition, difficulty) : null,
+                ? definition.SpecialClearReward : null,
             DisableItemDrops = definition.DisableItemDrops || definition.IsTayberrsStory,
             IsOrdinaryLuke = definition.IsOrdinaryLuke,
             IsOrdinaryPrey = definition.IsOrdinaryPrey, IsOrdinaryAnton = definition.IsOrdinaryAnton,

@@ -148,7 +148,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
             epicPieceBonuses: epicPieceBonuses, dropControl: dropControl);
         session.AttachHostedDungeonEligibility(hostedDungeonEligibility);
         var context = new GameConnectionContext(connection, login.Owner, session, sender, createActivity?.Invoke(session))
-            { RaidClearLukeCycle = projection.RaidClearLukeCycle };
+            { RaidClearLukeCycle = projection.RaidClearLukeCycle, MarriageAppearance = presence?.MarriageAppearance };
         preyGuideScene = context;
         context.PreyGuideWaiting.Bind(connection.Stop);
         context.PreyGuideWaiting.Diagnostic = detail => log.Write("prey_guide_waiting_failed", new { Connection = connection.Id, Detail = detail });
@@ -374,7 +374,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
                         bool Guard() => session.CanPublishInventory(receipt);
                         await inventory.RefreshAsync(context, result);
                         await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(receipt.Character, context.Session.ReadPvpGrade(receipt.Character), context.Channel,
-                            adventureName: session.ReadAdventureName(), premiumPcRoom: session.PremiumPcRoom, returningAdventurerType: session.ReturningAdventurerType),
+                            adventureName: session.ReadAdventureName(), premiumPcRoom: session.PremiumPcRoom, returningAdventurerType: session.ReturningAdventurerType, marriage: context.MarriageAppearance),
                             "expert_job_customer_owner_actor", Guard);
                         await context.Notify(NotiPacketType.EXPERT_JOB_INFO, info, "expert_job_customer_owner_info", Guard);
                         projection.Refresh(context);
@@ -513,7 +513,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
                                     sceneState: benefitIdentity.Phase is SessionPhase.Dungeon or SessionPhase.Settlement
                                         ? ActorSceneState.Dungeon : ActorSceneState.Town,
                                     premiumPcRoom: benefitIdentity.PremiumPcRoom,
-                                    returningAdventurerType: benefitIdentity.ReturningAdventurerType),
+                                    returningAdventurerType: benefitIdentity.ReturningAdventurerType, marriage: context.MarriageAppearance),
                                 "returning_adventurer_actor", benefitIdentity.IsCurrent);
                         }
                         if (context.PcRoomTimePoint is { } onlineRewards) await onlineRewards.RefreshAsync();

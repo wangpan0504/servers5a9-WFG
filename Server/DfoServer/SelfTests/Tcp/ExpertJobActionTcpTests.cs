@@ -31,6 +31,7 @@ internal static partial class ExpertJobActionTcpTests
         short cardSlot = ItemSlotBoundService.Range(items.Get(recipe.CardId).Kind, InventorySnapshot.Empty).Start;
         ushort machineId, enchanterId;
         uint fragmentCount = 0;
+        int machineExperience = 51;
         using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
         {
             var machine = repository.Create(owner, new("MachineTcp", resources.Towns.Room, resources.Towns.InitialReturn)
@@ -96,7 +97,7 @@ internal static partial class ExpertJobActionTcpTests
             var fragmentBalance = peer.Expect(0, 1152).Body;
             That(fragmentBalance.Length == 13 && fragmentBalance[0] == 1 && U32(fragmentBalance, 5) == epicPiece.PieceId &&
                 U32(fragmentBalance, 9) == fragmentCount, "机器碎片只入图鉴，1152同步真实绝对余额而非Main实体");
-            peer.Expect(0, 2); peer.Expect(0, 205, MachineInfo(297)); peer.Barrier();
+            ReadMachineProgress(peer, fixture, machineId, ref machineExperience); peer.Barrier();
             before = Snapshot();
             fixture.Sql("CREATE TRIGGER fail_action_tcp BEFORE INSERT ON character_expert_meta BEGIN SELECT RAISE(ABORT,'machine tcp failure'); END");
             UseMachine(peer, 7, machineId); peer.Closed();
@@ -188,7 +189,7 @@ internal static partial class ExpertJobActionTcpTests
             That(Enumerable.Range(0, count).Any(i => U32(ack, 9 + 10 * i) == 2610045 && U32(ack, 13 + 10 * i) == 1),
                 "自用零件在已提交的ACK产物中以增量1出现");
             if (tutorial) peer.Expect(1,33,Convert.FromHexString("01252700000000"));
-            peer.Expect(0, 2); peer.Expect(0, 205, MachineInfo(endurance));
+            ReadMachineProgress(peer, fixture, machineId, ref machineExperience);
             peer.Barrier();
         }
     }
@@ -197,6 +198,17 @@ internal static partial class ExpertJobActionTcpTests
         Bytes(peer.Expect(0, 538).Body[22..], [2, 0, 1], "Lv6本人开店只有两项资格");
         Bytes(peer.Expect(0, 544).Body[8..], [2, 0, 1], "本人544不清空资格");
         peer.Expect(1, 598, [1]);
+    }
+    static byte[]? ReadMachineProgress(TcpPeer peer, TcpTestFixture fixture, ushort actor, ref int previousExperience)
+    {
+        int experience = Convert.ToInt32(fixture.Query("SELECT expertness FROM character_expert_job WHERE character_id=$p0", actor).Single()[0]);
+        byte[]? body = experience != previousExperience ? peer.Expect(0, 2).Body : null;
+        if (body is not null)
+            That(body[^55] == 3 && U32(body, body.Length - 54) == experience,
+                "实际熟练度变化立即以Actor同步类型和持久化累计值");
+        previousExperience = experience;
+        // 调用方的严格屏障拒绝额外Actor和205，零经验时不重建角色或再次初始化机器。
+        return body;
     }
     static InventorySlot Bag(int slot) => new(InventoryListType.Main, (short)slot);
     static void UseMachine(TcpPeer peer, ushort slot, ushort actor) => peer.Send(235, Build(writer =>

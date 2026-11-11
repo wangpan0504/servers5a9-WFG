@@ -12,6 +12,7 @@ internal sealed record PartyCardTemplate(DfoServer.Game.Dungeons.PartyDungeonIns
 internal sealed class GameConnectionContext(ConnectionContext connection, AccountOwners.Lease owner, GameSession session, GameConnectionSender sender,
     IGameConnectionActivity? activity = null, ChannelIdentity channel = default)
 {
+    internal MarriageAppearance? MarriageAppearance { get; init; }
     // 仅记录本连接已写出的任务期段；账号任务状态仍由原Session和仓储持有。
     internal (long Epoch, long Period)? BattlePassMissionDisplay { get; set; }
     // 本连接当前目录的账号材料显示槽；余额仍只取Selected的钱包，不进入实体库存。
