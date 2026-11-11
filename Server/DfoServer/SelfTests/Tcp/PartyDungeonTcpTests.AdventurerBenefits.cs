@@ -15,14 +15,64 @@ internal static partial class PartyDungeonTcpTests
         var hero = group.Peers[0]; var fighter = group.Peers[1];
         string name = Convert.ToString(fixture.Query("SELECT name FROM characters WHERE id=$p0", hero.Id)[0][0])!;
         string account = Convert.ToString(fixture.Query("SELECT account FROM characters WHERE id=$p0", hero.Id)[0][0])!;
+        void SetLucky(string targetAccount, string targetName, uint job)
+        {
+            That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort, "account " + targetAccount + " lucky-profession " + targetName,
+                out string result) && result.StartsWith("OK "), "真实GM幸运设置成功且先持久化");
+            var first = group.All(); var tail = group.All();
+            for (int member = 0; member < first.Length; member++)
+            {
+                var packet = first[member].Concat(tail[member]).Single(row => row is { Kind: 0, Opcode: 1057 });
+                int count = checked((int)U32(packet.Body));
+                That(count > 1 && packet.Body.Length == 4 + count * 8 && Enumerable.Range(0, count).All(at =>
+                    U32(packet.Body, 4 + at * 8) == job && U32(packet.Body, 8 + at * 8) <= 127),
+                    "所有在线会话收到完整原生职业名单，不发个人幸运标志或女格斗Buff替代");
+            }
+        }
+        SetLucky(account, name, 0);
+        hero.Send(562, [1]); hero.Expect(1, 562, [1]); hero.Expect(0, 490, [0, 0, 1]); group.All(hero);
+        That(fixture.Query("SELECT enabled FROM character_fatigue_acceleration WHERE character_id=$p0", hero.Id) is [[1L]],
+            "非网吧幸运角色沿真实562保存免费燃烧，不只是显示四叶草");
+        string fighterName = Convert.ToString(fixture.Query("SELECT name FROM characters WHERE id=$p0", fighter.Id)[0][0])!;
+        string fighterAccount = Convert.ToString(fixture.Query("SELECT account FROM characters WHERE id=$p0", fighter.Id)[0][0])!;
+        SetLucky(fighterAccount, fighterName, 1);
+        hero.Send(562, [0]); hero.Expect(1, 562, [1]); hero.Expect(0, 490, [0, 0, 0]); group.All(hero);
+        // 切回本人职业，后续击杀同时核对四叶草与独立女格斗队友活动，不能相互覆盖。
+        SetLucky(account, name, 0);
         That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort, "account " + account + " returning-adventurer " + name, out string response) && response.StartsWith("OK "),
             "真实GM命令持久化所选账号回归资格");
         That(File.Exists(Path.Combine(fixture.Options.DataDirectory, "adventurer-benefits.json")), "回归GM成功前已落盘");
         group.All();
-        var identity = group.All()[0].Single(packet => packet is { Kind: 0, Opcode: 1761 });
+        var returnRows = group.All()[0];
+        var identity = returnRows.Single(packet => packet is { Kind: 0, Opcode: 1761 });
         That(identity.Body.Length == 16 && U32(identity.Body) == 1 && U32(identity.Body, 12) > clock.Now.ToUnixTimeSeconds(),
             "真实账号回归身份按原生16B通知同步到客户端");
-        group.Join(); group.Enter(3, 0); group.Load();
+        That(U16(identity.Body, 6) == 1 && U16(identity.Body, 8) == 1 &&
+            returnRows.Single(packet => packet is { Kind: 0, Opcode: 1762 }).Body.Length == 1200,
+            "回归身份同时附带可领奖状态和完整100槽任务列表");
+        hero.Send(1734, Build(w => { w.Write(1u); w.Write(0u); }));
+        var claimed = group.All(hero)[0];
+        That(claimed.Single(packet => packet is { Kind: 1, Opcode: 1734 }).Body.Length == 12 &&
+            U16(claimed.Last(packet => packet is { Kind: 0, Opcode: 1761 }).Body, 6) == 2 &&
+            fixture.Query("SELECT item_id,item_count FROM account_returning_reward_claims WHERE account=$p0", account) is [[long welcomeItem, 1L]] &&
+            welcomeItem == 490013906,
+            "原生8B欢迎请求实际发回归礼包，12B应答后状态变已领取");
+        long claimedRevision = Convert.ToInt64(fixture.Query("SELECT revision FROM characters WHERE id=$p0", hero.Id)[0][0]);
+        hero.Send(1734, Build(w => { w.Write(1u); w.Write(0u); })); group.All(hero);
+        That(Convert.ToInt64(fixture.Query("SELECT count(*) FROM account_returning_reward_claims WHERE account=$p0", account)[0][0]) == 1 &&
+            Convert.ToInt64(fixture.Query("SELECT revision FROM characters WHERE id=$p0", hero.Id)[0][0]) == claimedRevision,
+            "TCP重复欢迎请求不重复发物品、不写revision");
+        hero.Send(1734, Build(w => { w.Write(5u); w.Write(4u); })); group.All(hero);
+        That(fixture.Query("SELECT count(*) FROM account_returning_mission_progress WHERE account=$p0 AND mission_id=4", account) is [[0L]],
+            "客户端不能通过观察事件伪造遗迹任务完成");
+        group.Join(); group.Enter(3, 0);
+        var entered = group.LastPackets;
+        bool ReturningActor(WirePacket packet, ushort id, ushort type) => packet is { Kind: 0, Opcode: 2 } &&
+            packet.Body.Length > 158 && packet.Body[0] == 0 && U16(packet.Body, 121) == id &&
+            U16(packet.Body, packet.Body.Length - 37) == type;
+        That(entered.All(rows => rows.Any(packet => ReturningActor(packet, hero.Id, 1))),
+            "组队进图各客户端Actor携带新回归头像身份");
+        group.Load();
         var loaded = group.LastPackets;
         bool Buff(WirePacket packet, uint id) => packet is { Kind: 0, Opcode: 487 } &&
             Enumerable.Range(0, packet.Body[0]).Any(index => U32(packet.Body, 1 + index * 16) == id);
@@ -42,6 +92,9 @@ internal static partial class PartyDungeonTcpTests
         long fighterExperience = Convert.ToInt64(fixture.Query("SELECT experience FROM characters WHERE id=$p0", fighter.Id)[0][0]);
         That(displayed > 0 && displayed == U32(exp.Body, buffOffset + 4) && heroExperience - fighterExperience == displayed,
             "同级同怪的真实经验差额等于Buff显示与基础扣除分项，无重复展示或只发图标");
+        long killBasis = fighterExperience - (long)SelfTestCatalogs.Growth(resources.Archive, resources.Learning).GetLevelStartExperience(50);
+        That(killBasis > 0 && displayed == killBasis * 20 / 100 + killBasis * 10 / 100,
+            "四叶草击杀10%与女格斗队友20%分别取整后真实到账，不只安装图标或误替换活动");
         // 不把图标当成经验到账：核对持久化角色经验与显示分项使用同一奖励链。
         That(Convert.ToInt64(fixture.Query("SELECT experience FROM characters WHERE id=$p0", hero.Id)[0][0]) >
             (long)SelfTestCatalogs.Growth(resources.Archive, resources.Learning).GetLevelStartExperience(50), "职业活动击杀经验真实落库");
@@ -50,6 +103,8 @@ internal static partial class PartyDungeonTcpTests
         // 1347的ACK早于自动刷新；下一请求的ACK才能证明前一次刷新已完成。
         var expiredTail = group.All();
         for (int at = 0; at < expired.Length; at++) expired[at] = [.. expired[at], .. expiredTail[at]];
+        That(expired.All(rows => rows.Any(packet => ReturningActor(packet, hero.Id, 0))),
+            "到期对本人及队友刷新原生头像身份且不重建战斗Player");
         That(expired[0].Any(packet => packet is { Kind: 0, Opcode: 488 } &&
             Enumerable.Range(0, packet.Body[0]).Any(index => U32(packet.Body, 1 + index * 4) == 1273)) &&
             !expired[0].Any(packet => Buff(packet, 1273)), "到期刷新删除回归Buff且不重新安装");

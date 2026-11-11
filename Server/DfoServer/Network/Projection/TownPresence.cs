@@ -64,7 +64,7 @@ internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = 
     {
         var c = source.Character;
         return new(TownPackets.Actor(c, source.PvpGrade, source.Channel, (clock ?? TimeProvider.System).GetUtcNow().ToUnixTimeSeconds(), source.AdventureName,
-            premiumPcRoom: debugSettings?.PremiumPcRoom == true), TownPackets.ActorState(c.Id),
+            premiumPcRoom: debugSettings?.PremiumPcRoom == true, returningAdventurerType: debugSettings?.AdventurerBenefits?.ReturningUntil(source.Owner.Account, (clock ?? TimeProvider.System).GetUtcNow().ToUnixTimeSeconds()) > 0 ? (ushort)1 : (ushort)0), TownPackets.ActorState(c.Id),
             TownPackets.Position(c, false, source.ScaledSpeed), TownPackets.Position(c, true));
     }
     RemoteTownActor Projection(Member source, Member target, Bodies bodies) =>

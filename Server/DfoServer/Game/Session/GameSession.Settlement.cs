@@ -231,7 +231,7 @@ internal sealed partial class GameSession
                 GrowthContractExperience = bonuses.Amount(ExperienceBonusSource.GrowthContract),
                 PotionExperience = bonuses.Amount(ExperienceBonusSource.Potion), AdventureExperience = adventureBonus };
         }
-        if (dungeon.Settlement is null && !((dungeon.Entry.IsTutorial || dungeon.Entry.DisableMonsterAndClearExperience) && reward.TotalExperience == 0) &&
+        if (dungeon.Settlement is null && !(dungeon.Entry.AllowsZeroClearExperience && reward.TotalExperience == 0) &&
             !CharacterGrowthPlan.AddExperience(Selected!, reward.TotalExperience, growth).Success)
             return new FormalDungeonSettlementResult(DungeonRunOutcome.Rejected);
         var ancientGate = dungeon.Settlement?.Pending.AncientGate ?? (dungeon.Entry.DungeonId is >= 7101 and <= 7107 && !dungeon.Entry.IsPractice

@@ -20,7 +20,7 @@ using static DfoServer.Testing.TestCheck;
 namespace DfoServer;
 
 // #1214 哈林灾难领域：入场疲劳 8、每房 3、账号每周 10 次、通关礼盒 490012200。
-internal static class DisasterDungeonTests
+internal static partial class DisasterDungeonTests
 {
     public static void RunCore()
     {
@@ -283,11 +283,13 @@ internal static class DisasterDungeonTests
                 bound => bound == 5 ? target : 0, items.EpicPieces);
             That(entered is not null && entered.Entry.DungeonId == 5341 + route && entered.Entry.Difficulty == 2,
                 "5340正式入口选择实图" + (5341 + route) + "，实际 " + gate.Session.LastFormalDungeonRejection);
-            That(gate.Session.CompleteFormalDungeonLoading() is not null && gate.Read().Fatigue!.Remaining == 5,
+            var loaded = gate.Session.CompleteFormalDungeonLoading();
+            That(loaded is not null && gate.Read().Fatigue!.Remaining == 5,
                 "随机入口首房沿实图规则扣3点疲劳");
             var entryPeriod = DungeonIncountPolicy.AccountCharges(incounts, 5341 + route, DateTimeOffset.UtcNow).First().Period;
             That(Enumerable.Range(5340, 6).All(id => gate.Repository.LoadAccountDungeonIncount(gate.Owner, id, entryPeriod) == 1),
                 "随机入口按实图提交六行连带账号次数，各计一次");
+            VerifyStoneReward(gate, loaded!, route, kills, growth, items);
         }
         for (int remaining = 0; remaining <= 7; remaining++)
         {

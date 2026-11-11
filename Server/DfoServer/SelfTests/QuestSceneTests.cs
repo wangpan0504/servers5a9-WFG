@@ -191,7 +191,7 @@ internal static class QuestSceneTests
         QuestPassiveClearTests.Run(towns,characters,items,quests,skills,growth,dungeons,rooms,kills,
             global::DfoServer.Testing.SelfTestCatalogs.ClearExperience(pvf),parameters,global::DfoServer.Testing.SelfTestCatalogs.DropRules(pvf),global::DfoServer.Testing.SelfTestCatalogs.CardPrices(pvf));
         Issue153CinematicLayerTests.Run(towns,characters,items,quests,skills,growth,dungeons,rooms,
-            global::DfoServer.Testing.SelfTestCatalogs.ClearExperience(pvf),parameters);
+            kills,global::DfoServer.Testing.SelfTestCatalogs.ClearExperience(pvf),parameters);
         Issue153RemainingTests.Run(towns,characters,items,quests,skills,growth,dungeons,rooms,
             global::DfoServer.Testing.SelfTestCatalogs.ClearExperience(pvf),parameters);
         Issue153MermaidClearTests.Run(towns,characters,items,quests,skills,growth,dungeons,rooms,kills,

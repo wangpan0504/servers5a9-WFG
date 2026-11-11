@@ -173,9 +173,17 @@ internal static class ServerRuntime
         var adventurerStore = new AdventurerBenefitStore(options.DataDirectory);
         var adventurerBenefits = new Game.Events.AdventurerBenefitService(new GameWorld.Events.AdventurerBenefitCatalog(pvf),
             adventurerStore.Read(), adventurerStore.Write);
+        var returningCatalog = new GameWorld.Events.ReturningAdventurerCatalog(pvf);
+        foreach (var reward in returningCatalog.Missions.Select(row => row.Reward).Append(returningCatalog.Welcome).Append(returningCatalog.Daily))
+            _ = itemResources.Items.Get(reward.ItemId);
+        var returningAntiEvil = new Game.Characters.CharacterAntiEvil(itemResources.Items, new(pvf),
+            itemResources.RecoveryConsumables, clock, itemResources.Contracts, sets: new(pvf));
+        repository.ConfigureReturningAdventurers(returningCatalog, adventurerBenefits, returningAntiEvil.Compute, clock);
         var debugSettings = new GameDebugSettings(supportStore.Read(), supportStore.Write,
             fatigueStore.Read(), fatigueStore.Write) { PremiumPcRoom = PremiumPcRoomDefault(options.DataDirectory),
             SupportProfiles = GameWorld.Dungeons.SupportCompanionCatalog.Load(pvf), AdventurerBenefits = adventurerBenefits };
+        debugSettings.ReturningAdventurers = new Game.Events.ReturningAdventurerService(repository, returningCatalog, adventurerBenefits,
+            itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, debugSettings, clock);
         var monsterBattleLevels = new DungeonBattleLevelConfiguration(options.DataDirectory);
         monsterBattleLevels.Reload();
         log.Write("monster_battle_level_config", new { Rules = monsterBattleLevels.Settings.Current.Rules.Count });
@@ -235,7 +243,7 @@ internal static class ServerRuntime
             {
                 Source = "experience_bonus", Reason = "equipped_item_template_missing", CharacterId = request.Character.Id,
                 request.Event, request.DungeonId, ItemId = item.Core.ItemId, item.Uid, Slot = item.Position.Index
-            }), clock: clock);
+            }), clock: clock, adventurerBenefits: adventurerBenefits);
         tutorials ??= new TutorialCatalog(pvf);
         var questProjection = new QuestProjection(quests,questParameters,itemResources.Items,itemResources.GoldLimits,itemResources.EpicPieces,growth);
         var stats = new Game.Characters.CharacterStatComputer(characters);
@@ -1106,6 +1114,7 @@ internal static class ServerRuntime
         if (epicPieceShop is not null) new EpicPieceShopHandler(epicPieceShop, inventoryProjection, log).Register(commands);
         if (pcRoomTimePoint is not null) new PcRoomTimePointHandler(log).Register(commands);
         if (dailyAttendance is not null) new DailyAttendanceHandler(log).Register(commands);
+        new ReturningAdventurerHandler(inventoryProjection, log).Register(commands);
         if (weeklyAttendance is not null) new WeeklyAttendanceHandler().Register(commands);
         if (monsterMockBattle is not null) new MonsterMockBattleHandler(log).Register(commands);
         commands.Seal();

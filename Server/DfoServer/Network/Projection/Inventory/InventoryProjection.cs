@@ -19,6 +19,19 @@ internal sealed partial class InventoryProjection(CharacterStatComputer stats, T
     public Task RefreshSkillTreeAsync(GameConnectionContext context, Character character, Func<bool> canSend) =>
         RefreshCharacterAsync(context, character, "skill_tree", canSend);
 
+    public Task RefreshSkillVariantAsync(GameConnectionContext context, SkillLearningReceipt receipt, byte previous, bool includeSelf = true)
+    {
+        context.Session.PublishSkillVariant(receipt, previous, includeSelf);
+        context.Owner.Execute(() =>
+        {
+            if (context.Session.CanPublishLearning(receipt) && context.Session.Phase == SessionPhase.Town &&
+                CharacterSkillVariant.Read(context.Session.ReadSkillCharacter(receipt.Character)) != previous)
+                town.Refresh(context);
+            return true;
+        });
+        return Task.CompletedTask;
+    }
+
     internal async Task RefreshCharacterAsync(GameConnectionContext context, Character character, string action, Func<bool> canSend)
     {
         character=context.Session.ReadSkillCharacter(character);
@@ -28,7 +41,7 @@ internal sealed partial class InventoryProjection(CharacterStatComputer stats, T
         await context.Notify(NotiPacketType.USERINFO,
             TownPackets.Actor(character, pvpGrade, context.Channel, adventureName: adventureName,
                 sceneState: inDungeon ? ActorSceneState.Dungeon : ActorSceneState.Town,
-                premiumPcRoom: context.Session.PremiumPcRoom), action + "_actor", canSend);
+                premiumPcRoom: context.Session.PremiumPcRoom, returningAdventurerType: context.Session.ReturningAdventurerType), action + "_actor", canSend);
         await context.Notify(NotiPacketType.USERINFO,
             TownPackets.Player(character, stats.Compute(character), context.Session.ReadAdventureLevel(), context.Channel),
             action + "_player", canSend);
@@ -250,7 +263,7 @@ internal sealed partial class InventoryProjection(CharacterStatComputer stats, T
                     TownPackets.Actor(skillCharacter, pvpGrade.Value, context.Channel, adventureName: adventureName,
                         sceneState: receipt.Phase is SessionPhase.Dungeon or SessionPhase.Settlement
                             ? ActorSceneState.Dungeon : ActorSceneState.Town,
-                        premiumPcRoom: context.Session.PremiumPcRoom), "equipment_actor", CanSend);
+                        premiumPcRoom: context.Session.PremiumPcRoom, returningAdventurerType: context.Session.ReturningAdventurerType), "equipment_actor", CanSend);
             }
             // 登记配置下的纯移动由上面的完整差量和Actor完成；其它装备/开栏变更仍同步完整本人属性。
             if (equipmentChanged && !preserveSkillSwitch || cloneTitleChanged || plan.EquipmentSlotFlagsAfter is not null)

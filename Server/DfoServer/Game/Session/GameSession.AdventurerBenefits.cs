@@ -1,14 +1,19 @@
 using System.Collections.Immutable;
 using DfoServer.Game.Events;
 using DfoServer.Game.Characters;
+using DfoServer.GameWorld.Events;
 
 namespace DfoServer.Game.Session;
 
 internal sealed record AdventurerBenefitBuffReceipt(ImmutableArray<uint> Removed, ImmutableArray<uint> Added, Func<bool> IsCurrent);
 internal sealed record ReturningAdventurerReceipt(long Until, Func<bool> IsCurrent);
+internal sealed record LuckyProfessionReceipt(ImmutableArray<LuckyProfession> Professions, Func<bool> IsCurrent);
 
 internal sealed partial class GameSession
 {
+    public ushort ReturningAdventurerType => debugSettings?.AdventurerBenefits?.ReturningUntil(owner.Account,
+        (timeProvider ?? TimeProvider.System).GetUtcNow().ToUnixTimeSeconds()) > 0 ? (ushort)1 : (ushort)0;
+
     ImmutableArray<uint> projectedAdventurerBuffs = [];
     long adventurerBuffRevision;
     long adventurerBuffEpoch;
@@ -17,6 +22,26 @@ internal sealed partial class GameSession
     long returningIdentityEpoch = -1;
     long returningIdentityUntil;
     long returningIdentityRevision;
+    long luckyProfessionEpoch = -1;
+    long luckyProfessionRevision;
+    ImmutableArray<LuckyProfession> projectedLuckyProfessions = [];
+    AdventurerBenefitConfiguration? projectedLuckyConfiguration;
+
+    public LuckyProfessionReceipt? PlanLuckyProfessions() => owner.Execute<LuckyProfessionReceipt?>(() =>
+    {
+        if (Selected is not { } character || debugSettings?.AdventurerBenefits is not { } service) return null;
+        var configuration = service.Configuration;
+        var professions = service.LuckyProfessions((timeProvider ?? TimeProvider.System).GetUtcNow().ToUnixTimeSeconds(), configuration);
+        if (luckyProfessionEpoch == SelectionEpoch && ReferenceEquals(projectedLuckyConfiguration, configuration) &&
+            projectedLuckyProfessions.SequenceEqual(professions)) return null;
+        luckyProfessionEpoch = SelectionEpoch; projectedLuckyConfiguration = configuration;
+        projectedLuckyProfessions = professions;
+        long epoch = SelectionEpoch, revision = ++luckyProfessionRevision;
+        bool Current() => owner.Execute(() => owner.IsCurrent && Selected?.Id == character.Id && SelectionEpoch == epoch &&
+            luckyProfessionRevision == revision && ReferenceEquals(service.Configuration, configuration) &&
+            service.LuckyProfessions((timeProvider ?? TimeProvider.System).GetUtcNow().ToUnixTimeSeconds(), configuration).SequenceEqual(professions));
+        return new(professions, Current);
+    });
 
     public ReturningAdventurerReceipt? PlanReturningAdventurerIdentity(bool force = false) => owner.Execute<ReturningAdventurerReceipt?>(() =>
     {
@@ -74,17 +99,26 @@ internal sealed partial class GameSession
 
     ExperienceBonuses ApplyAdventurerExperience(Character character, ExperienceEvent kind, uint basis, long now, ExperienceBonuses reward)
     {
-        if (kind != ExperienceEvent.Kill) return reward;
-        int percent = ReadAdventurerBenefits(character, now).KillExperiencePercent;
-        uint amount = checked((uint)((ulong)basis * (uint)percent / 100));
-        if (amount == 0) return reward;
-        var parts = reward.Parts;
-        int index = -1;
-        for (int at = 0; at < parts.Length; at++) if (parts[at].Source == GameWorld.Characters.ExperienceBonusSource.Buff) index = at;
-        var part = new GameWorld.Characters.ExperienceBonusPart(GameWorld.Characters.ExperienceBonusSource.Buff,
-            checked(amount + (index < 0 ? 0 : parts[index].Amount)));
-        var result = reward with { Parts = (index < 0 ? parts.Add(part) : parts.SetItem(index, part)).OrderBy(row => row.Source).ToImmutableArray() };
-        _ = result.Total;
+        var result = reward;
+        if (kind == ExperienceEvent.Kill)
+            result = Add(result, ReadAdventurerBenefits(character, now).KillExperiencePercent, GameWorld.Characters.ExperienceBonusSource.Buff);
+        if (kind == ExperienceEvent.Clear)
+            result = Add(result, ReadAdventurerBenefits(character, now).LuckyPartyClearExperiencePercent,
+                GameWorld.Characters.ExperienceBonusSource.LuckyParty);
         return result;
+
+        ExperienceBonuses Add(ExperienceBonuses value, int percent, GameWorld.Characters.ExperienceBonusSource source)
+        {
+            uint amount = checked((uint)((ulong)basis * (uint)percent / 100));
+            if (amount == 0) return value;
+            var parts = value.Parts;
+            int index = -1;
+            for (int at = 0; at < parts.Length; at++) if (parts[at].Source == source) index = at;
+            var part = new GameWorld.Characters.ExperienceBonusPart(source,
+                checked(amount + (index < 0 ? 0 : parts[index].Amount)));
+            var updated = value with { Parts = (index < 0 ? parts.Add(part) : parts.SetItem(index, part)).OrderBy(row => row.Source).ToImmutableArray() };
+            _ = updated.Total;
+            return updated;
+        }
     }
 }
