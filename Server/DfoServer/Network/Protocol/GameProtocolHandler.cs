@@ -336,6 +336,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
             PartyPackets.Failure(133, 10), "raid_peer_refused", () => actor.IsCurrent);
         session.HasMultiplePartyMembers = () => parties?.HasMultipleMembers(session) == true;
         session.CurrentParty = () => parties?.Current(session);
+        session.SkillVariantChanged = (source, guard) => SkillProjection.VariantChanged(context, source, guard);
         session.EvildomWarCleanupFailed = error => log.Write("evildom_war_cleanup_failed", new
             { Connection = connection.Id, Error = error.GetType().Name, error.Message });
         prepareDungeon?.Invoke(context);

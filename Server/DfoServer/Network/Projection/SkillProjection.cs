@@ -6,6 +6,18 @@ namespace DfoServer.Network.Projection;
 
 internal static class SkillProjection
 {
+    public static void VariantChanged(GameConnectionContext context,
+        DfoServer.Game.Session.PublicCharacterSnapshot source, Func<bool> canSend)
+    {
+        // 构包在发送锁外，泵内只读失效标记；后续加点或换场景使旧快照失效，不能回灌旧分支。
+        var actor = TownPackets.Actor(source.SkillCharacter, source.PvpGrade, source.Channel,
+            adventureName: source.AdventureName, sceneState: source.Phase is DfoServer.Game.Session.SessionPhase.Dungeon or DfoServer.Game.Session.SessionPhase.Settlement
+                ? ActorSceneState.Dungeon : ActorSceneState.Town, premiumPcRoom: source.PremiumPcRoom,
+            returningAdventurerType: source.ReturningAdventurerType);
+        context.Sender.Post(0, (ushort)NotiPacketType.USERINFO, actor,
+            "skill_variant_actor", () => source.IsUnchanged() && canSend());
+    }
+
     // 客户端处理完整NOTI19时会延迟重建技能界面并重置连招六列；重建晚于同批包，
     // 同批NOTI447会被重建出的默认排列覆盖，必须等重建结束后再回放一次服务端排列。
     static readonly TimeSpan ComboRebuildDelay = TimeSpan.FromMilliseconds(500);

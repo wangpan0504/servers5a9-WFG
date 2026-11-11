@@ -19,6 +19,19 @@ internal sealed partial class InventoryProjection(CharacterStatComputer stats, T
     public Task RefreshSkillTreeAsync(GameConnectionContext context, Character character, Func<bool> canSend) =>
         RefreshCharacterAsync(context, character, "skill_tree", canSend);
 
+    public Task RefreshSkillVariantAsync(GameConnectionContext context, SkillLearningReceipt receipt, byte previous, bool includeSelf = true)
+    {
+        context.Session.PublishSkillVariant(receipt, previous, includeSelf);
+        context.Owner.Execute(() =>
+        {
+            if (context.Session.CanPublishLearning(receipt) && context.Session.Phase == SessionPhase.Town &&
+                CharacterSkillVariant.Read(context.Session.ReadSkillCharacter(receipt.Character)) != previous)
+                town.Refresh(context);
+            return true;
+        });
+        return Task.CompletedTask;
+    }
+
     internal async Task RefreshCharacterAsync(GameConnectionContext context, Character character, string action, Func<bool> canSend)
     {
         character=context.Session.ReadSkillCharacter(character);

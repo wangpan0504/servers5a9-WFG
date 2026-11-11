@@ -187,7 +187,9 @@ internal static partial class TownPackets
             writer.Write(character.Learning.TreeWireValue);
             writer.Write(new byte[2]);
             writer.Write(0u);
-            writer.Write(new byte[2]); // 0267F273..0267FED3.
+            // 02681958及023D6271安装Data+4A3；普通队伍、攻坚队和跨频道详情共用此技能分支标志。
+            writer.Write(CharacterSkillVariant.Read(character));
+            writer.Write((byte)0);
             return stream.ToArray();
         }
     }
