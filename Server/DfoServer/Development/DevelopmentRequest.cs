@@ -93,7 +93,8 @@ internal enum DevelopmentAction
     GuildCreate,
     NpcFavorMax,
     LuckyProfession,
-    ReturningAdventurer
+    ReturningAdventurer,
+    Adventure
 }
 
 internal sealed record DevelopmentRequest(DevelopmentAction Action, string Account, string Name, int Primary, int Secondary)
@@ -120,6 +121,7 @@ internal sealed record DevelopmentRequest(DevelopmentAction Action, string Accou
         ["npc-favor-max"] = (DevelopmentAction.NpcFavorMax, true, 0, 0),
         ["lucky-profession"] = (DevelopmentAction.LuckyProfession, true, 0, 1),
         ["lucky-professions"] = (DevelopmentAction.LuckyProfession, false, 0, 1),
+        ["adventure"] = (DevelopmentAction.Adventure, false, 1, 3),
         ["returning-adventurer"] = (DevelopmentAction.ReturningAdventurer, true, 0, 0),
         ["wallet"] = (DevelopmentAction.Wallet, true, 0, 0),
         ["currency"] = (DevelopmentAction.Currency, true, 3, 3),
@@ -409,6 +411,15 @@ internal sealed record DevelopmentRequest(DevelopmentAction Action, string Accou
         }
         if (Account.Length is < 1 or > 64 || Account.Any(c => !(c is >= 'a' and <= 'z' or >= 'A' and <= 'Z' or >= '0' and <= '9' or '_' or '-')))
             throw new InvalidDataException("账号无效");
+        if (Action == DevelopmentAction.Adventure)
+        {
+            if (Name.Length != 0 || Args is not (["status"] or ["level", _, _] or ["name", _, _]))
+                throw new InvalidDataException("用法：adventure status | adventure level <等级> <版本> | adventure name <名称> <版本>");
+            if (Args.Length == 3 && (!long.TryParse(Args[2], NumberStyles.None, CultureInfo.InvariantCulture, out long revision) || revision < 0 ||
+                (Args[0] == "level" ? !int.TryParse(Args[1], NumberStyles.None, CultureInfo.InvariantCulture, out int level) || level is < 1 or > 255 :
+                !DfoServer.Game.Adventure.AdventureName.IsValid(Args[1])))) throw new InvalidDataException("冒险团等级、名称或版本无效");
+            return;
+        }
         if (Action == DevelopmentAction.LuckyProfession)
         {
             if (Name.Length != 0 && !CharacterName.IsValid(Name) || Args is not ([] or ["on"] or ["off"] or ["status"]))
@@ -516,7 +527,7 @@ internal sealed record DevelopmentRequest(DevelopmentAction Action, string Accou
             ToProgressEdit().Validate();
     }
 
-    public bool Writes => Action is DevelopmentAction.LuckyProfession or DevelopmentAction.ReturningAdventurer ? true : Action == DevelopmentAction.Event ? Event?.Operation != "status" :
+    public bool Writes => Action == DevelopmentAction.Adventure ? Args.Length == 3 : Action is DevelopmentAction.LuckyProfession or DevelopmentAction.ReturningAdventurer ? true : Action == DevelopmentAction.Event ? Event?.Operation != "status" :
         Action == DevelopmentAction.Profession ? true :
         Action is DevelopmentAction.SupportCompanion or DevelopmentAction.SupportCompanions or DevelopmentAction.SupportCompanionProfile ? Primary >= 0 :
         Action is DevelopmentAction.CashShopExpiration or DevelopmentAction.CashShopUsablePeriod or DevelopmentAction.InfiniteFatigue or DevelopmentAction.PcRoom or DevelopmentAction.SummonWangFugui or DevelopmentAction.SummonGuangbing or DevelopmentAction.SummonFemaleCrusader or DevelopmentAction.SummonEnchantress ? Primary >= 0 :

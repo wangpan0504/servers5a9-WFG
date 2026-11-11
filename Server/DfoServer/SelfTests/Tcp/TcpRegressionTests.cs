@@ -227,6 +227,7 @@ internal static class TcpRegressionTests
         }),
         ("clear-avatar", ClearAvatarTcpTests.RunAsync),
         ("adventure", AdventureCoreTcpTests.RunAsync),
+        ("adventure-gm", AdventureGmTcpTests.RunAsync),
         ("adventure-names", AdventureNameTcpTests.RunAsync),
         ("adventure-representatives", AdventureRepresentativeTcpTests.RunAsync),
         ("adventure-expeditions", AdventureExpeditionTcpTests.RunAsync),

@@ -331,6 +331,7 @@ internal static class SelfTestRunner
         ClearAvatarTests.RunCore();
         TitleTests.RunCore();
         AdventureCoreTests.RunCore();
+        AdventureGmTests.RunCore();
         await AdventurePublicationTests.RunCoreAsync();
         AdventureNameTests.RunCore();
         ActorProficiencyProjectionTests.RunCore();
