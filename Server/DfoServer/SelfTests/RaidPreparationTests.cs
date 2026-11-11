@@ -498,6 +498,8 @@ internal static class RaidPreparationTests
     sealed class ProbeSocialStore(ISocialStore inner) : ISocialStore
     {
         public Action? BeforeRead { get; set; }
+        public AccountFriendGroup[] AccountGroups(SocialActor actor) => inner.AccountGroups(actor);
+        public void SaveAccountGroups(SocialActor actor, AccountFriendGroup[] groups) => inner.SaveAccountGroups(actor, groups);
         public bool IsBlocked(ushort recipient, ushort sender) { BeforeRead?.Invoke(); return inner.IsBlocked(recipient, sender); }
         public SocialPerson? FindSocialPerson(string name, bool adventure = false) => inner.FindSocialPerson(name, adventure);
         public SocialLink[] CharacterLinks(ushort owner, bool blocked) => inner.CharacterLinks(owner, blocked);
