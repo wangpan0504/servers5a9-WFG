@@ -138,6 +138,10 @@ internal sealed partial class GameSession
         if (itemCycles is not null && result.Accepted && result.Plan is { } original)
             foreach (var use in original.UsedItems)
                 result = itemCycles.ApplyUsage(character, result, 0, use.ItemId, use.Count);
+        if (character.CloneTitleItemId != 0 && result.Plan is { } titlePlan &&
+            titlePlan.ChangedSlots.Any(slot => titlePlan.BeforeIndex.Find(slot)?.Core.ItemId == character.CloneTitleItemId))
+            result = InventoryCloneAppearanceService.WithOrphanCloneTitleCleanup(character, result,
+                (timeProvider ?? TimeProvider.System).GetUtcNow().ToUnixTimeSeconds());
         try
         {
             Selected = InventoryService.Commit(repository, owner, character, result);

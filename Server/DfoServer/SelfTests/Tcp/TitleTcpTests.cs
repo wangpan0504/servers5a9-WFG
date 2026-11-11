@@ -18,6 +18,7 @@ internal static partial class TitleTcpTests
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
         int checks = Count;
+        TitleCloneTests.RunCore();
         var real = new TitleCatalog(resources.Archive, resources.Quests);
         FiendwarFacts(resources, Path.Combine(root, "fiendwar-title-facts"));
         var registered = resources.Quests.All.Where(quest => quest.Grade == "[title]").ToArray();
@@ -348,7 +349,8 @@ internal static partial class TitleTcpTests
         }
         using (var peer = Open(fixture))
         {
-            peer.Select(slot: cloneRuleSlot);
+            byte[] cloneRuleMain = peer.Select(slot: cloneRuleSlot)
+                .Single(packet => packet is { Kind: 0, Opcode: 13 } && packet.Body[0] == 0).Body;
             // 13号槽为空时：拒绝含39的2747531，允许普通称号26597；仅40来源只在真实PVF存在时覆盖。
             peer.Send(568, Build(writer => writer.Write(2747531u)));
             peer.Expect(1, 568, [0, 2, 0]); peer.Barrier();
@@ -371,12 +373,36 @@ internal static partial class TitleTcpTests
 
             // CMD19穿戴带40的称号到13号槽：自动将激活的clone_title_item_id清零并刷新外观。
             byte hiddenFromSlot = (byte)(only40TitleId != 0 ? 11 : 10);
+            var cloneSource = Read(InventoryListType.Main, 9, cloneRuleSlot)!;
+            var hiddenSource = Read(InventoryListType.Main, hiddenFromSlot, cloneRuleSlot)!;
+            string walletsBefore = Wallets();
             peer.Send(19, MoveEquipment(0, hiddenFromSlot, hiddenTargetId, 3, 13, 0));
             peer.Expect(1, 19, MoveEquipmentAck(0, hiddenFromSlot, 3, 13));
-            peer.Expect(0, 1681);
+            byte[] reloadedMain = peer.Expect(0, 13).Body;
+            That(cloneRuleMain[0] == 0 && cloneRuleMain.Length == 5 + U16(cloneRuleMain, 3) * 123 &&
+                reloadedMain[0] == 0 && reloadedMain.Length == 5 + U16(reloadedMain, 3) * 123,
+                "普通称号穿戴严格接收完整Main13头与123B条目，不回退为1681新物品标记");
+            byte[] expectedMain = Build(writer =>
+            {
+                writer.Write((byte)0); writer.Write(U16(cloneRuleMain, 1));
+                writer.Write(checked((ushort)(U16(cloneRuleMain, 3) - 1)));
+                for (int index = 0; index < U16(cloneRuleMain, 3); index++)
+                {
+                    int offset = 5 + index * 123;
+                    if (U16(cloneRuleMain, offset) != hiddenFromSlot)
+                        writer.Write(cloneRuleMain.AsSpan(offset, 123));
+                }
+            });
+            That(reloadedMain.SequenceEqual(expectedMain),
+                "Main完整重载仅移除已穿戴源槽，槽9动画来源、其他实体和全部虚拟钱包逐字节保留");
             ReadAppearance(peer, hiddenTargetId, cloneTitle: 0); peer.Barrier();
-            That(fixture.Query("SELECT clone_title_item_id FROM characters WHERE id=$p0", cloneRuleCharacterId) is [[0L]],
-                "TCP穿戴带40称号到13号槽时自动清零数据库与外观中的clone_title_item_id");
+            That(fixture.Query("SELECT clone_title_item_id FROM characters WHERE id=$p0", cloneRuleCharacterId) is [[0L]] &&
+                Read(InventoryListType.Main, hiddenFromSlot, cloneRuleSlot) is null &&
+                Read(InventoryListType.Main, 9, cloneRuleSlot) == cloneSource &&
+                Read(InventoryListType.Equipment, 13, cloneRuleSlot) ==
+                    hiddenSource with { Position = new(InventoryListType.Equipment, 13), Core = hiddenSource.Core with { SealFlag = 0 } } &&
+                Wallets() == walletsBefore,
+                "TCP穿戴带40称号清零DB与外观动画，保留双方UID及除穿戴消封外完整核心，角色及账号钱包不变");
 
             // 13号槽穿戴带40称号期间：CMD568拒绝选择26597，但允许0清空。
             peer.Send(568, Build(writer => writer.Write(26597u)));
@@ -425,6 +451,12 @@ internal static partial class TitleTcpTests
             Items = fixture.Query("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid"),
             InventorySlots = fixture.Query("SELECT * FROM character_inventory_slots ORDER BY item_uid"),
             BookSlots = fixture.Query("SELECT * FROM character_title_book_slots ORDER BY item_uid") });
+        string Wallets()
+        {
+            using var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { });
+            var inventory = repo.LoadCharacter(owner, cloneRuleSlot).Inventory;
+            return JsonSerializer.Serialize(new { inventory.Gold, inventory.ReviveCoins, inventory.WinPoints, inventory.AccountWallet });
+        }
         static byte[] Trigger(int id, ushort first, ushort second, ushort third) => Build(writer =>
             { writer.Write(id); writer.Write(first); writer.Write(second); writer.Write(third); });
         static byte[] Book(int list, int slot, int item, int category, int index) => Build(writer =>
