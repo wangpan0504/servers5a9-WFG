@@ -10,6 +10,7 @@ internal sealed class InventoryMagicBoxService(ItemCatalog catalog, MagicBoxCata
     DfoServer.Game.Events.ServerEventService? events = null)
 {
     public TimeProvider Clock { get; } = clock ?? TimeProvider.System;
+    public BoosterUsePlacesDefinition UsePlaces(int itemId) => boxes.UsePlaces(itemId);
 
     public InventoryResult Open(Character character, MagicBoxOpenRequest request, out MagicBoxReceipt? receipt, DateTimeOffset? utcNow = null)
     {
