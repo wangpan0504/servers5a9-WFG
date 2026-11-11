@@ -20,6 +20,7 @@ internal sealed record SupportCompanionConfiguration(int SelectionMask, string W
 // 当前服务实例的调试设置；支援兵名单与档次、账号无限疲劳分别持久化，其余设置重启恢复各自默认值。
 internal sealed class GameDebugSettings
 {
+    public DfoServer.Game.Events.AdventurerBenefitService? AdventurerBenefits { get; init; }
     readonly object supportGate = new();
     readonly Action<SupportCompanionConfiguration>? persistSupport;
     readonly object fatigueGate = new();
