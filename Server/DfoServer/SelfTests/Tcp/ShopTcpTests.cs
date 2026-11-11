@@ -1,5 +1,6 @@
 using System.Text.Json;
 using DfoServer.Game.Accounts;
+using DfoServer.Game.Currency;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Persistence;
@@ -28,6 +29,8 @@ internal static partial class ShopTcpTests
         var medalShop = itemResources.Shops.Shops.First(pair => pair.Value.Items.Contains(medalId));
         var medalPrice = itemResources.Items.Get(medalId).ShopPrice;
         ushort medalRoleId;
+        ushort cappedRoleSlot;
+        int carryLimit;
         InventorySlot[] medalMaterialSlots;
         using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
         {
@@ -68,7 +71,16 @@ internal static partial class ShopTcpTests
                 new InventoryService(itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces).Grant(medalBuyer,
                     medalPrice.Materials.Select(cost => new InventoryReward(cost.ItemId, cost.Count)).ToArray()));
             medalMaterialSlots = fundedMedalBuyer.Inventory.Items.Select(item => item.Position).ToArray();
+            carryLimit = new CurrencyService(itemResources.GoldLimits).CarryLimit(current);
+            cappedRoleSlot = repo.Create(owner, new("ShopGoldCap", towns.Room, towns.InitialReturn)
+            {
+                Level = 60, AcceptedStoryLevel = 1, Skills = characters.Get(0).Skills,
+                Inventory = new([
+                    new(0, new(InventoryListType.Main, 121), InventoryRewardGrantService.Create(itemResources.Items.Get(3175), 2))],
+                    Gold: checked((uint)carryLimit))
+            }).Slot;
         }
+        await VerifyGoldFeedbackGuardAsync(resources, repo, owners, fixture.Options.DevelopmentAccount, cappedRoleSlot, root);
         int gold = 1_000_000;
         long uid;
         long equipmentUid;
@@ -371,6 +383,40 @@ internal static partial class ShopTcpTests
             That(list[0] == 38 && U16(list, 1) == 1 && U16(list, 3) == 0 && U32(list, 5) == medalId && U32(list, 9) == 1,
                 "重连完整恢复已购买的勋章专用页和单件数量");
             peer.Barrier();
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(cappedRoleSlot);
+            string before = Snapshot();
+            foreach (short slot in new short[] { 121, 358 })
+            {
+                Sell(peer, 0, slot, 1);
+                peer.Expect(1, 22, [0, 22, 0]);
+                peer.Expect(0, 502, Build(w =>
+                {
+                    w.Write((byte)0);
+                    var text = System.Text.Encoding.GetEncoding(936).GetBytes("出售后将超过金币携带上限，请先清理所持金币。");
+                    w.Write(text.Length); w.Write(text);
+                }));
+                peer.Barrier();
+                That(Snapshot() == before, "实体与钱包出售金币超限均先失败ACK再仅一次信息窗，完整资产/revision/审计不变");
+            }
+            Sell(peer, 0, 358, 0);
+            peer.Expect(1, 22, [0, 1, 0]);
+            peer.Barrier();
+            That(Snapshot() == before, "满金币时的非法钱包数量不是容量拒绝，不额外误报金币提示");
+
+            Buy(peer, 3175, 2, 2, 1);
+            var bought = peer.Expect(1, 21).Body;
+            That(U32(bought, 1) == carryLimit - 20, "超限拒绝后连接继续正常购买，释放20金币容量");
+            peer.Expect(0, 14);
+            Sell(peer, 0, 358, 1);
+            peer.Expect(1, 22, Build(w => { w.Write((byte)1); w.Write(carryLimit); w.Write((byte)0); w.Write((short)358); w.Write(1); }));
+            var delta = peer.Expect(0, 14).Body;
+            Entry(delta, 0, 0, carryLimit);
+            peer.Barrier();
+            That(fixture.Query("SELECT gold FROM characters WHERE id=$p0", peer.Id) is [[long savedGold]] && savedGold == carryLimit,
+                "腾出容量后钱包出售刚好达到上限成功，不多发拒绝信息窗");
         }
         await fixture.StopAsync();
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0, "shop TCP database integrity");

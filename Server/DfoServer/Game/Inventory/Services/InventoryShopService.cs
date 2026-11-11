@@ -212,7 +212,7 @@ internal sealed class InventoryShopService(ItemCatalog catalog, NpcShopCatalog s
             ?? template.ShopPrice.GetSellGold(source.Core.Durability, template.Durability);
         long gold = (long)before.Gold + (long)price * count;
         if (gold > int.MaxValue || gold > new CurrencyService(goldLimits).CarryLimit(character))
-            return InventoryResult.Reject(22);
+            return InventoryResult.Reject(22) with { RejectReason = "gold_carry_limit" };
         long? deadline = source.ExpireTime > 0 ? source.ExpireTime : null;
         var planned = before;
         if (template.ShopPrice.SaleLimit is { } saleLimit)
@@ -245,7 +245,7 @@ internal sealed class InventoryShopService(ItemCatalog catalog, NpcShopCatalog s
         int price = template.ShopPrice.GetSellGold(0, template.Durability);
         long gold = (long)before.Gold + (long)price * request.Count;
         if (gold > int.MaxValue || gold > new CurrencyService(goldLimits).CarryLimit(character))
-            return InventoryResult.Reject(22);
+            return InventoryResult.Reject(22) with { RejectReason = "gold_carry_limit" };
         var spent = CurrencyService.Spend(before, kind, request.Count);
         if (!spent.Accepted)
             return spent;
