@@ -373,6 +373,6 @@ GM通过`GET /api/events/catalog`读取服务端`ServerEventDefinition.Registere
 
 ## 职业幸运与回归账号
 
-`lucky-profession <角色名>` 将所选角色的基础职业设置为全服幸运职业，覆盖当前CHR实际存在的全部转职及觉醒，发送原生四叶草名单，由客户端应用技能Buff；独立的女格斗组队活动保持原资源条件。`returning-adventurer <角色名>` 将该角色所属账号设为回归冒险家，期限读取原生资源（当前28天）。两命令均支持既有 `account <账号>` 前缀，校验角色归属与owner，并在设置持久成功后返回实际 `account/characterId/name/job/scope/returningUntil/text` 凭据；失败不回通用成功。后续原生命令刷新资格，重新选角在本人Actor前完整初始化幸运名单。
+`lucky-professions [on|off|status]` 全局开启、关闭或查询；无参数等同status，不要求角色。服务端首次默认关闭，关闭不会回退日程；启动器首次默认关闭并独立保存选择，GM连接时恢复。兼容 `lucky-profession <角色名> [on|off|status]`，无参数开启全服所有职业的幸运资格，覆盖当前CHR实际存在的全部职业、转职及觉醒，所选角色仅作身份校验；重复开启不替换或关闭已有职业，发送原生四叶草名单，由客户端应用技能Buff；独立的女格斗组队活动保持原资源条件。`returning-adventurer <角色名>` 将该角色所属账号设为回归冒险家，期限读取原生资源（当前28天）。两命令均支持既有 `account <账号>` 前缀，校验角色归属与owner，并在设置持久成功后返回实际 `account/characterId/name/job/scope/returningUntil/text` 凭据；失败不回通用成功。后续原生命令刷新资格，重新选角在本人Actor前完整初始化幸运名单。
 
-职业设置scope为profession，回归为account；前者期限为0，后者为绝对Unix秒。依赖当前PVF显式装配的AdventurerBenefitService，缺资源或旧服务端必须明确失败。范围及回归任务、奖励合同见[模块说明](../模块/职业幸运与回归福利.md)。
+全职业设置scope为all-professions，回归为account；前者额外返回enabled布尔值且期限为0，后者为绝对Unix秒。依赖当前PVF显式装配的AdventurerBenefitService，缺资源或旧服务端必须明确失败。范围及回归任务、奖励合同见[模块说明](../模块/职业幸运与回归福利.md)。
