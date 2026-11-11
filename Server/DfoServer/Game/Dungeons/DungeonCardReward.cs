@@ -87,6 +87,14 @@ internal sealed class DungeonCardRewardPolicy(DungeonDropRuleCatalog rules, Dung
         }
         long amount = GoldAmount(level, difficulty, confirmedKills, Next);
         var now = utcNow ?? DateTimeOffset.UtcNow;
+        if (DisasterDungeonPolicy.HasCrystalCard(dungeon, difficulty))
+        {
+            var crystalCard = new DungeonCardReward(checked((int)Math.Max(1, amount)),
+                DungeonDropCreation.Create(items.Get(DisasterDungeonPolicy.CrystalBoxId), 1, Next, now),
+                "disaster-crystal-card-v1", "etc/dungeonetc/disasterdungeon.etc;" + dungeon.Path, now.ToUnixTimeSeconds());
+            crystalCard.Validate();
+            return crystalCard;
+        }
         if (dungeon.IsTayberrs)
             return (tayberrsRewards ?? throw new NotSupportedException("泰波尔斯缺少材料奖励策略"))
                 .Prepare(dungeon, checked((int)Math.Max(1, amount)), Next, now, clearRewardUsage, itemRewardUsage);
