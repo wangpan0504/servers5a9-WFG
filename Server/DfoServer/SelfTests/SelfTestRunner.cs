@@ -525,6 +525,7 @@ internal static class SelfTestRunner
         RaidEntryEventsTests.Run();
         RaidCreateFlowTests.RunCore();
         FiendwarKeyLeaseTests.RunCore();
+        DisasterDungeonTests.RunCore();
     }
 
     public static async Task RunAsync(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters, ItemResources itemResources)
@@ -711,6 +712,7 @@ internal static class SelfTestRunner
         DungeonDropPacketsTests.Run();
         await DungeonDeathProtocolTests.RunAsync(towns, pvf);
         DungeonEntryPlanTests.Run(pvf);
+        DisasterDungeonTests.Run(towns, pvf, characters, itemResources, sharedQuests, sharedSkills);
         GriefTowerClearTests.RunResources(pvf,itemResources.Items,itemResources.EpicPieces);
         TournamentSettlementTests.RunResources(towns,pvf,characters,itemResources);
         MainlineQuestBatchTests.Run(pvf, itemResources);

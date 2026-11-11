@@ -125,7 +125,9 @@ internal sealed partial class CharacterRepository
         state.Validate();
         bool ordinary = run.Entry.UsesRoomFatigue;
         string rule = CharacterFatigueState.NormalRoomRuleId;
-        ushort amount = DfoServer.Game.PcRoom.FatigueAccelerationRules.Cost(1, run.FatigueAccelerationPercent);
+        // 基数与 Run 的应耗统计一致；燃烧仍只在账本乘 2。0 视为普通 1 点。
+        ushort basis = run.Entry.RoomFatigueCost == 0 ? (ushort)1 : run.Entry.RoomFatigueCost;
+        ushort amount = DfoServer.Game.PcRoom.FatigueAccelerationRules.Cost(basis, run.FatigueAccelerationPercent);
         if (!ordinary || run.CurrentMonsterPlan.Room.Map != snapshot.CurrentMap ||
             snapshot.Phase != SinglePlayerDungeonPhase.Loading || identity.CharacterId != expected.Id ||
             identity.InstanceId == Guid.Empty || identity.TaskAttempt != expected.DungeonState?.LastAttempt)
