@@ -53,9 +53,90 @@ internal sealed partial class InventoryProjection(CharacterStatComputer stats, T
         });
     }
 
+    internal sealed class CashShopCapacityPublication(InventoryPlan plan)
+    {
+        internal bool AvatarRequired { get; } = plan.After.AvatarExpansion > plan.Before.AvatarExpansion;
+        internal bool CargoRequired { get; } = plan.After.CargoCapacity > plan.Before.CargoCapacity;
+        internal ushort? AvatarExpansion { get; set; }
+        internal ushort? CargoWindowCapacity { get; set; }
+        internal ushort? CargoListCapacity { get; set; }
+        internal bool AvatarComplete { get; set; }
+        internal bool CargoComplete { get; set; }
+        internal bool Matches(InventorySnapshot inventory) =>
+            (!AvatarRequired || AvatarComplete && AvatarExpansion == inventory.AvatarExpansion) &&
+            (!CargoRequired || CargoComplete && CargoWindowCapacity == inventory.CargoCapacity && CargoListCapacity == inventory.CargoCapacity);
+    }
+
+    public async Task<bool> RefreshCashShopCapacitiesAsync(GameConnectionContext context, InventoryPlan plan,
+        InventoryCommitReceipt receipt, CashShopCapacityPublication publication)
+    {
+        bool CanSend() => context.Session.CanPublishInventory(receipt);
+        if (!CanSend()) return false;
+        var current = receipt.Character.Inventory;
+        // ACK64会立即重筛商城。只先安装已提交的新容量，原条目保持不变，混单奖励仍由ACK后的差量发布。
+        var capacity = plan.Before with { AvatarExpansion = current.AvatarExpansion, CargoCapacity = current.CargoCapacity };
+        if (publication.AvatarRequired)
+        {
+            if (publication.AvatarExpansion != current.AvatarExpansion)
+            {
+                publication.AvatarComplete = false;
+                if (!await context.Sender.SendConfirmedAsync(0, (ushort)NotiPacketType.ITEM_LIST,
+                    InventoryPackets.SpecialFull(capacity, InventoryListType.Avatar), "avatar_capacity_committed", CanSend)) return false;
+                publication.AvatarExpansion = current.AvatarExpansion;
+            }
+            if (!publication.AvatarComplete)
+            {
+                if (!await RestoreCashShopCapacityLocksAsync(context, capacity, InventoryListType.Avatar, CanSend)) return false;
+                publication.AvatarComplete = true;
+            }
+        }
+        if (publication.CargoRequired)
+        {
+            if (publication.CargoWindowCapacity != current.CargoCapacity)
+            {
+                publication.CargoComplete = false;
+                if (!await context.Sender.SendConfirmedAsync(0, (ushort)NotiPacketType.CERA_SPECIALITEM,
+                    CargoPackets.PersonalCapacity(current.CargoCapacity), "personal_cargo_capacity_changed", CanSend)) return false;
+                publication.CargoWindowCapacity = current.CargoCapacity;
+            }
+            if (publication.CargoListCapacity != current.CargoCapacity)
+            {
+                publication.CargoComplete = false;
+                if (!await context.Sender.SendConfirmedAsync(0, (ushort)NotiPacketType.ITEM_LIST,
+                    CargoPackets.Full(capacity, InventoryListType.PersonalCargo), "personal_cargo_capacity", CanSend)) return false;
+                publication.CargoListCapacity = current.CargoCapacity;
+            }
+            if (!publication.CargoComplete)
+            {
+                if (!await RestoreCashShopCapacityLocksAsync(context, capacity, InventoryListType.PersonalCargo, CanSend)) return false;
+                publication.CargoComplete = true;
+            }
+        }
+        return CanSend() && publication.Matches(current);
+    }
+
+    static async Task<bool> RestoreCashShopCapacityLocksAsync(GameConnectionContext context, InventorySnapshot inventory,
+        InventoryListType list, Func<bool> canSend)
+    {
+        // 容量全量只带原条目，此处仅正向恢复这些条目的原锁；必须实际写帧后才算完成本次容量链。
+        var locked = new List<InventorySlot>();
+        foreach (var item in inventory.Items.Where(item => item.Position.List == list))
+        {
+            if (item.Core.SortLockFlag != 0 && !await context.Sender.SendConfirmedAsync(1,
+                (ushort)CmdPacketType.REQUEST_ITEM_SORT_LOCK,
+                InventoryLockPackets.Ack(item.Position, InventoryLockOperation.SortLock, new(true, 0)), "restore_sort_lock", canSend))
+                return false;
+            if (item.Core.EquipmentLockId != 0) locked.Add(item.Position);
+        }
+        if (locked.Count != 0 && !await context.Sender.SendConfirmedAsync(0, (ushort)NotiPacketType.ITEM_LOCK_LIST,
+            InventoryLockPackets.Locked(locked), "restore_equipment_locks", canSend)) return false;
+        return canSend();
+    }
+
     public async Task RefreshAsync(GameConnectionContext context, InventoryResult result,
         IReadOnlySet<InventorySlot>? acknowledgedSlots = null, bool refreshEquipment = true,
-        InventoryListType? silentMoveList = null, bool suppressMainNotice = false, InventoryListType? suppressMoveNoticeList = null, bool suppressMailboxNotice = false)
+        InventoryListType? silentMoveList = null, bool suppressMainNotice = false, InventoryListType? suppressMoveNoticeList = null, bool suppressMailboxNotice = false,
+        bool cashShopCapacitiesPublished = false)
     {
         if (!result.Accepted || result.Plan is not { Changed: true } plan)
             return;
@@ -81,7 +162,8 @@ internal sealed partial class InventoryProjection(CharacterStatComputer stats, T
         bool mainExpansionChanged = plan.Before.Expansion != current.Inventory.Expansion;
         if (mainExpansionChanged)
             await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.Full(current.Inventory), "inventory_capacity_committed", CanSend);
-        if (plan.Before.AvatarExpansion != current.Inventory.AvatarExpansion)
+        if (plan.Before.AvatarExpansion != current.Inventory.AvatarExpansion &&
+            !(cashShopCapacitiesPublished && current.Inventory.AvatarExpansion > plan.Before.AvatarExpansion))
             await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.SpecialFull(current.Inventory, InventoryListType.Avatar), "avatar_capacity_committed", CanSend);
         var creatureSlot = DfoServer.Game.Creatures.CreatureRules.EquippedSlot;
         bool inPlaceCreature = creatures is not null && plan.BeforeIndex.Find(creatureSlot) is { Creature: not null } oldCreature &&
@@ -328,15 +410,9 @@ internal sealed partial class InventoryProjection(CharacterStatComputer stats, T
             await DungeonCardMembershipProjection.RefreshAsync(context, includeOverview: false);
         if (!suppressMailboxNotice && !plan.OverflowItems.IsEmpty && CanSend())
             context.Session.NotifyMailbox(receipt.Character.Id, restoreOnTown: true);
-        if (plan.Before.CargoCapacity != current.Inventory.CargoCapacity)
-        {
-            // 66先更新打开的金库窗口；13先写入容量会让原生的“容量增加”判断跳过重绘。
-            if (current.Inventory.CargoCapacity > plan.Before.CargoCapacity)
-                await context.Notify(NotiPacketType.CERA_SPECIALITEM, CargoPackets.PersonalCapacity(current.Inventory.CargoCapacity),
-                    "personal_cargo_capacity_changed", CanSend);
-            await context.Notify(NotiPacketType.ITEM_LIST, CargoPackets.Full(current.Inventory, InventoryListType.PersonalCargo), "personal_cargo_capacity", CanSend);
-            await RestoreLocksAsync(context, current.Inventory, current.Inventory.Items.Where(item => item.Position.List == InventoryListType.PersonalCargo).Select(item => item.Position), canSend: CanSend, currentIndex: receipt.Index);
-        }
+        if (plan.Before.CargoCapacity != current.Inventory.CargoCapacity &&
+            !(cashShopCapacitiesPublished && current.Inventory.CargoCapacity > plan.Before.CargoCapacity))
+            await RefreshPersonalCargoCapacityAsync(context, current.Inventory, plan.Before.CargoCapacity, receipt.Index, CanSend);
         if (plan.Before.AccountCargo.Capacity != current.Inventory.AccountCargo.Capacity)
         {
             await context.Notify(NotiPacketType.ITEM_LIST, CargoPackets.Full(current.Inventory, InventoryListType.AccountCargo), "account_cargo_capacity", CanSend);
@@ -358,6 +434,19 @@ internal sealed partial class InventoryProjection(CharacterStatComputer stats, T
         };
         if (creatures is not null && !inPlaceCreature && receipt.Phase == SessionPhase.Town && changedSlots.Contains(creatureSlot))
             await creatures.QuestsChangedAsync(context, plan.Before, current, CanSend);
+    }
+
+    static async Task RefreshPersonalCargoCapacityAsync(GameConnectionContext context, InventorySnapshot inventory,
+        ushort previousCapacity, InventoryIndex index, Func<bool> canSend)
+    {
+        // 66先更新打开的金库窗口；13先写入容量会让原生的“容量增加”判断跳过重绘。
+        if (inventory.CargoCapacity > previousCapacity)
+            await context.Notify(NotiPacketType.CERA_SPECIALITEM, CargoPackets.PersonalCapacity(inventory.CargoCapacity),
+                "personal_cargo_capacity_changed", canSend);
+        await context.Notify(NotiPacketType.ITEM_LIST, CargoPackets.Full(inventory, InventoryListType.PersonalCargo),
+            "personal_cargo_capacity", canSend);
+        await RestoreLocksAsync(context, inventory, inventory.Items.Where(item => item.Position.List == InventoryListType.PersonalCargo)
+            .Select(item => item.Position), canSend: canSend, currentIndex: index);
     }
 
     // 拒绝路径没有提交计划，客户端却已先移除所选材料；按当前已提交快照整列重发该容器。

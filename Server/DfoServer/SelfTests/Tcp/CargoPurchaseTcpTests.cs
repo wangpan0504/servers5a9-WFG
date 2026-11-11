@@ -48,12 +48,12 @@ internal static class CargoPurchaseTcpTests
             peer.Select();
             var mileage = MileageBefore(fixture, ExpectedCashMileage(r.CashShop.Product(100063)!));
             peer.Send(64, Purchase());
+            peer.Expect(0, 66, [1, 0, 24, 0]);
+            var cargo = peer.Expect(0, 13).Body;
+            That(cargo[0] == 2 && U16(cargo, 1) == 24, "购买确认前先通知打开窗口扩容，再同步24格权威列表");
             That(peer.Expect(1, 64).Body[0] == 1, "金库商城直扩购买成功");
             That(U32(peer.Expect(0, 53).Body, 1) == 940, "只扣当前资源价格60");
             MileageAfter(peer, fixture, mileage);
-            peer.Expect(0, 66, [1, 0, 24, 0]);
-            var cargo = peer.Expect(0, 13).Body;
-            That(cargo[0] == 2 && U16(cargo, 1) == 24, "先通知打开的窗口扩容，再同步24格权威列表");
             peer.Barrier();
             That(fixture.Query("SELECT cargo_capacity FROM characters") is [[24L]] &&
                 fixture.Query("SELECT count(*) FROM character_inventory_items WHERE json_extract(item_core,'$.ItemId')=50") is [[0L]],
