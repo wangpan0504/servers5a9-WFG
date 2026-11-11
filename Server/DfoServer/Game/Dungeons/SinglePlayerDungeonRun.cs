@@ -194,10 +194,12 @@ internal sealed partial class SinglePlayerDungeonRun
         FatigueAccelerationPercent = percent;
     }
     internal DungeonMonsterPlan CurrentMonsterPlan => current.Plan;
-    // 友方APC在原客户端跨房随行；只读取本实例真正加载过的资源演员，不把未来房间算作存活。
+    // 友方APC及MAP显式follow的monster跨房随行；只认本实例真正加载过的原对象key。
+    static bool IsFollowingFriendlyActor(DungeonPlannedMonster monster) => monster.IsFriendly && !monster.CanReportDeath &&
+        (monster.AiCharacter is not null || monster.Source?.FollowType == "follow");
     internal DungeonPlannedMonster? PublishedFriendlyActor(ushort key) => carriedCompanions.GetValueOrDefault(key) ?? allRooms.Where(room => room.Loaded)
         .SelectMany(room => room.Plan.Monsters).SingleOrDefault(monster => monster.ObjectKey == key &&
-            monster.AiCharacter is not null && monster.IsFriendly && !monster.CanReportDeath);
+            IsFollowingFriendlyActor(monster));
 
     internal bool HasLivingFriendlyActor(int id, DungeonRunSnapshot snapshot) =>
         carriedCompanions.Values.Any(monster => monster.MonsterId == id && !retiredCarriedCompanions.Contains(monster.ObjectKey)) ||
@@ -264,7 +266,7 @@ internal sealed partial class SinglePlayerDungeonRun
         }
         var room = current.Plan.Monsters.Any(monster => monster.ObjectKey == key && !monster.CanReportDeath) ? current :
             allRooms.SingleOrDefault(candidate => candidate.Loaded && candidate.Plan.Monsters.Any(monster =>
-                monster.ObjectKey == key && monster.AiCharacter is not null && monster.IsFriendly && !monster.CanReportDeath));
+                monster.ObjectKey == key && IsFollowingFriendlyActor(monster)));
         room?.Dead.Add(key);
     }
     internal bool MockBattleDefeated => entry.MockBattle is not null &&
