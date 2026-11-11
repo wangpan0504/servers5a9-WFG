@@ -54,6 +54,7 @@ SupportApcResourcePatch prepare-support-auxiliary behavior.pvf new-auxiliary-out
 SupportApcResourcePatch prepare-support-natural-tiers auxiliary.pvf verified-overdrive-report.json new-tier-output
 SupportApcResourcePatch prepare-support-effective-tiers current.pvf verified-natural-tier-report.json new-effective-output
 SupportApcResourcePatch prepare-support-opening current.pvf new-opening-output
+SupportApcResourcePatch prepare-support-damage current.pvf new-damage-output
 ```
 
 地图准入通过指定的正式服务端程序集解析，包含两活动及魔兽三档专用迷宫；只在允许且没有被禁止模式共用、已有王富贵或光兵专用友方行的地图末尾补缺失两女，原行及序号不变。解析错误单独输出，不默认为允许。
@@ -64,7 +65,9 @@ SupportApcResourcePatch prepare-support-opening current.pvf new-opening-output
 
 现行累计输入再执行`prepare-support-effective-tiers`，以已核验自然档次报告复核134个模板、档位和主BUFF学习/装备等级。配套客户端将专用两女最终适用智力校准为6000/7200/9000；工具依据普通副本真实SKL基础列及智力分母，对每个专用AIC主BUFF五列追加原生`skill data up`正向加值。未计圣歌、偏爱和装备额外正增幅时，公式下限为力智4950/7750/14750、三攻850/1250/2350，与奶爸同档一致；整数基础列留一格裕量。保留装备、学习、被动、AI、KEY、持续时间及所有共享玩家SKL。已有AIC修正时拒绝重复叠加，必须明确协调。两端需配套更新，最终游戏面板与自然行为仍须实机验收。
 
-`prepare-support-opening`读取当前134个女性模板的实际KEY下标，仅重建已有84份女性AI：奶妈先勇气祝福、守护祝福，小魔女先偏爱、禁忌诅咒，再沿原条件治疗和战斗。保留AIC、KEY、地图、技能定义、等级和装备；缺失或不一致的共享AI拒绝生成。该顺序调整不代表已经实机确认所有女性增益识别、挂机和重复施法问题均已解决。
+`prepare-support-opening`读取当前134个女性模板的实际KEY下标，仅重建已有84份女性AI：奶妈先勇气祝福、守护祝福，小魔女先禁忌诅咒、偏爱，再沿原条件治疗和战斗。保留AIC、KEY、地图、技能定义、等级和装备；缺失或不一致的共享AI拒绝生成。该顺序调整不代表已经实机确认所有女性增益识别、挂机和重复施法问题均已解决。
+
+`prepare-support-damage`只调整当前168个专用模板的`attack damage rate`为1.00，撤销原来的0.10额外折扣；装备、技能、职业、增益、AI和原生伤害计算保持。按当前名册验证身份、职业、成长、等级及旧倍率，输出逐资源并发保护的差量，拒绝未知倍率和覆盖已有输出。后续模板生成入口也使用1.00。专项验证入口为测试项目的`--damage <最终累计PVF> <新输出目录>`；写包后须回读所有模板，并完成非目标raw保持审计。伤害插件准入由客户端DpsMeter配套实现。
 
 专项入口为测试项目的`--behavior`、`--paired-maps`、`--auxiliary`、`--natural-tiers`、`--effective-tiers`、`--opening`。各步写包后必须逐资源raw审计；下述旧生成器仅供历史输入迁移，不能覆盖现行累计调度。
 
