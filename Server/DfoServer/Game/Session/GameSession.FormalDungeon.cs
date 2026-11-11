@@ -919,7 +919,7 @@ internal sealed partial class GameSession
             foreach (var monster in plan.Monsters.Where(monster =>
                 monster.HellWave is not null && monster.HellRewardRolls > 0 && monster.Source is null ||
                 monster.IsBlocking && monster.Source is not null &&
-                (entry.EvildomWarMode is not null || prepareMonsterDrops is not null || monster.MonsterId is 1 or 2 && monster.SpawnType == 0 ||
+                (entry.EvildomWarMode is not null || prepareMonsterDrops is not null || DisasterDungeonPolicy.IsRewardStone(entry, monster) || monster.MonsterId is 1 or 2 && monster.SpawnType == 0 ||
                     springTreasure is not null && SpringTreasureDropPolicy.MayDrop(entry, monster))))
             {
                 if (entry.EvildomWarMode is not null && !EvildomWarMonsterDropPolicy.IsThroneBoss(entry, monster))
@@ -930,7 +930,7 @@ internal sealed partial class GameSession
                 {
                     dropGeneration = entry.EvildomWarMode is not null
                         ? EvildomWarMonsterDropPolicy.PrepareBoss(entry, monster, items)
-                        : prepareMonsterDrops?.Invoke(monster);
+                        : DisasterDungeonPolicy.PrepareStoneDrop(entry, monster, items.Get) ?? prepareMonsterDrops?.Invoke(monster);
                 }
                 catch (Exception error) when (error is NotSupportedException or FileNotFoundException) { return RejectFormal("drop-plan-unsupported"); }
                 if ((prepareMonsterDrops is not null || entry.EvildomWarMode is not null) && dropGeneration is null)
@@ -945,7 +945,7 @@ internal sealed partial class GameSession
                     hellRewardPlans[monster.ObjectKey] = rewardGeneration;
                 }
                 if (dropGeneration is not null) dropPlans.Add(monster.ObjectKey, dropGeneration);
-                if (prepareMonsterDrops is null && entry.EvildomWarMode is null && !pools.ContainsKey(monster.MonsterId))
+                if (dropGeneration is null && prepareMonsterDrops is null && entry.EvildomWarMode is null && !pools.ContainsKey(monster.MonsterId))
                     pools.Add(monster.MonsterId, DungeonExplicitDropPolicy.CreatePool("monster/monster.lst", drops.Get(monster.MonsterId), items.Get));
                 // 创建位置是已证资源位置；不将首次受击坐标冒充死亡瞬间位置。
                 // 地面RAW不携带最终库存目的槽，独立对象使用显式临时record slot0。
@@ -1655,6 +1655,9 @@ internal sealed partial class GameSession
         {
             if (dungeon.DropPlans.TryGetValue(pending.Death.MonsterKey, out var generation))
             {
+                if (DisasterDungeonPolicy.IsRewardStone(dungeon.Entry, pending.Monster) &&
+                    !DisasterDungeonPolicy.CanRewardStone(dungeon.Run, dungeon.Authority, pending))
+                    generation = new(generation.ResourceSource, []);
                 if (dungeon.HellRewardPlans.TryGetValue(pending.Death.MonsterKey, out var rewardPlan) &&
                     dungeon.Run.IsLastLivingHellWaveMember(pending.Death.MonsterKey)) generation = rewardPlan;
                 appliedEpicPieceBonus = generation.AcceptsEpicPieceBonus ? frozen.EpicPieceBonus : 0;

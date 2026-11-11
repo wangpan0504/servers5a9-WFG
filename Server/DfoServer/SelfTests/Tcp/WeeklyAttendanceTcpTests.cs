@@ -36,8 +36,8 @@ internal static class WeeklyAttendanceTcpTests
         }
         await fixture.StartAsync();
         using var client = Open(fixture);
-        client.ExpectedOpenEvents = [282, 2449, 414, 181, 2532, 266, 2208];
-        client.ExpectedActiveEvents = [2395, 2208];
+        client.ExpectedOpenEvents = [282, 2449, 414, 181, 2514, 2532, 266, 2208];
+        client.ExpectedActiveEvents = [2395, 2514, 2208];
         client.Select();
         byte[]? state = null;
         bool? shown = null;
@@ -78,8 +78,8 @@ internal static class WeeklyAttendanceTcpTests
         Exchange(1115, new byte[13]);
         That(Count() == 1 && alarms == 1, "重复签到不重发邮件和提醒");
         client.Send(7); client.Expect(1, 7, [1]); client.Expect(0, 2);
-        client.ExpectedOpenEvents = [282, 2449, 414, 181, 2532, 266, 2208];
-        client.ExpectedActiveEvents = [2395, 2208];
+        client.ExpectedOpenEvents = [282, 2449, 414, 181, 2514, 2532, 266, 2208];
+        client.ExpectedActiveEvents = [2395, 2514, 2208];
         client.Select(1);
         Exchange(1115, new byte[13]);
         That(U32(state!, 4) == 1 && Count() == 1, "换角仍共享账号签到事实");
