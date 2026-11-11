@@ -118,7 +118,8 @@ internal sealed record DevelopmentRequest(DevelopmentAction Action, string Accou
         ["recharge"] = (DevelopmentAction.Recharge, false, 2, 2),
         ["recharge-status"] = (DevelopmentAction.RechargeStatus, false, 0, 0),
         ["npc-favor-max"] = (DevelopmentAction.NpcFavorMax, true, 0, 0),
-        ["lucky-profession"] = (DevelopmentAction.LuckyProfession, true, 0, 0),
+        ["lucky-profession"] = (DevelopmentAction.LuckyProfession, true, 0, 1),
+        ["lucky-professions"] = (DevelopmentAction.LuckyProfession, false, 0, 1),
         ["returning-adventurer"] = (DevelopmentAction.ReturningAdventurer, true, 0, 0),
         ["wallet"] = (DevelopmentAction.Wallet, true, 0, 0),
         ["currency"] = (DevelopmentAction.Currency, true, 3, 3),
@@ -408,6 +409,12 @@ internal sealed record DevelopmentRequest(DevelopmentAction Action, string Accou
         }
         if (Account.Length is < 1 or > 64 || Account.Any(c => !(c is >= 'a' and <= 'z' or >= 'A' and <= 'Z' or >= '0' and <= '9' or '_' or '-')))
             throw new InvalidDataException("账号无效");
+        if (Action == DevelopmentAction.LuckyProfession)
+        {
+            if (Name.Length != 0 && !CharacterName.IsValid(Name) || Args is not ([] or ["on"] or ["off"] or ["status"]))
+                throw new InvalidDataException("幸运开关只支持on/off/status及合法角色名");
+            return;
+        }
         if (Action == DevelopmentAction.ProfessionOptions)
         {
             if (Name.Length != 0 || Primary != 0 || Secondary != 0) throw new InvalidDataException("职业目录查询无效");

@@ -44,6 +44,16 @@ internal static class AdventurerBenefitTests
             request.Validate();
             That(request.Account == "other-1" && request.Name == "Hero" && request.Writes, "活动GM保留显式账号和角色身份");
         }
+        foreach (string mode in new[] { "on", "off", "status" })
+        {
+            var request = DevelopmentRequest.Parse("lucky-professions " + mode, "default");
+            That(request.Action == DevelopmentAction.LuckyProfession && request.Name.Length == 0 && request.Args.SequenceEqual([mode]),
+                "全局幸运命令严格保留开关或只读动作：" + mode);
+        }
+        foreach (string invalid in new[] { "lucky-professions toggle", "lucky-professions on off", "lucky-profession Hero invalid" })
+            Reject<InvalidDataException>(() => DevelopmentRequest.Parse(invalid, "default"), "非法幸运参数拒绝：" + invalid);
+        That(AdventurerBenefitConfiguration.Default.LuckyEnabled == false && !AdventurerBenefitConfiguration.Default.AllProfessions,
+            "首次服务端默认关闭全职业幸运");
         string root = Path.Combine(Path.GetTempPath(), "adventurer-benefit-" + Guid.NewGuid().ToString("N"));
         try
         {
@@ -56,6 +66,10 @@ internal static class AdventurerBenefitTests
                 "职业及账号回归期限重启后完整恢复");
             Reject<InvalidDataException>(() => store.Write(value with { ProfessionJob = 17 }), "非法职业不落盘");
             That(store.Read().ProfessionJob == 7, "拒绝写入保留原配置");
+            store.Write(value with { ProfessionJob = null, AllProfessions = true });
+            var all = new AdventurerBenefitStore(root).Read();
+            That(all.AllProfessions && all.ProfessionJob is null && all.ReturningUntil["other-1"] == 12345678,
+                "全职业开关重启恢复且保留原回归账号期限");
         }
         finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
     }
@@ -109,8 +123,25 @@ internal static class AdventurerBenefitTests
             !service.IsLucky(7, 0x24, 1000), "新职业使用实际CHR合法分支，覆盖原生日程缺少枪剑士的情况");
         var failed = new AdventurerBenefitService(catalog, AdventurerBenefitConfiguration.Default, _ => throw new IOException("fixture persist failure"));
         Reject<IOException>(() => failed.SetProfession(7), "职业配置落盘失败不发布");
+        Reject<IOException>(() => failed.SetAllProfessions(), "全职业配置落盘失败不发布");
         Reject<IOException>(() => failed.SetReturning("hero", 1000), "账号配置落盘失败不发布");
         That(failed.Configuration == AdventurerBenefitConfiguration.Default, "失败保留完整旧快照");
+        service.SetAllProfessions();
+        var allProfessions = service.LuckyProfessions(1000);
+        That(allProfessions.SequenceEqual(catalog.Lucky!.Professions.OrderBy(row => row.Key).SelectMany(row => row.Value)) &&
+            allProfessions.All(row => service.IsLucky(row.Job, row.GrowType, 1000)) && !service.IsLucky(7, 0x2f, 1000),
+            "全职业仅包含实际CHR全部合法转职觉醒，不授予非法分支");
+        var allConfiguration = service.Configuration;
+        service.SetAllProfessions();
+        That(ReferenceEquals(service.Configuration, allConfiguration) && service.ReturningUntil("hero", 1000) == until,
+            "换职业重复开启全职业不清旧职业、不重复持久化且不改回归期限");
+        var restoredAll = new AdventurerBenefitService(catalog, service.Configuration, _ => { });
+        That(restoredAll.LuckyProfessions(1000).SequenceEqual(allProfessions), "服务重建仍保持完整全职业名单");
+        service.SetAllProfessions(false);
+        That(service.LuckyProfessions(1000).IsEmpty && !service.Configuration.AllProfessions && service.Configuration.LuckyEnabled == false &&
+            service.ReturningUntil("hero", 1000) == until, "关闭全职业清除名单并阻断日程恢复，保留独立回归期限");
+        That(new AdventurerBenefitService(catalog, service.Configuration, _ => { }).LuckyProfessions(1000).IsEmpty,
+            "关闭状态服务重建后保留，首次配置默认关闭");
         LuckyExperienceAndSession(pvf, catalog);
         Console.WriteLine($"PASS {Count - before} adventurer benefit resource assertions");
     }
@@ -163,6 +194,14 @@ internal static class AdventurerBenefitTests
             That(session.ChangeFatigueAcceleration(true) is { Error: 179 } &&
                 session.ChangeFatigueAcceleration(false) is { Error: 0, Active: false },
                 "普通职业不能开启幸运燃烧，仍可关闭已保存的选择");
+            benefit.SetAllProfessions();
+            var all = session.PlanLuckyProfessions()!;
+            That(all.IsCurrent() && all.Professions.Any(row => row.Job == 7) && all.Professions.Any(row => row.Job == 15) &&
+                session.ChangeFatigueAcceleration(true) is { Error: 0, Active: true }, "全职业开启后本人重新获得名单和免费燃烧资格");
+            benefit.SetAllProfessions(false);
+            var disabled = session.PlanLuckyProfessions()!;
+            That(!all.IsCurrent() && disabled.IsCurrent() && disabled.Professions.IsEmpty &&
+                session.FatigueAccelerationState() is { Selected: true, Active: false }, "关闭废弃旧名单、发送原生零数量并停止幸运燃烧");
             var ordinary = new GameSession(repository, towns, owner,
                 debugSettings: new GameDebugSettings { AdventurerBenefits = new(catalog, AdventurerBenefitConfiguration.Default, _ => { }) });
             ordinary.Select(0);
