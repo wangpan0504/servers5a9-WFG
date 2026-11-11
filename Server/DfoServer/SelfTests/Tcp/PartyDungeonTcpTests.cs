@@ -664,7 +664,7 @@ internal static partial class PartyDungeonTcpTests
                     "每人只扣自己的费用、增加自己的奖励金币，不影响其他成员");
             }
             That(rows.All(members => Enumerable.Range(0, count).All(slot => members[slot].Free == slot && members[slot].Paid == slot &&
-                    members[slot].Items.Length > 0)) && rows.All(members => Enumerable.Range(0, 8).All(slot =>
+                    members[slot].Items.SequenceEqual(PaidItems(participants[slot].Id)))) && rows.All(members => Enumerable.Range(0, 8).All(slot =>
                     members[slot].Free == rows[0][slot].Free && members[slot].Paid == rows[0][slot].Paid &&
                     members[slot].Items.SequenceEqual(rows[0][slot].Items))),
                 "各客户端完整成员归属和付费奖励一致，不因选择相同位置而覆盖结果");
@@ -683,6 +683,24 @@ internal static partial class PartyDungeonTcpTests
             beta.Send(71, [1, 0]);
             That(Drain(beta).Any(p => p is { Kind: 1, Opcode: 71, Body: [0, 0, 0] }) && fixture.Snapshot() == claimed,
                 "已取得一张付费牌不能改选第二张，拒绝后资产保持不变");
+
+            (uint Item, uint Count)[] PaidItems(ushort characterId)
+            {
+                using var json = System.Text.Json.JsonDocument.Parse((string)fixture.Query(
+                    "SELECT paid_reward_json FROM character_dungeon_card_options WHERE character_id=$p0", characterId)[0][0]!);
+                var reward = json.RootElement;
+                var items = new List<(uint Item, uint Count)>();
+                foreach (string field in new[] { "Item", "ExtraItem", "HopeEquipment", "HopeSealingItem", "TayberrsWish" })
+                    if (reward.TryGetProperty(field, out var item) && item.ValueKind == System.Text.Json.JsonValueKind.Object)
+                    {
+                        var core = System.Text.Json.JsonSerializer.Deserialize<DfoServer.Game.Inventory.Models.ItemCore>(item.GetRawText())!;
+                        items.Add((checked((uint)core.ItemId), checked((uint)core.Count)));
+                    }
+                uint gold = reward.GetProperty("Gold").GetUInt32();
+                // 以实际提交账本独立解码预期；完全空牌合法，有物品时仍须保留首项金币占位。
+                return gold == 0 && items.Count == 0 ? [] : [(0, gold), .. items.GroupBy(item => item.Item)
+                    .Select(group => (group.Key, checked((uint)group.Sum(item => (long)item.Count))))];
+            }
         }
         throw new InvalidOperationException("FAIL 共享普通副本未在有界路线内完成");
 
