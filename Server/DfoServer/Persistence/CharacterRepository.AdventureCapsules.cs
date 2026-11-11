@@ -19,8 +19,8 @@ internal sealed partial class CharacterRepository
             expected.Level < catalog.Capsule.MinimumLevel || expected.Level > catalog.Capsule.MaximumLevel ||
             growth.CharacterId != expected.Id || growth.Revision != expected.Revision || !SameLearning(growth.Before, expected.Learning) ||
             growth.Learning.Experience - growth.Before.Experience != catalog.Capsule.GrantedExperience ||
-            plan.Before.State.CapsuleExperience < catalog.Capsule.MinimumExperience ||
-            plan.After.CapsuleExperience != plan.Before.State.CapsuleExperience - catalog.Capsule.MinimumExperience)
+            plan.Before.State.CapsuleExperience < catalog.Capsule.GaugeExperience ||
+            plan.After.CapsuleExperience != plan.Before.State.CapsuleExperience - catalog.Capsule.GaugeExperience)
             throw new InvalidDataException("胶囊计划的账号扣除或角色成长越界");
         using var db = database.Open(); using var write = db.BeginWrite("CharacterRepository.CommitAdventureCapsule", deferred: true);
         using var tx = write.Transaction;

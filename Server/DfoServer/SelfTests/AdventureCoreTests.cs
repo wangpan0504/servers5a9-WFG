@@ -65,8 +65,8 @@ internal static class AdventureCoreTests
         Reject<InvalidDataException>(() => AdventureRequests.Target([0]), "冒险团查询不截断目标");
         AdventureRequests.Empty([]);
         Reject<InvalidDataException>(() => AdventureRequests.Empty([0]), "胶囊拒绝猜填附加字段");
-        That(catalog.Experience[3] == 20 && catalog.CapsuleCapacity == 100 &&
-            catalog.Capsule.MinimumExperience * catalog.Capsule.MaximumGauges <= catalog.CapsuleCapacity &&
+        That(catalog.Experience[3] == 20 && catalog.CapsuleCapacity == 200 &&
+            catalog.Capsule.GaugeExperience * catalog.Capsule.MaximumGauges == catalog.CapsuleCapacity &&
             catalog.Professions.ContainsKey((0, 1)),
             "基础资源读取等级、64位经验表和职业，不加载远征定义");
         var benefit = catalog.Benefit(2);
