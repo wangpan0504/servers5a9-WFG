@@ -171,7 +171,7 @@ internal sealed partial class QuestCompletionPlan
     public uint StageExperience => StagePlan?.BonusExperience ?? 0;
     public uint TotalRequestedExperience => checked(ExperienceReward.Amount + StageExperience);
     public uint ActualExperience => checked((uint)(TargetLearning.Experience - Expected.Learning.Experience));
-    Character ProjectedCharacter => Expected with { Revision = checked(Expected.Revision + 1),
+    internal Character ProjectedCharacter => Expected with { Revision = checked(Expected.Revision + 1),
         Inventory = Inventory.After, Level = TargetLevel, GrowType = TargetGrowType, Learning = TargetLearning,
         ExpertJobType = TargetExpertJob,
         EquipmentSlotFlags = TargetEquipmentSlotFlags, CompletedQuests = CompletedAfter.ToArray(),

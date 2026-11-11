@@ -69,6 +69,15 @@ internal static class QuestClientSceneProgress
         return guide.Length == 0 || towns.Areas[(town,area)].Map(completed).Npcs.Any(npc => npc.Id == guide[2].Value);
     }
 
+    // 范围 scalar 0 只表示当初 Matches 成功。补归档再查一次当前阶段地图上的同一 NPC 和半径，不把点击父任务 NPC 当成新的达成。
+    public static bool SatisfiedTownRange(Character character, StoryQuest quest, TownCatalog towns)
+    {
+        if (!TownRange(quest)) return false;
+        var row = character.ActiveMainQuests.FirstOrDefault(active => active.QuestId == quest.Id);
+        return row is { ConditionState: 0, AcceptanceId: var acceptance } && acceptance != Guid.Empty &&
+            Matches(character, quest, towns);
+    }
+
     public static int ResolveNpc(Character character, int npcId, StoryQuest quest)
     {
         int resolved = npcId;

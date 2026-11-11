@@ -103,7 +103,8 @@ internal sealed class QuestConditionHandler(ServerLog log, QuestCatalog? quests 
             await context.Notify(NotiPacketType.UPDATE_ITEM_LIST,
                 InventoryPackets.Delta((closed?.Commit.Character ?? changed!.Character).Inventory,
                     InventoryListType.Main,[.. slots]),"quest_scene_inventory",Guard);
-        if (closed is not null && !parentCallback)
+        // 父回调仍不因普通对话子任务发574。范围子任务归档后活动表已经变了，ACK33之后必须补发574再356。
+        if (closed is not null && (!parentCallback || closed.ArchivedTownRange))
         {
             await context.Notify(NotiPacketType.ACCEPTED_QUEST,QuestPackets.ActiveList(closed.Commit.Character.ActiveMainQuests),"quest_child_parent_progress",Guard);
             await context.Notify(NotiPacketType.CLEAR_QUEST_LIST,TownPackets.CompletedQuests(closed.Commit.Character),"quest_child_completed",Guard);

@@ -1,8 +1,19 @@
+using System.Buffers.Binary;
+using System.Net;
+using System.Reflection;
+using DfoServer.Game.Characters;
+using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Quests;
 using DfoServer.Game.Dungeons;
 using DfoServer.Game.Currency;
 using DfoServer.Game.Session;
 using DfoServer.Game.Inventory.Services;
+using DfoServer.Network;
+using DfoServer.Network.Builders;
+using DfoServer.Network.Handlers;
+using DfoServer.Network.Projection;
+using DfoServer.Network.Protocol;
+using DfoServer.Testing;
 using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Dungeons;
 using DfoServer.GameWorld.Quests;
@@ -236,6 +247,7 @@ internal static class QuestTownSceneTests
                 child,ushort.MaxValue,quests,parameters,items.Items,items.GoldLimits,items.EpicPieces,growth,DateTimeOffset.UtcNow).Plan is null,
                 "同类历史归档不代替未达成的"+child.Condition+"条件");
         }
+        RunSmanyRangeRecovery(towns,pvf,characters,items,quests,skills);
         DungeonCinematic();
         Console.WriteLine($"PASS {Count - checks} 实际城镇范围、城镇/地下城演出、寻物会面与交付及原子回滚断言（非实机）");
 
@@ -363,5 +375,371 @@ internal static class QuestTownSceneTests
             items.Items,items.GoldLimits,items.EpicPieces,action == QuestLifecycleAction.Condition ? new(null,0,0) : null);
         QuestFinishResult Finish(QuestSceneTests.Fixture f,ushort id) => f.Session.FinishQuest(id,ushort.MaxValue,quests,parameters,
             items.Items,items.GoldLimits,items.EpicPieces,growth);
+    }
+
+    // 3759 的范围条件已归零但自动归档被跳过时，父任务 3698 在米娅处先补归档再交付；未达成或离开半径仍然拒绝。
+    public static void RunSmanyRangeRecovery(TownCatalog towns,PvfArchive pvf,CharacterCatalog characters,ItemResources items,
+        QuestCatalog quests,SkillLearningCatalog skills)
+    {
+        int checks = Count;
+        var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf,skills);
+        var parameters = global::DfoServer.Testing.SelfTestCatalogs.QuestRewardParameters(pvf);
+        var parent = quests.Get(3698); var meet = quests.Get(3758); var range = quests.Get(3759);
+        var slough = towns.Areas.Values.Single(area => area.Phases.Prepend(area.Default).Any(map =>
+            map.Path.Contains("Slough_up_street.map",StringComparison.OrdinalIgnoreCase) && map.Npcs.Any(npc => npc.Id == 78 && npc.X == 1397 && npc.Y == 210)));
+        var gent = towns.Areas.Values.Single(area => area.Phases.Prepend(area.Default).Any(map =>
+            map.Npcs.Any(npc => npc.Id == 59 && npc.X == 2004 && npc.Y == 187)));
+        That(parent.Path == "n_quest/quest_renewal/epic_quest/slough/slough_epic_03.qst" &&
+            parent.Condition == "[quest clear]" && parent.SubType == 2 && parent.IntData.SequenceEqual([3758,3759]) && parent.CompleteNpc == 78 &&
+            meet.Path == "n_quest/quest_renewal/epic_quest/slough/slough_epic_03_01.qst" &&
+            meet.Condition == "[meet npc]" && meet.IntData.SequenceEqual([59]) && meet.MainQuest == 3698 &&
+            QuestRelationProgress.ZeroRewardChild(meet) && QuestRelationProgress.TownLinkedChild(meet) &&
+            range.Path == "n_quest/quest_renewal/epic_quest/slough/slough_epic_03_02.qst" &&
+            range.Condition == "[reach the range]" && range.SubType == 0 && range.IntData.SequenceEqual([78,50,50]) &&
+            range.MainQuest == 3698 && range.CompleteNpc == 78 && QuestRelationProgress.ZeroRewardChild(range) &&
+            !QuestRelationProgress.TownLinkedChild(range) && QuestRelationProgress.SequentialParent(parent,quests),
+            "3698/3758/3759保持斯曼工业基地顺序父任务、梅尔文会面和米娅范围零奖励");
+        That(slough.Shifts.Select(shift => (shift.Quest,shift.Index)).SequenceEqual([(3779,0),(4869,1)]) &&
+            slough.Phases.Prepend(slough.Default).All(map => map.Npcs.Any(npc => npc.Id == 78 && npc.X == 1397 && npc.Y == 210)) &&
+            gent.Phases.Prepend(gent.Default).All(map => map.Npcs.Any(npc => npc.Id == 59 && npc.X == 2004 && npc.Y == 187)),
+            "米娅78在斯曼三个阶段地图坐标不变，梅尔文59在根特车间各阶段都在");
+        var blocked = parent.Definition!.Collisions.Concat(meet.Definition!.Collisions).Concat(range.Definition!.Collisions).ToHashSet();
+        var done = parent.Definition.PrerequisiteGroups.First(group => group.Length > 0).ToHashSet();
+        That(done.Contains(3697),"3698前置组包含3697");
+        Location? melvin = null, near = null, far = null;
+        for (int attempt = 0; attempt < 2 && (melvin is null || near is null || far is null); attempt++)
+        {
+            melvin = Walk(towns,gent.Town,gent.Area,done,_ => true);
+            near = Walk(towns,slough.Town,slough.Area,done,point => Math.Abs(point.X - 1397) <= 90 && Math.Abs(point.Y - 210) <= 90);
+            far = Walk(towns,slough.Town,slough.Area,done,point => Math.Abs((long)point.X - 1397) > 90 || Math.Abs((long)point.Y - 210) > 90);
+            if (attempt == 0 && (melvin is null || near is null || far is null))
+                foreach (int id in slough.Quests.Concat(slough.AnyQuests.Take(1)).Concat(gent.Quests).Concat(gent.AnyQuests.Take(1))
+                    .Concat(slough.Phases.Prepend(slough.Default).Concat(gent.Phases.Prepend(gent.Default))
+                        .SelectMany(map => map.Bounds.SelectMany(region => region.Quests))))
+                    if (id > 0 && !blocked.Contains(id)) done.Add(id);
+        }
+        That(melvin is not null && near is not null && far is not null,
+            $"梅尔文与米娅半径内外都有可行走点：melvin={melvin} near={near} far={far}");
+        foreach (int[] extra in new[] { Array.Empty<int>(), new[] { 3779 }, new[] { 3779,4869 } })
+        {
+            var phaseDone = done.Concat(extra).ToHashSet();
+            var phase = slough.Map(phaseDone);
+            var phaseNear = Walk(towns,slough.Town,slough.Area,phaseDone,point => Math.Abs(point.X - 1397) <= 90 && Math.Abs(point.Y - 210) <= 90);
+            var phaseFar = Walk(towns,slough.Town,slough.Area,phaseDone,point => Math.Abs((long)point.X - 1397) > 90 || Math.Abs((long)point.Y - 210) > 90);
+            That(phase.Npcs.Any(npc => npc.Id == 78 && npc.X == 1397 && npc.Y == 210) && phaseNear is not null && phaseFar is not null &&
+                QuestClientSceneProgress.Matches(Sample(phaseNear,phaseDone),range,towns) &&
+                !QuestClientSceneProgress.Matches(Sample(phaseFar,phaseDone),range,towns),
+                "阶段映射后米娅半径判定仍用当前地图坐标：" + phase.Path);
+        }
+        using (var f = Open())
+        {
+            AcceptChain(f);
+            var unmet = f.Read();
+            That(Finish(f,3698).Outcome == QuestFinishOutcome.Rejected &&
+                f.Session.FinishReadyQuestChildren(quests,parameters,items.Items,items.GoldLimits,items.EpicPieces,growth,3698) is null &&
+                QuestCompletionRepositoryTests.Same(unmet,f.Read()) && Receipts(f,3759) == 0 && Receipts(f,3698) == 0,
+                "3759仍为1时，站在米娅处也不能补归档或交付父任务");
+            Place(f,far!);
+            That(Condition(f,3759)?.Commit is null && f.Read().ActiveMainQuests.Single(row => row.QuestId == 3759).ConditionState == 1,
+                "离开米娅半径的范围33不把3759写成0");
+            Place(f,near!);
+            var zeroed = Condition(f,3759);
+            That(zeroed?.Commit is not null && f.Read().ActiveMainQuests.Single(row => row.QuestId == 3759).ConditionState == 0 &&
+                !f.Read().CompletedQuests.Contains(3759) && QuestClientSceneProgress.SatisfiedTownRange(f.Read(),range,towns),
+                "范围内33只保存3759达成，不在会话入口自动归档");
+            Place(f,far!);
+            var away = f.Read();
+            That(!QuestClientSceneProgress.SatisfiedTownRange(away,range,towns) &&
+                Finish(f,3698).Outcome == QuestFinishOutcome.Rejected && QuestCompletionRepositoryTests.Same(away,f.Read()),
+                "条件已归零但人已离开半径时，父任务交付不放宽坐标、不补归档");
+            Place(f,near!);
+            ulong beforeExp = f.Read().Learning.Experience;
+            var finished = Finish(f,3698);
+            var after = f.Read();
+            That(finished.Outcome == QuestFinishOutcome.Committed && finished.Receipt?.Commit.ExperienceReward.Amount is uint gained &&
+                after.Learning.Experience == beforeExp + gained && after.CompletedQuests.Contains(3759) && after.CompletedQuests.Contains(3698) &&
+                after.ActiveMainQuests.All(row => row.QuestId != 3759 && row.QuestId != 3698) && Receipts(f,3759) == 1 && Receipts(f,3698) == 1,
+                "直接交付3698先补归档零奖励3759，父奖励只记一次：" + finished.Outcome + " / " + finished.Reason);
+            That(Finish(f,3698).Outcome == QuestFinishOutcome.AlreadyCompleted && Finish(f,3759).Outcome == QuestFinishOutcome.AlreadyCompleted &&
+                QuestCompletionRepositoryTests.Same(after,f.Read()) && Receipts(f,3759) == 1 && Receipts(f,3698) == 1,
+                "重复交付3698和3759不再发奖或写第二笔回执");
+        }
+        using (var f = Open())
+        {
+            AcceptChain(f);
+            Place(f,near!);
+            That(Condition(f,3759)?.Commit is not null,"父回调路径再次把3759条件归零且不归档");
+            ulong beforeExp = f.Read().Learning.Experience;
+            var closed = f.Session.FinishReadyQuestChildren(quests,parameters,items.Items,items.GoldLimits,items.EpicPieces,growth,3698);
+            var archived = f.Read();
+            That(closed is { ArchivedTownRange: true, Commit: { ExperienceReward.Amount: 0, Rewards.Length: 0, GoldAmount: 0 } } &&
+                archived.Learning.Experience == beforeExp && archived.CompletedQuests.Contains(3759) && !archived.CompletedQuests.Contains(3698) &&
+                archived.ActiveMainQuests.Single(row => row.QuestId == 3698).ConditionState == 0 && Receipts(f,3759) == 1 && Receipts(f,3698) == 0,
+                "父33回调补归档已达成的3759，父scalar归零，不发父奖励");
+            var finished = Finish(f,3698);
+            var rewarded = f.Read();
+            That(finished.Outcome == QuestFinishOutcome.Committed && rewarded.CompletedQuests.Contains(3698) &&
+                rewarded.Learning.Experience == beforeExp + finished.Receipt!.Commit.ExperienceReward.Amount &&
+                Receipts(f,3698) == 1 && Receipts(f,3759) == 1,
+                "回调后再交付父任务只发一次奖励：" + finished.Reason);
+            That(f.Session.FinishReadyQuestChildren(quests,parameters,items.Items,items.GoldLimits,items.EpicPieces,growth,3698) is null &&
+                Finish(f,3698).Outcome == QuestFinishOutcome.AlreadyCompleted && QuestCompletionRepositoryTests.Same(rewarded,f.Read()),
+                "重复父回调和父34保持幂等");
+        }
+        using (var f = Open())
+        {
+            AcceptChain(f);
+            Place(f,near!);
+            That(Condition(f,3759)?.Commit is not null,"投影失效场景先把3759条件归零");
+            var selected = f.Session.Selected!;
+            var preparation = QuestCompletionPlan.Prepare(selected,range,ushort.MaxValue,quests,parameters,items.Items,items.GoldLimits,items.EpicPieces,growth,DateTimeOffset.UtcNow);
+            That(preparation.Outcome == QuestCompletionOutcome.Accepted && preparation.Plan is not null,"3759当前投影可以按原规则归档");
+            f.Repository.CommitQuestCompletion(f.Owner,preparation.Plan!);
+            f.Sql("UPDATE characters SET revision=revision+1");
+            var pendingType = typeof(GameSession).GetNestedType("PendingQuestCompletion",BindingFlags.NonPublic)!;
+            var pending = Activator.CreateInstance(pendingType,BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,null,
+                [preparation.Plan,f.Session.SelectionEpoch,f.Session.Phase,null],null);
+            That(pending is not null,"可以冻结3759原领奖计划");
+            typeof(GameSession).GetField("pendingQuestCompletion",BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(f.Session,pending);
+            var aborted = Finish(f,3698);
+            var persisted = f.Read();
+            That(aborted.Outcome == QuestFinishOutcome.Committed && aborted.Receipt is { Commit.QuestId: 3759, Commit.ProjectionCurrent: false } &&
+                !f.Session.CanPublishQuestCompletion(aborted.Receipt) && ReferenceEquals(selected,f.Session.Selected) &&
+                !persisted.CompletedQuests.Contains(3698) && persisted.CompletedQuests.Contains(3759) &&
+                Receipts(f,3759) == 1 && Receipts(f,3698) == 0,
+                "子任务提交后投影失效时终止父任务，不安装角色、不发布、也不交付3698");
+        }
+        var rewardedParent = parent with { Rewards = [new(0,2058,null), new(0,1,null)] };
+        var rewardCatalog = new QuestCatalog(quests.All.Select(row => row.Id == 3698 ? rewardedParent : row).ToDictionary(row => row.Id));
+        using (var f = new QuestSceneTests.Fixture(towns,characters,skills,growth,rewardCatalog,false,81,done.ToArray(),growType:5))
+        {
+            Place(f,melvin!);
+            That(f.Session.ChangeQuest(3698,QuestLifecycleAction.Accept,rewardCatalog,items.Items,items.GoldLimits,items.EpicPieces)?.Commit is not null &&
+                f.Session.ChangeQuest(3758,QuestLifecycleAction.Accept,rewardCatalog,items.Items,items.GoldLimits,items.EpicPieces)?.Commit is not null &&
+                f.Session.ChangeQuest(3758,QuestLifecycleAction.Condition,rewardCatalog,items.Items,items.GoldLimits,items.EpicPieces,new(null,0,0))?.Commit is not null &&
+                f.Session.FinishQuest(3758,ushort.MaxValue,rewardCatalog,parameters,items.Items,items.GoldLimits,items.EpicPieces,growth).Outcome == QuestFinishOutcome.Committed &&
+                f.Session.ChangeQuest(3759,QuestLifecycleAction.Accept,rewardCatalog,items.Items,items.GoldLimits,items.EpicPieces)?.Commit is not null,
+                "满包场景沿原链接取3698/3758/3759");
+            Place(f,near!);
+            That(f.Session.ChangeQuest(3759,QuestLifecycleAction.Condition,rewardCatalog,items.Items,items.GoldLimits,items.EpicPieces,new(null,0,0))?.Commit is not null,
+                "满包场景范围内把3759归零且不归档");
+            int granted = 0;
+            ushort grantError = 0;
+            int chunk = items.Items.Get(2058).StackLimit;
+            while (granted < 256)
+            {
+                var grant = f.Session.MutateInventory(character => InventoryRewardGrantService.TryGrantBatch(character,[new(2058,chunk)],
+                    items.Items,items.GoldLimits,items.EpicPieces));
+                if (!grant.Accepted) { grantError = grant.Error; break; }
+                granted++;
+            }
+            That(granted > 0 && grantError == 17,"背包被2058填到错误17：" + granted + "/" + grantError);
+            var rejected = f.Session.FinishQuest(3698,ushort.MaxValue,rewardCatalog,parameters,items.Items,items.GoldLimits,items.EpicPieces,growth);
+            That(rejected.Outcome == QuestFinishOutcome.InsufficientSpace && rejected.Failure == QuestCompletionFailure.InventoryCapacity &&
+                rejected.ArchivedChildren.Length == 0 && !f.Read().CompletedQuests.Contains(3759) && !f.Read().CompletedQuests.Contains(3698) &&
+                Receipts(f,3759) == 0 && Receipts(f,3698) == 0,
+                "父任务奖励放不下时整笔回滚，3759不归档：" + rejected.Outcome + " / " + rejected.Reason);
+            That(f.Session.MutateInventory(character =>
+            {
+                var item = character.Inventory.Items.First(row => row.Core.ItemId == 2058 && row.Position.List == InventoryListType.Main);
+                return InventoryDeleteService.Plan(character.Inventory,item.Position,item.Core.Value,item.Core.IsStackable ? 1 : item.Core.Count);
+            }).Accepted,"腾出一个2058名额后再交付父任务");
+            var finished = f.Session.FinishQuest(3698,ushort.MaxValue,rewardCatalog,parameters,items.Items,items.GoldLimits,items.EpicPieces,growth);
+            var after = f.Read();
+            That(finished.Outcome == QuestFinishOutcome.Committed && after.CompletedQuests.Contains(3759) && after.CompletedQuests.Contains(3698) &&
+                Receipts(f,3759) == 1 && Receipts(f,3698) == 1 &&
+                f.Session.FinishQuest(3698,ushort.MaxValue,rewardCatalog,parameters,items.Items,items.GoldLimits,items.EpicPieces,growth).Outcome == QuestFinishOutcome.AlreadyCompleted &&
+                Receipts(f,3759) == 1 && Receipts(f,3698) == 1,
+                "腾出空间后补归档只发生一次，父奖励也只发一次：" + finished.Reason);
+        }
+        ParentCommitFaults().GetAwaiter().GetResult();
+        Console.WriteLine($"PASS {Count - checks} 斯曼工业基地3698范围子任务补归档与父提交重试断言（非实机）");
+
+        QuestSceneTests.Fixture Open() => new(towns,characters,skills,growth,quests,false,81,done.ToArray(),growType:5);
+        void AcceptChain(QuestSceneTests.Fixture f)
+        {
+            Place(f,melvin!);
+            That(Accept(f,3698)?.Commit is not null && Accept(f,3758)?.Commit is not null,"剑影接取3698和会面子任务3758");
+            That(Condition(f,3758)?.Commit is not null && Finish(f,3758).Outcome == QuestFinishOutcome.Committed &&
+                f.Read().CompletedQuests.Contains(3758) && !f.Read().CompletedQuests.Contains(3698),
+                "梅尔文所在地图完成3758，父任务仍待米娅");
+            That(Accept(f,3759)?.Commit is not null && f.Read().ActiveMainQuests.Single(row => row.QuestId == 3759).ConditionState == 1,
+                "3758归档后接取范围子任务3759，初值仍是1");
+        }
+        void Place(QuestSceneTests.Fixture f,Location point)
+        {
+            var current = f.Read();
+            f.Repository.Save(f.Owner,current,point,current.Return);
+            f.Session.ReturnToRoster(); f.Session.Select(0,resumeTown:true); f.Session.MarkReady();
+            That(f.Read().Position.Town == point.Town && f.Read().Position.Area == point.Area &&
+                f.Read().Position.X == point.X && f.Read().Position.Y == point.Y,"测试落点保持在指定城镇坐标");
+        }
+        QuestLifecycleReceipt? Accept(QuestSceneTests.Fixture f,ushort id) => f.Session.ChangeQuest(id,QuestLifecycleAction.Accept,quests,
+            items.Items,items.GoldLimits,items.EpicPieces);
+        QuestLifecycleReceipt? Condition(QuestSceneTests.Fixture f,ushort id) => f.Session.ChangeQuest(id,QuestLifecycleAction.Condition,quests,
+            items.Items,items.GoldLimits,items.EpicPieces,new(null,0,0));
+        QuestFinishResult Finish(QuestSceneTests.Fixture f,ushort id) => f.Session.FinishQuest(id,ushort.MaxValue,quests,parameters,
+            items.Items,items.GoldLimits,items.EpicPieces,growth);
+        static long Receipts(QuestSceneTests.Fixture f,int questId) =>
+            Convert.ToInt64(f.Query("SELECT count(*) FROM character_quest_completion_receipts WHERE quest_id=" + questId));
+        static Character Sample(Location point,IReadOnlySet<int> completed) => new(1,0,"Range",1,point,point) { Level = 81, CompletedQuests = completed.ToArray() };
+        static Location? Walk(TownCatalog towns,byte town,byte area,IReadOnlySet<int> done,Func<Location,bool> match)
+        {
+            var map = towns.Areas[(town,area)].Map(done);
+            foreach (var region in map.Bounds)
+            {
+                var box = region.Bounds;
+                for (int y = box.Y; y <= box.Y + box.Height; y += 15)
+                for (int x = box.X; x <= box.X + box.Width; x += 15)
+                {
+                    if (x is < 0 or > ushort.MaxValue || y is < 0 or > ushort.MaxValue) continue;
+                    var point = new Location(town,area,(ushort)x,(ushort)y);
+                    if (towns.IsPosition(point,done) && match(point)) return point;
+                }
+            }
+            return null;
+        }
+
+        // 子任务已经落库之后，父提交前失败或返回丢失都把补归档前的活动表留在冻结计划上。
+        // 同一计划再走真实完成处理器：574 先于 356，奖励和回执只发生一次。
+        async Task ParentCommitFaults()
+        {
+            That(!quests.TryGet(65534,out _),"65534不是已装载任务，另一次34不会误归档");
+            await Fault(afterCommit:false,recover:true);
+            await Fault(afterCommit:true,recover:true);
+            await Fault(afterCommit:false,recover:false);
+        }
+
+        async Task Fault(bool afterCommit,bool recover)
+        {
+            using var f = Open();
+            AcceptChain(f);
+            Place(f,near!);
+            That(Condition(f,3759)?.Commit is not null,Label(afterCommit,recover) + "先把3759归零且不归档");
+            var before = f.Session.Selected!;
+            ulong beforeExp = before.Learning.Experience;
+            var proxy = QuestCommitFaultProxy.Arm(f.Session,3698,afterCommit,busy:false);
+            using var log = new ServerLog(Path.GetTempPath(),fileEnabled:false);
+            var projection = new QuestProjection(quests,parameters,items.Items,items.GoldLimits,items.EpicPieces,growth);
+            var registry = new GameCommandRegistry();
+            new QuestCompletionHandler(quests,parameters,items.Items,items.GoldLimits,items.EpicPieces,growth,log,
+                new CharacterLevelProjection(new CharacterStatComputer(characters),projection),projection).Register(registry);
+            registry.Seal();
+            using var stop = new CancellationTokenSource();
+            using var stream = new MemoryStream();
+            await using var sender = new GameConnectionSender(f.Owner,stream,stop,0,(_,_,_,_,_) => { });
+            var context = new GameConnectionContext(new(88,IPAddress.Loopback,stream,stop),f.Owner,f.Session,sender);
+            var packet = new Packet(1,34,FinishBody(3698));
+            Exception? fault = null;
+            try { await registry.DispatchAsync(context,packet); }
+            catch (IOException error) { fault = error; }
+            That(fault is IOException && stream.Length == 0 && proxy.ParentCalls == 1 && proxy.FirstDuplicate == (afterCommit ? false : null) && !proxy.SamePlan,
+                Label(afterCommit,recover) + "父提交故障不发帧 fault=" + (fault?.GetType().Name ?? "none") +
+                " calls=" + proxy.ParentCalls + " first=" + (proxy.FirstDuplicate?.ToString() ?? "null") +
+                " same=" + proxy.SamePlan + " bytes=" + stream.Length);
+            That(Receipts(f,3759) == 1 && f.Session.Selected!.ActiveMainQuests.Any(row => row.QuestId == 3698) &&
+                f.Session.Selected.ActiveMainQuests.All(row => row.QuestId != 3759) && !ReferenceEquals(before,f.Session.Selected),
+                Label(afterCommit,recover) + "子任务已归档，会话仍停在归档后的父槽快照");
+            var remembered = Remembered(f.Session);
+            That(remembered.Any(row => row.QuestId == 3759) && remembered.Any(row => row.QuestId == 3698),
+                Label(afterCommit,recover) + "冻结计划留下补归档前的活动表");
+            var parked = f.Session.Selected!;
+            if (!afterCommit)
+                That(Receipts(f,3698) == 0 && f.Read().Learning.Experience == beforeExp && !f.Read().CompletedQuests.Contains(3698),
+                    "父提交前失败没有父回执、经验和完成位");
+            else
+            {
+                ulong persisted = f.Read().Learning.Experience;
+                That(Receipts(f,3698) == 1 && persisted > beforeExp && f.Read().CompletedQuests.Contains(3698) &&
+                    !parked.CompletedQuests.Contains(3698) && parked.Learning.Experience == beforeExp,
+                    "父提交已落库但返回丢失，会话还没装上父回执");
+            }
+            if (!recover)
+            {
+                f.Sql("UPDATE characters SET revision=revision+1");
+                Exception? stale = null;
+                try { await registry.DispatchAsync(context,packet); }
+                catch (InvalidOperationException error) { stale = error; }
+                That(stale is InvalidOperationException && stale.Message.Contains("revision",StringComparison.Ordinal) &&
+                    stream.Length == 0 && proxy.ParentCalls == 2 && proxy.SamePlan && Receipts(f,3698) == 0 &&
+                    ReferenceEquals(parked,f.Session.Selected),
+                    "revision已变且尚无父回执时精确重试抛出，不发帧也不安装新角色");
+                return;
+            }
+            var closed = await registry.DispatchAsync(context,new Packet(1,34,FinishBody(65534)));
+            That(closed == CommandResult.CloseConnection && stream.Length == 0 && ReferenceEquals(parked,f.Session.Selected) &&
+                Receipts(f,3759) == 1 && Receipts(f,3698) == (afterCommit ? 1 : 0),
+                Label(afterCommit,recover) + "另一次请求拿不走活动表，关闭连接且不发过期槽");
+            ulong persistedExp = f.Read().Learning.Experience;
+            var result = await registry.DispatchAsync(context,packet);
+            var frames = ReadFrames(stream);
+            int ack = frames.FindIndex(row => row.Kind == 1 && row.Opcode == 34);
+            int activeAt = frames.FindLastIndex(row => row.Kind == 0 && row.Opcode == 574);
+            int completedAt = frames.FindLastIndex(row => row.Kind == 0 && row.Opcode == 356);
+            var loaded = f.Read();
+            byte[] active = QuestPackets.ActiveList(loaded.ActiveMainQuests);
+            That(result == CommandResult.Handled && ack >= 0 && frames[ack].Body[0] == 1 && activeAt > ack && completedAt > activeAt &&
+                frames.Where(row => row.Opcode == 574).All(row => row.Body.AsSpan().SequenceEqual(active)),
+                Label(afterCommit,recover) + "同一计划重试先发574再发356，574是提交后的活动表");
+            Bytes(frames[completedAt].Body,TownPackets.CompletedQuests(loaded),Label(afterCommit,recover) + "的356与完成表一致");
+            That(!active.AsSpan().SequenceEqual(QuestPackets.ActiveList(remembered)),
+                Label(afterCommit,recover) + "的574对照表仍含已删掉的范围子任务");
+            That(loaded.CompletedQuests.Contains(3759) && loaded.CompletedQuests.Contains(3698) &&
+                Receipts(f,3759) == 1 && Receipts(f,3698) == 1 && loaded.Learning.Experience == persistedExp + (afterCommit ? 0UL : BinaryPrimitives.ReadUInt32LittleEndian(frames[ack].Body.AsSpan(4))) &&
+                proxy.ParentCalls == 2 && proxy.SamePlan && proxy.FirstDuplicate == false && proxy.LastDuplicate == afterCommit,
+                Label(afterCommit,recover) + "奖励和父子回执只发生一次，重试沿用原计划");
+            stream.SetLength(0);
+            var repeat = await registry.DispatchAsync(context,packet);
+            var rejected = ReadFrames(stream);
+            That(repeat == CommandResult.Handled && rejected.Count == 1 && rejected[0].Kind == 1 && rejected[0].Opcode == 34,
+                Label(afterCommit,recover) + "重复34只回一帧");
+            Bytes(rejected[0].Body,QuestPackets.Rejected(19),Label(afterCommit,recover) + "重复34拒绝");
+            That(Receipts(f,3698) == 1 && Receipts(f,3759) == 1 && f.Read().Learning.Experience == loaded.Learning.Experience,
+                Label(afterCommit,recover) + "重复34不再发奖");
+            f.Session.ReturnToRoster();
+            f.Session.Select(0,resumeTown:true);
+            f.Session.MarkReady();
+            var restored = f.Session.Selected!;
+            That(QuestCompletionRepositoryTests.Same(f.Read(),restored) &&
+                restored.CompletedQuests.Contains(3759) && restored.CompletedQuests.Contains(3698) &&
+                restored.ActiveMainQuests.All(row => row.QuestId != 3759 && row.QuestId != 3698),
+                Label(afterCommit,recover) + "重选后与持久活动槽和完成表一致");
+        }
+
+        static string Label(bool afterCommit,bool recover) => (afterCommit ? "返回丢失" : "提交前失败") + (recover ? "重试：" : "失效：");
+
+        static IReadOnlyList<ActiveMainQuest> Remembered(GameSession session)
+        {
+            var pending = typeof(GameSession).GetField("pendingQuestCompletion",BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(session);
+            That(pending is not null,"父提交故障后冻结计划仍在");
+            return (IReadOnlyList<ActiveMainQuest>)pending!.GetType().GetProperty("RangePreviousQuests")!.GetValue(pending)!;
+        }
+
+        static List<(byte Kind,ushort Opcode,byte[] Body)> ReadFrames(MemoryStream stream)
+        {
+            var bytes = stream.ToArray();
+            var frames = new List<(byte Kind,ushort Opcode,byte[] Body)>();
+            int at = 0;
+            while (at + 16 <= bytes.Length)
+            {
+                int length = BinaryPrimitives.ReadInt32LittleEndian(bytes.AsSpan(at + 3));
+                That(length >= 16 && at + length <= bytes.Length,"领奖帧长度完整");
+                frames.Add((bytes[at],BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(at + 1)),bytes.AsSpan(at + 16,length - 16).ToArray()));
+                at += length;
+            }
+            That(at == bytes.Length,"领奖帧没有剩余字节");
+            return frames;
+        }
+
+        static byte[] FinishBody(ushort id)
+        {
+            var body = new byte[10];
+            BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(0),34);
+            BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(2),id);
+            BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(4),ushort.MaxValue);
+            BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(6),1);
+            BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(8),ushort.MaxValue);
+            return body;
+        }
     }
 }

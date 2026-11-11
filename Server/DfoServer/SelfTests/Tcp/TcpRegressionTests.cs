@@ -294,6 +294,11 @@ internal static class TcpRegressionTests
             QuestNpcMappingTests.RunResources(resources.Towns,resources.Quests);
             return Task.CompletedTask;
         }),
+        ("quest-range-recovery", async (options, root, resources) =>
+        {
+            QuestTownSceneTests.RunSmanyRangeRecovery(resources.Towns,resources.Archive,resources.Characters,resources.ItemResources,resources.Quests,resources.Learning);
+            await QuestRangeRecoveryTcpTests.RunAsync(options,root,resources);
+        }),
         ("quest-hidden", (_, _, resources) => QuestHiddenEntryTests.RunAsync(resources.Towns,resources.Archive,
             resources.Characters,resources.ItemResources,resources.Quests,resources.Learning)),
         ("quest-replay", (_, _, resources) => QuestReplayPublicationTests.RunAsync(resources.Archive,
@@ -789,7 +794,7 @@ internal static class TcpRegressionTests
         "legacy-status-rules",
         "stackable-actions",
         "gift-selection-tcp", "gift-selection-resources", "sea-rage-weapon-gift", "similar-gift-type", "dungeon-entry-plan", "assault-hunt-quest", "hosted-dungeon-eligibility", "quest-continuation", "quest-manual-skip", "quest-ticket", "quest-specified-ticket", "quest-awakening-ticket",
-        "quest-play-only", "quest-auto-meet", "quest-npc-mapping", "quest-hidden", "quest-replay", "quest-initialization",
+        "quest-play-only", "quest-auto-meet", "quest-npc-mapping", "quest-range-recovery", "quest-hidden", "quest-replay", "quest-initialization",
         "story-cinematic", "story-scenes", "story-quest-entry", "story-publication", "quest-core-rewards", "dungeon-settlement",
         "dungeon-drop-storage", "inventory-persistence", "resource-survey", "consumable-use-rules", "various-buff-rules", "dungeon-entry-cost", "dungeon-incount-retry",
         "item-daily-expire", "battle-pass-skill-material"
