@@ -5,7 +5,9 @@ namespace DfoServer.Game.Events;
 
 internal sealed record AdventurerBenefitConfiguration(int? ProfessionJob, ImmutableDictionary<string, long> ReturningUntil)
 {
-    public static AdventurerBenefitConfiguration Default { get; } = new(null, ImmutableDictionary<string, long>.Empty);
+    public bool AllProfessions { get; init; }
+    public bool? LuckyEnabled { get; init; }
+    public static AdventurerBenefitConfiguration Default { get; } = new(null, ImmutableDictionary<string, long>.Empty) { LuckyEnabled = false };
 }
 internal sealed record AdventurerBenefitMember(string Account, byte Job, ushort GrowType);
 internal sealed record AdventurerBenefitSelection(ImmutableArray<uint> Buffs, int KillExperiencePercent, int LuckyPartyClearExperiencePercent = 0);
@@ -15,6 +17,8 @@ internal sealed class AdventurerBenefitService(AdventurerBenefitCatalog catalog,
     Action<AdventurerBenefitConfiguration> persist)
 {
     readonly object gate = new();
+    readonly ImmutableArray<LuckyProfession> allProfessions = catalog.Lucky is { } luckyCatalog
+        ? luckyCatalog.Professions.OrderBy(row => row.Key).SelectMany(row => row.Value).ToImmutableArray() : [];
     AdventurerBenefitConfiguration configuration = Validate(initial);
     public AdventurerBenefitConfiguration Configuration => Volatile.Read(ref configuration);
     public AdventurerBenefitCatalog Catalog => catalog;
@@ -32,12 +36,24 @@ internal sealed class AdventurerBenefitService(AdventurerBenefitCatalog catalog,
     {
         if (job > 15 || catalog.Lucky is not { } lucky || !lucky.Professions.ContainsKey(job))
             throw new InvalidDataException("幸运职业资源未装配或目标职业无效");
-        lock (gate) Commit(configuration with { ProfessionJob = job });
+        lock (gate) Commit(configuration with { ProfessionJob = job, AllProfessions = false, LuckyEnabled = true });
+    }
+    public void SetAllProfessions(bool enabled = true)
+    {
+        if (catalog.Lucky is not { Professions.Count: > 0 })
+            throw new InvalidDataException("幸运职业资源未装配");
+        lock (gate)
+        {
+            if (configuration.AllProfessions == enabled && configuration.LuckyEnabled == enabled && configuration.ProfessionJob is null) return;
+            Commit(configuration with { ProfessionJob = null, AllProfessions = enabled, LuckyEnabled = enabled });
+        }
     }
     public ImmutableArray<LuckyProfession> LuckyProfessions(long now, AdventurerBenefitConfiguration? snapshot = null)
     {
         if (catalog.Lucky is not { } lucky) return [];
         var current = snapshot ?? Configuration;
+        if (current.LuckyEnabled == false) return [];
+        if (current.AllProfessions) return allProfessions;
         return current.ProfessionJob is { } job ? lucky.Professions[(byte)job] : lucky.Schedule
             .Where(row => row.Starts > 0 && row.Starts <= now && now < row.Ends)
             .Select(row => row.Profession).Distinct().OrderBy(row => row.Job).ThenBy(row => row.GrowType).ToImmutableArray();

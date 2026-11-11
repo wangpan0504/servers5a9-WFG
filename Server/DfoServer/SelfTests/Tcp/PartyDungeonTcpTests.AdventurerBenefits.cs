@@ -8,6 +8,8 @@ internal static partial class PartyDungeonTcpTests
 {
     public static async Task RunAdventurerBenefitsAsync(ServerOptions source, string root, TcpTestResources resources)
     {
+        AdventurerBenefitTests.RunCore();
+        AdventurerBenefitTests.RunResources(resources.Archive);
         ReturningAdventurerTests.RunResources(resources.Archive);
         var clock = new FrameClock();
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "adventurer-benefits"), gm: true, resources: resources, clock: clock);
@@ -16,30 +18,40 @@ internal static partial class PartyDungeonTcpTests
         var hero = group.Peers[0]; var fighter = group.Peers[1];
         string name = Convert.ToString(fixture.Query("SELECT name FROM characters WHERE id=$p0", hero.Id)[0][0])!;
         string account = Convert.ToString(fixture.Query("SELECT account FROM characters WHERE id=$p0", hero.Id)[0][0])!;
-        void SetLucky(string targetAccount, string targetName, uint job)
+        var expectedProfessions = new DfoServer.GameWorld.Events.LuckyCharacterCatalog(resources.Archive).Professions
+            .OrderBy(row => row.Key).SelectMany(row => row.Value).ToArray();
+        void SetLucky(string targetAccount, string targetName, bool changed = true)
         {
             That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort, "account " + targetAccount + " lucky-profession " + targetName,
                 out string result) && result.StartsWith("OK "), "真实GM幸运设置成功且先持久化");
+            using var receipt = System.Text.Json.JsonDocument.Parse(result[3..]);
+            That(receipt.RootElement.GetProperty("scope").GetString() == "all-professions", "GM凭据明确全职业范围，不能用旧单职业成功冒充");
             var first = group.All(); var tail = group.All();
             for (int member = 0; member < first.Length; member++)
             {
-                var packet = first[member].Concat(tail[member]).Single(row => row is { Kind: 0, Opcode: 1057 });
+                var packets = first[member].Concat(tail[member]).Where(row => row is { Kind: 0, Opcode: 1057 }).ToArray();
+                if (!changed) { That(packets.Length == 0, "重复GM开启不替换名单或刷新旧职业为空"); continue; }
+                var packet = packets.Single();
                 int count = checked((int)U32(packet.Body));
-                That(count > 1 && packet.Body.Length == 4 + count * 8 && Enumerable.Range(0, count).All(at =>
-                    U32(packet.Body, 4 + at * 8) == job && U32(packet.Body, 8 + at * 8) <= 127),
-                    "所有在线会话收到完整原生职业名单，不发个人幸运标志或女格斗Buff替代");
+                That(count == expectedProfessions.Length && packet.Body.Length == 4 + count * 8 && Enumerable.Range(0, count).All(at =>
+                    U32(packet.Body, 4 + at * 8) == expectedProfessions[at].Job && U32(packet.Body, 8 + at * 8) == expectedProfessions[at].GrowType),
+                    "一次GM设置向所有在线会话发送全职业完整合法转职觉醒名单");
             }
         }
-        SetLucky(account, name, 0);
+        SetLucky(account, name);
         hero.Send(562, [1]); hero.Expect(1, 562, [1]); hero.Expect(0, 490, [0, 0, 1]); group.All(hero);
         That(fixture.Query("SELECT enabled FROM character_fatigue_acceleration WHERE character_id=$p0", hero.Id) is [[1L]],
             "非网吧幸运角色沿真实562保存免费燃烧，不只是显示四叶草");
         string fighterName = Convert.ToString(fixture.Query("SELECT name FROM characters WHERE id=$p0", fighter.Id)[0][0])!;
         string fighterAccount = Convert.ToString(fixture.Query("SELECT account FROM characters WHERE id=$p0", fighter.Id)[0][0])!;
-        SetLucky(fighterAccount, fighterName, 1);
+        string allConfiguration = File.ReadAllText(Path.Combine(fixture.Options.DataDirectory, "adventurer-benefits.json"));
+        SetLucky(fighterAccount, fighterName, changed: false);
+        That(File.ReadAllText(Path.Combine(fixture.Options.DataDirectory, "adventurer-benefits.json")) == allConfiguration,
+            "换职业点击同按钮不清其他职业资格、不重写持久化配置");
         hero.Send(562, [0]); hero.Expect(1, 562, [1]); hero.Expect(0, 490, [0, 0, 0]); group.All(hero);
-        // 切回本人职业，后续击杀同时核对四叶草与独立女格斗队友活动，不能相互覆盖。
-        SetLucky(account, name, 0);
+        fighter.Send(562, [1]); fighter.Expect(1, 562, [1]); fighter.Expect(0, 490, [0, 0, 1]); group.All(fighter);
+        fighter.Send(562, [0]); fighter.Expect(1, 562, [1]); fighter.Expect(0, 490, [0, 0, 0]); group.All(fighter);
+        // 两种职业均可选择幸运燃烧；后续同时核对四叶草和独立女格斗组队活动。
         That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort, "account " + account + " returning-adventurer " + name, out string response) && response.StartsWith("OK "),
             "真实GM命令持久化所选账号回归资格");
         That(File.Exists(Path.Combine(fixture.Options.DataDirectory, "adventurer-benefits.json")), "回归GM成功前已落盘");
@@ -133,11 +145,12 @@ internal static partial class PartyDungeonTcpTests
         uint displayed = U32(exp.Body, buffOffset);
         long heroExperience = Convert.ToInt64(fixture.Query("SELECT experience FROM characters WHERE id=$p0", hero.Id)[0][0]);
         long fighterExperience = Convert.ToInt64(fixture.Query("SELECT experience FROM characters WHERE id=$p0", fighter.Id)[0][0]);
-        That(displayed > 0 && displayed == U32(exp.Body, buffOffset + 4) && heroExperience - fighterExperience == displayed,
-            "同级同怪的真实经验差额等于Buff显示与基础扣除分项，无重复展示或只发图标");
-        long killBasis = fighterExperience - (long)SelfTestCatalogs.Growth(resources.Archive, resources.Learning).GetLevelStartExperience(50);
-        That(killBasis > 0 && displayed == killBasis * 20 / 100 + killBasis * 10 / 100,
-            "四叶草击杀10%与女格斗队友20%分别取整后真实到账，不只安装图标或误替换活动");
+        That(displayed > 0 && displayed == U32(exp.Body, buffOffset + 4), "原生Buff显示与基础扣除分项一致");
+        long levelStart = (long)SelfTestCatalogs.Growth(resources.Archive, resources.Learning).GetLevelStartExperience(50);
+        long killBasis = heroExperience - levelStart - displayed;
+        That(killBasis > 0 && displayed == killBasis * 20 / 100 + killBasis * 10 / 100 &&
+            fighterExperience - levelStart == killBasis + killBasis * 10 / 100 && heroExperience - fighterExperience == killBasis * 20 / 100,
+            "全职业双方均真实获得四叶草10%，女格斗队友另给20%，分别取整且没有重复到账");
         // 不把图标当成经验到账：核对持久化角色经验与显示分项使用同一奖励链。
         That(Convert.ToInt64(fixture.Query("SELECT experience FROM characters WHERE id=$p0", hero.Id)[0][0]) >
             (long)SelfTestCatalogs.Growth(resources.Archive, resources.Learning).GetLevelStartExperience(50), "职业活动击杀经验真实落库");
@@ -155,6 +168,14 @@ internal static partial class PartyDungeonTcpTests
         var left = group.All(fighter);
         That(left[0].Any(packet => packet is { Kind: 0, Opcode: 488 }) && !left[0].Any(packet => Buff(packet, 1087)),
             "活动职业队友离队后幸存角色清除原生职业Buff");
+        That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort, "lucky-professions off", out string off) &&
+            off.Contains("\"enabled\":false"), "真实全局关闭命令返回关闭凭据");
+        var disabled = group.All(); var disabledTail = group.All();
+        for (int member = 0; member < disabled.Length; member++)
+            Bytes(disabled[member].Concat(disabledTail[member]).Single(packet => packet is { Kind: 0, Opcode: 1057 }).Body,
+                new byte[4], "关闭向全职业在线客户端同步空名单");
+        That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort, "lucky-professions status", out string status) &&
+            status.Contains("\"enabled\":false"), "关闭后的只读查询不重新开启");
 
         string RewardSnapshot() => fixture.Snapshot("SELECT * FROM account_returning_reward_claims ORDER BY account,action,argument,day") +
             fixture.Snapshot("SELECT * FROM character_inventory_items ORDER BY item_uid") +
