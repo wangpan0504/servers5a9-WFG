@@ -4,6 +4,7 @@ using System.Data.Common;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.CashShopPromotions;
 using DfoServer.Game.Inventory.Services;
+using DfoServer.Network.Builders;
 using DfoServer.Network.Builders.Inventory;
 using DfoServer.Network.Parsers.Inventory;
 using DfoServer.Network.Projection.Inventory;
@@ -281,10 +282,16 @@ internal sealed class ShopHandler(InventoryShopService shop, InventoryCashShopSe
     async Task<CommandResult> Sell(GameConnectionContext context, Packet packet)
     {
         var request = ShopRequests.Sell(packet.Body);
+        var feedbackSnapshot = context.Session.ReadInventoryForSynchronization();
         var result = context.Activity?.BlocksTownActions == true ? InventoryResult.Reject() : context.Session.SellAtShop(request, shop);
         var committed = result.Receipt;
         await context.Reply(CmdPacketType.SELL_ITEM, ShopPackets.Sold(result, request), result.Accepted ? "npc_shop_sold" : "npc_shop_sell_rejected",
             () => committed is null || context.Session.CanPublishInventory(committed));
+        // 本版ACK22的金币容量错误静默收尾；保留ACK解除pending，再向原选角快照补普通信息窗。
+        if (result is { Accepted: false, RejectReason: "gold_carry_limit" } && feedbackSnapshot is not null)
+            await context.Notify(NotiPacketType.SERVER_NOTICE_MESSAGE,
+                ServerNoticePackets.Information("出售后将超过金币携带上限，请先清理所持金币。"),
+                "npc_shop_sell_gold_limit", () => context.Session.CanPublishInventory(feedbackSnapshot));
         await projection.RefreshAsync(context, result);
         return CommandResult.Handled;
     }
