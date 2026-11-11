@@ -32,9 +32,15 @@ internal static class ReturningAdventurerTests
         byte[] expected = new byte[1200]; expected[0] = 4; expected[4] = 1; expected[8] = 1; expected[12] = 20; expected[16] = 7;
         Bytes(AdventurerBenefitPackets.ReturningMissions(state), expected, "1762严格100条12B槽，其余槽全零");
         Bytes(AdventurerBenefitPackets.ReturningAck(), new byte[12], "1734原生只读12B应答");
-        That(ReturningAdventurerRequests.Read(Convert.FromHexString("0400000024000000")) == new ReturningAdventurerRequest(4, 36) &&
-            ReturningAdventurerRequests.Read(new byte[7]) is null && ReturningAdventurerRequests.Read(new byte[21]) is null,
-            "1734正文严格8B，不能把含帧头21B当正文");
+        That(ReturningAdventurerRequests.Read(Convert.FromHexString("00C64291605A895F00000000AC0100000000000000")) == new ReturningAdventurerRequest(1, 0) &&
+            ReturningAdventurerRequests.Read(Convert.FromHexString("00C64291605A895F00000000AC0300000000000000")) == new ReturningAdventurerRequest(3, 0) &&
+            ReturningAdventurerRequests.Read(Convert.FromHexString("186B848F00000000C03E75914C0400000006000000")) == new ReturningAdventurerRequest(4, 6) &&
+            ReturningAdventurerRequests.Read(Convert.FromHexString("F0B6828F00000000003875914C0400000022000000")) == new ReturningAdventurerRequest(4, 34),
+            "现场21B欢迎、每日及任务请求按原生+13/+17字段解析，前13B不是帧头");
+        foreach (int length in new[] { 0, 7, 8, 13, 20, 22, 34 })
+            That(ReturningAdventurerRequests.Read(new byte[length]) is null, "1734拒绝非21B，不能接受截断或任意尾截取");
+        That(ReturningAdventurerRequests.Read(Convert.FromHexString("0100000000000000FFFFFFFFFF0400000024000000")) == new ReturningAdventurerRequest(4, 36),
+            "前缀即使伪装欢迎动作也不能覆盖原生字段，非零栈内容不影响任务编号");
         using var console = new StringWriter(); using var log = new ServerLog("", console, fileEnabled: false);
         log.Write("returning_adventurer_claim", new { Character = 1, Action = 1, Argument = 0, Accepted = true });
         log.Write("returning_adventurer_rejected", new { Character = 1, Action = 1, Argument = 0, Accepted = false });
