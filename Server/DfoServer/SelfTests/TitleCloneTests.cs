@@ -116,6 +116,7 @@ internal static class TitleCloneTests
             Level = 85,
             Inventory = new([bagNormalB, bagOnly39, bagOnly40, bagBoth])
         };
+        CheckOrphanSources(baseActor, items, NormalB, now);
 
         // 13号槽为空时：允许普通称号与仅含40的称号作为克隆源，拒绝含39的称号。
         That(books.CloneTitleError(baseActor, NormalB, now) == 0 &&
@@ -266,11 +267,160 @@ internal static class TitleCloneTests
             That(reconnect39.Selected!.CloneTitleItemId == 0 &&
                 repo.LoadCharacter(owner, created.Slot).CloneTitleItemId == 0,
                 "选角Prepare自动清理违反39规则的历史克隆称号并写回数据库");
+
+            reconnect39.MarkReady();
+            That(reconnect39.SelectCloneTitle(books, settings, NormalB, now).Error == 0 &&
+                reconnect39.Roster().Single().CloneTitleItemId == NormalB &&
+                reconnect39.PrepareRoster().Entries.Single().CloneTitleItemId == NormalB,
+                "合法来源在Main时，只有装备快照的轻量名册不能误清动画");
+            var duplicateSlot = new InventorySlot(InventoryListType.Main, 14);
+            That(reconnect39.PlanAndCommitInventory(c => new(true, 0,
+                new(c.Inventory, c.Inventory with { Items = c.Inventory.Items.Add(Item(0, duplicateSlot, NormalB)) },
+                    "clone_duplicate_fixture", new(c)))).Accepted,
+                "准备另一个同模板但不同UID的合法来源");
+            That(reconnect39.PlanAndCommitInventory(c => InventoryDeleteService.Plan(c.Inventory,
+                    new(InventoryListType.Main, 9), NormalB, 1)).Accepted &&
+                reconnect39.Selected!.CloneTitleItemId == NormalB,
+                "删除一个来源时另一合法实例仍可提供动画，不能按单个UID误清");
+            var beforeDelete = reconnect39.Selected!;
+            using (var db = new Microsoft.Data.Sqlite.SqliteConnection("Data Source=" + dbPath))
+            {
+                db.Open();
+                using var command = db.CreateCommand();
+                command.CommandText = "CREATE TRIGGER fail_clone_orphan BEFORE UPDATE OF clone_title_item_id ON characters " +
+                    "WHEN NEW.clone_title_item_id=0 BEGIN SELECT RAISE(ABORT,'clone orphan rollback'); END";
+                command.ExecuteNonQuery();
+                Reject<Microsoft.Data.Sqlite.SqliteException>(() => reconnect39.PlanAndCommitInventory(c =>
+                    InventoryDeleteService.Plan(c.Inventory, duplicateSlot, NormalB, 1)),
+                    "最后来源删除与动画清理在同一事务，后段SQL失败必须整体回滚");
+                var rolledBack = repo.LoadCharacter(owner, created.Slot);
+                That(ReferenceEquals(reconnect39.Selected, beforeDelete) && rolledBack.CloneTitleItemId == NormalB &&
+                    rolledBack.Revision == beforeDelete.Revision && rolledBack.Inventory.Find(duplicateSlot) == beforeDelete.Inventory.Find(duplicateSlot),
+                    "失败保留原在线快照、最后来源、动画选择与revision");
+                command.CommandText = "DROP TRIGGER fail_clone_orphan";
+                command.ExecuteNonQuery();
+            }
+            var deleted = reconnect39.PlanAndCommitInventory(c => InventoryDeleteService.Plan(c.Inventory, duplicateSlot, NormalB, 1));
+            That(deleted is { Accepted: true, Plan.CloneTitleItemIdAfter: 0 } &&
+                reconnect39.Selected!.CloneTitleItemId == 0 && repo.LoadCharacter(owner, created.Slot).CloneTitleItemId == 0 &&
+                reconnect39.Selected.Inventory.Find(duplicateSlot) is null,
+                "最后合法来源删除时，同一次库存提交清零在线与持久动画");
+            That(settingsRepo.SaveCloneTitle(owner, created.Id, NormalB) == true, "准备旧存档的无来源残留动画");
+            var orphanReconnect = new GameSession(repo, towns, owner, items: items);
+            orphanReconnect.Select(created.Slot);
+            That(orphanReconnect.Selected!.CloneTitleItemId == 0 && repo.LoadCharacter(owner, created.Slot).CloneTitleItemId == 0,
+                "选角从完整库存清理历史无来源动画，不依赖重新设置请求");
+            orphanReconnect.MarkReady();
+            That(orphanReconnect.PlanAndCommitInventory(c => new(true, 0,
+                new(c.Inventory, c.Inventory with { Items = c.Inventory.Items.Add(Item(0, duplicateSlot, NormalB)) },
+                    "clone_reissued_fixture", new(c)))).Accepted && orphanReconnect.Selected!.CloneTitleItemId == 0,
+                "后来重新发放同模板实例不会继承已清除的幽灵动画");
+            CheckDiscardCommit(repo, dbPath, towns, items, NormalB, NormalA, now);
         }
         finally
         {
             TestFiles.DeleteDirectory(root, true);
         }
+    }
+
+    static void CheckDiscardCommit(CharacterRepository repo, string dbPath, TownCatalog towns, ItemCatalog items,
+        int sourceId, int otherTitleId, long now)
+    {
+        var owners = new AccountOwners();
+        using var owner = owners.Acquire("clone-drop-acc", () => { });
+        var sourceSlot = new InventorySlot(InventoryListType.Main, 9);
+        var created = repo.Create(owner, new("CloneDrop", towns.Room, towns.InitialReturn)
+        {
+            Level = 85, DungeonState = CharacterDungeonState.NewOrdinary,
+            Inventory = new([new(0, sourceSlot, new(sourceId, ItemKind.Equipment, 17))])
+        });
+        var settings = new ClientSettingsRepository(dbPath);
+        settings.SaveCloneTitle(owner, created.Id, checked((uint)sourceId));
+        var expected = repo.LoadCharacter(owner, created.Slot);
+
+        DfoServer.Game.Dungeons.DungeonInventoryDiscardPreparation Prepare(Character character)
+        {
+            var request = new InventoryDiscardRequest(400, 250, 0, 9, 1, 0);
+            var planned = InventoryDiscardPlan.Prepare(character, request, items.Get(sourceId), now).Plan!;
+            var cleaned = InventoryCloneAppearanceService.WithOrphanCloneTitleCleanup(character, new(true, 0, planned.Inventory), now);
+            planned = planned with { Inventory = cleaned.Plan! };
+            var state = character.DungeonState!;
+            uint key = state.NextObjectKey == character.Id ? state.NextObjectKey + 1 : state.NextObjectKey;
+            var identity = new DfoServer.Game.Dungeons.DungeonRunIdentity(character.Id, 0, state.LastAttempt, Guid.NewGuid(), 1);
+            var map = new DfoServer.GameWorld.Dungeons.DungeonMap("clone-drop", new(0, 0), 1, "map/clone-drop.map");
+            var ground = new DfoServer.Game.Dungeons.DungeonGroundObject(Guid.NewGuid(), identity,
+                new(character.Id, key, map, request.X, request.Y, 0), planned.GroundCore)
+            {
+                ResourceIdentity = "inventory", InventoryOrigin = new(planned.Source, request.Count, character.Revision)
+            };
+            return new(character, planned, ground);
+        }
+
+        var stale = Prepare(expected);
+        var advanced = InventoryService.Commit(repo, owner, expected, new(true, 0,
+            new(expected.Inventory, expected.Inventory with { Items = expected.Inventory.Items.Add(
+                new(0, new(InventoryListType.Main, 10), new(otherTitleId, ItemKind.Equipment, 18))) }, "clone_drop_revision", new(expected))));
+        Reject<InvalidOperationException>(() => repo.CommitDungeonDiscard(owner, stale),
+            "来源清理计划不能用旧revision删除新库存");
+        var prepared = Prepare(advanced);
+        settings.SaveCloneTitle(owner, created.Id, 0);
+        Reject<InvalidOperationException>(() => repo.CommitDungeonDiscard(owner, prepared),
+            "规划后动画选择变化也须拒绝，不能用旧清理计划覆盖新选择");
+        settings.SaveCloneTitle(owner, created.Id, checked((uint)sourceId));
+        using (var db = new Microsoft.Data.Sqlite.SqliteConnection("Data Source=" + dbPath))
+        {
+            db.Open();
+            using var command = db.CreateCommand();
+            command.CommandText = "CREATE TRIGGER fail_clone_drop AFTER UPDATE OF next_object_key ON character_dungeon_state " +
+                "BEGIN SELECT RAISE(ABORT,'clone drop rollback'); END";
+            command.ExecuteNonQuery();
+            Reject<Microsoft.Data.Sqlite.SqliteException>(() => repo.CommitDungeonDiscard(owner, prepared),
+                "地面对象key末段失败时，已写库存和动画必须一并回滚");
+            var restored = repo.LoadCharacter(owner, created.Slot);
+            That(restored.Revision == advanced.Revision && restored.CloneTitleItemId == sourceId &&
+                restored.Inventory.Find(sourceSlot) == advanced.Inventory.Find(sourceSlot) && restored.DungeonState == advanced.DungeonState,
+                "地面丢弃回滚保留源完整核心UID、动画、revision和key高水位");
+            command.CommandText = "DROP TRIGGER fail_clone_drop";
+            command.ExecuteNonQuery();
+        }
+        var committed = repo.CommitDungeonDiscard(owner, prepared);
+        That(committed.CloneTitleItemId == 0 && committed.Inventory.Find(sourceSlot) is null &&
+            committed.Revision == advanced.Revision + 1,
+            "正式丢弃更换审计action后仍保存原计划的同事务动画清零字段");
+        var replayed = repo.CommitDungeonDiscard(owner, prepared);
+        That(replayed.CloneTitleItemId == 0 && replayed.Revision == committed.Revision && replayed.DungeonState == committed.DungeonState,
+            "返回结果丢失后沿同一准备恢复清零结果，不重复扣物或推进revision/key");
+        settings.SaveCloneTitle(owner, created.Id, checked((uint)otherTitleId));
+        Reject<InvalidDataException>(() => repo.CommitDungeonDiscard(owner, prepared),
+            "结果不明恢复不能仅凭库存相同接受后来改变的动画状态");
+        settings.SaveCloneTitle(owner, created.Id, 0);
+        using var replacement = owners.Acquire("clone-drop-acc", () => { });
+        Reject<InvalidOperationException>(() => repo.CommitDungeonDiscard(owner, prepared),
+            "账号已接管时旧owner不能重放来源清理");
+        That(repo.LoadCharacter(replacement, created.Slot).CloneTitleItemId == 0,
+            "旧owner失败后新owner的已提交结果保持");
+    }
+
+    static void CheckOrphanSources(Character character, ItemCatalog items, int sourceId, long now)
+    {
+        var source = character.Inventory.Find(new(InventoryListType.Main, 9))!;
+        var selected = character with { CloneTitleItemId = checked((uint)sourceId), Inventory = new([source]) };
+        foreach (var position in new[] { source.Position, new InventorySlot(InventoryListType.Equipment, 13), TitleBookService.Slot(4, 10) })
+            That(InventoryCloneAppearanceService.PlanCleanup(selected with { Inventory = new([source with { Position = position }]) }, items, now)
+                .Plan!.CloneTitleItemIdAfter is null, "Main、穿戴13和称号簿的合法来源均保留动画");
+        foreach (var invalid in new[]
+        {
+            source with { Position = new(InventoryListType.PersonalCargo, 0) },
+            source with { Core = source.Core with { IsRental = true } },
+            source with { Core = source.Core with { ExpireTime = checked((int)now) } },
+            source with { Core = source.Core with { Kind = ItemKind.Consumable } }
+        })
+            That(InventoryCloneAppearanceService.PlanCleanup(selected with { Inventory = new([invalid]) }, items, now)
+                .Plan!.CloneTitleItemIdAfter == 0, "仓库、租赁、到期或错误Kind不能撑住动画来源");
+        That(InventoryCloneAppearanceService.PlanCleanup(selected with { Inventory = new([]) }, items, now).Plan!.CloneTitleItemIdAfter == 0,
+            "最后合法来源完全消失时生成同事务清零计划");
+        That(!InventoryCloneAppearanceService.ShouldClearCloneTitle(checked((uint)sourceId), new([]), items),
+            "轻量名册限制检查不把缺少Main和称号簿快照当成来源消失");
     }
 
     static void Check(byte[] zero, byte[] actual, int offset, uint id, string consumer)
