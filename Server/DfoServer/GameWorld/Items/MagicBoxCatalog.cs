@@ -18,6 +18,14 @@ internal sealed class MagicBoxCatalog(PvfArchive archive, IReadOnlyDictionary<in
 {
     readonly ConcurrentDictionary<int, MagicBoxDefinition> definitions = new();
 
+    // 核心自测注入单奖池。已放入的定义不会再读 PVF。
+    internal static MagicBoxCatalog ForTests(int itemId, MagicBoxDefinition definition)
+    {
+        var catalog = new MagicBoxCatalog(null!, new Dictionary<int, string>());
+        catalog.definitions[itemId] = definition;
+        return catalog;
+    }
+
     public MagicBoxDefinition Get(int itemId) => definitions.GetOrAdd(itemId, id =>
     {
         // 赛丽亚幸运盒在部分资源索引中没有出现在 stackable.lst，但其脚本仍

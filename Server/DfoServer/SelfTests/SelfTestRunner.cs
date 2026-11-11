@@ -451,6 +451,7 @@ internal static class SelfTestRunner
         InventoryWriteTests.Run();
         InventoryBatchTests.RunCore();
         InventoryCoreGrantTests.RunCore();
+        Testing.Inventory.MagicBoxTests.RunRewardRowCore();
         Testing.Inventory.InventoryDiscardTests.RunCore();
         Testing.Inventory.InventoryDurabilityTests.RunCore();
         SkillMaterialTests.Run();
