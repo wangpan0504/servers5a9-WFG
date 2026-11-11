@@ -553,6 +553,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         RaidCombatProjection.PostPreyDungeonTime(context, receipt);
         // 进入副本重建Actor后补发网吧特权buff，否则buff栏在副本内是空的。
         await PcRoomBuffProjection.PostAsync(context, Guard);
+        AdventurerBenefitProjection.Post(context, force: true);
         town.GuildEconomy?.Post(context, force: true);
         await GuildTrainingProjection.PostAsync(context);
         await BossSelectionBuffProjection.PostAsync(context, force: true, canSend: Guard);

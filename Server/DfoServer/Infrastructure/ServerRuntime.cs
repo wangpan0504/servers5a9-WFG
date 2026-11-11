@@ -170,9 +170,12 @@ internal static class ServerRuntime
         // 网吧身份线上默认常开：本进程启动即为开，重启后自动恢复为开；GM 的 pc-room on/off 只改当前进程（不落盘）。
         var supportStore = new Game.Settings.SupportCompanionStore(options.DataDirectory);
         var fatigueStore = new AccountFatigueStore(options.DataDirectory);
+        var adventurerStore = new AdventurerBenefitStore(options.DataDirectory);
+        var adventurerBenefits = new Game.Events.AdventurerBenefitService(new GameWorld.Events.AdventurerBenefitCatalog(pvf),
+            adventurerStore.Read(), adventurerStore.Write);
         var debugSettings = new GameDebugSettings(supportStore.Read(), supportStore.Write,
             fatigueStore.Read(), fatigueStore.Write) { PremiumPcRoom = PremiumPcRoomDefault(options.DataDirectory),
-            SupportProfiles = GameWorld.Dungeons.SupportCompanionCatalog.Load(pvf) };
+            SupportProfiles = GameWorld.Dungeons.SupportCompanionCatalog.Load(pvf), AdventurerBenefits = adventurerBenefits };
         var monsterBattleLevels = new DungeonBattleLevelConfiguration(options.DataDirectory);
         monsterBattleLevels.Reload();
         log.Write("monster_battle_level_config", new { Rules = monsterBattleLevels.Settings.Current.Rules.Count });

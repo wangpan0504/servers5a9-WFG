@@ -53,6 +53,8 @@ internal static partial class DevelopmentGm
         try
         {
             request.Validate();
+            if (request.Action is DevelopmentAction.LuckyProfession or DevelopmentAction.ReturningAdventurer)
+                return SetAdventurerBenefit(repository, owners, find, request, debugSettings);
             if (request.Action == DevelopmentAction.DirectMarriage)
                 return DirectMarriage(repository, owners, find, request, catalog);
             if (request.Action is DevelopmentAction.GuildCreateInfo or DevelopmentAction.GuildCreate)
