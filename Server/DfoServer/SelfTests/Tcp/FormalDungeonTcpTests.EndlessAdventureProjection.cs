@@ -38,9 +38,11 @@ internal static partial class FormalDungeonTcpTests
             resources.ItemResources.EpicPieces, clock: clock, events: events);
         using var stream = new MemoryStream();
         var delivered = new List<(ushort Opcode, byte[] Body)>();
+        Action<ushort>? observed = null;
         await using var sender = new GameConnectionSender(owner, stream, stop, 0, (_, opcode, _, body, _) =>
         {
             lock (delivered) delivered.Add((opcode, body.ToArray()));
+            observed?.Invoke(opcode);
         });
         var context = new GameConnectionContext(new(1, IPAddress.Loopback, stream, stop), owner, session, sender);
         await context.CommandGate.WaitAsync();
@@ -72,6 +74,33 @@ internal static partial class FormalDungeonTcpTests
                 }
                 That(!session.NeedsEndlessAdventureRefresh, "实际进度发布后才确认对应开关快照");
             }
+            // 模拟目录已实际写出、NPC发送期间开关再次变化，旧108不能为新开关的1103提供许可。
+            events.Override(2257, true);
+            await town.ServerEventsAsync(context);
+            await sender.DrainAsync();
+            lock (delivered) delivered.Clear();
+            observed = opcode => { if (opcode == 639) events.Override(2257, false); };
+            await town.ServerEventsAsync(context);
+            await sender.DrainAsync();
+            observed = null;
+            lock (delivered)
+            {
+                That(delivered.Any(row => row.Opcode == 108) && delivered.All(row => row.Opcode != 1103),
+                    "目录后再次切换开关时不借旧108发布新快照进度");
+                delivered.Clear();
+            }
+            That(session.NeedsEndlessAdventureRefresh, "旧目录未确认新开关进度已发布");
+            await town.ServerEventsAsync(context);
+            await sender.DrainAsync();
+            lock (delivered)
+            {
+                var relevant = delivered.Where(row => row.Opcode is 108 or 1103).ToArray();
+                That(relevant.Select(row => row.Opcode).SequenceEqual(new ushort[] { 108, 1103 }),
+                    "再次切换后由匹配目录恢复且仅发布一次进度");
+                That(BinaryPrimitives.ReadUInt32LittleEndian(relevant[1].Body.AsSpan(4)) == 0,
+                    "匹配关闭目录后恢复零值进度");
+            }
+            That(!session.NeedsEndlessAdventureRefresh, "恢复发送后确认新开关进度已发布");
         }
         finally
         {
