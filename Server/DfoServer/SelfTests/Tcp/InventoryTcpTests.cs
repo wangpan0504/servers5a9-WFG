@@ -19,6 +19,7 @@ internal static partial class InventoryTcpTests
 {
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
+        VerifyMaterialSortConditions();
         var itemResources = resources.ItemResources;
         var clock = new Inventory.DailyBoosterTestClock(DateTimeOffset.UtcNow);
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "inventory"), resources: resources, clock: clock);
@@ -335,11 +336,59 @@ internal static partial class InventoryTcpTests
             peer.Barrier();
         }
         await fixture.StopAsync();
+        // 复用既有重启及角色；槽位序、模板编号序和类型序三者不同，不能只按编号也通过。
+        using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
+        {
+            var character = repository.LoadCharacter(owner, 0);
+            var crystal = itemResources.Items.Get(3037);
+            var soul = itemResources.Items.Get(10158124);
+            var invitation = itemResources.Items.Get(3330);
+            That(new[] { crystal, soul, invitation }.All(item => item.Kind == ItemKind.Material) &&
+                soul.StackableType == invitation.StackableType &&
+                StringComparer.OrdinalIgnoreCase.Compare(invitation.StackableType, crystal.StackableType) < 0,
+                "材料类型整理使用匹配PVF的两种不同声明，同类材料按模板编号保持稳定次序");
+            repository.CommitInventory(owner, character, new(character.Inventory, character.Inventory with
+            {
+                Items = [.. character.Inventory.Items.Where(item => item.Position.List != InventoryListType.Main ||
+                    item.Position.Index is < 121 or > 176),
+                    new(0, new(InventoryListType.Main, 121), InventoryRewardGrantService.Create(crystal, 2)),
+                    new(0, new(InventoryListType.Main, 123), InventoryRewardGrantService.Create(soul, 3)),
+                    new(0, new(InventoryListType.Main, 125), InventoryRewardGrantService.Create(invitation, 4))]
+            }, "fixture_material_type_sort"));
+        }
         await fixture.StartAsync("reopened", isolatedProcess: true);
         using (var peer = Open(fixture))
         {
             var packets = peer.Select(1);
             That(packets[3].Body[126] == 3 && packets[4].Body.Length == 1973 && U16(packets[4].Body, 374) == 8 && U32(packets[4].Body, 376) == 101010912, "restart restores quick slot equipment without starter regrant");
+        }
+        using (var peer = Open(fixture))
+        {
+            var original = peer.Select()[4].Body;
+            string cores = fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items WHERE character_id=$p0 ORDER BY item_uid", peer.Id);
+            byte[] request = [6, 0, 0, 0, 0x10, 0, 0x18, 3, 0x20, 6];
+            peer.Send(20, request);
+            peer.Expect(1, 20, [1, 4, 0, 0, 0, 8, 0, 0x10, 0]);
+            var sorted = peer.Expect(0, 13).Body;
+            That(U32(sorted, MainEntry(sorted, 121) + 2) == 3330 &&
+                U32(sorted, MainEntry(sorted, 122) + 2) == 10158124 &&
+                U32(sorted, MainEntry(sorted, 123) + 2) == 3037,
+                "材料按类型(condition=6)应将同声明的邀请函和史诗灵魂放在晶块之前，不是按原槽位或ItemId整理");
+            foreach (var pair in new[] { (Before: (short)121, After: (short)123), (Before: (short)123, After: (short)122), (Before: (short)125, After: (short)121) })
+                Bytes(sorted.AsSpan(MainEntry(sorted, pair.After) + 2, 121), original.AsSpan(MainEntry(original, pair.Before) + 2, 121),
+                    "材料类型整理仅改变槽位，保留数量及完整实例条目");
+            That(fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items WHERE character_id=$p0 ORDER BY item_uid", peer.Id) == cores,
+                "材料类型整理提交后保留全部UID与完整核心");
+            peer.Barrier(packet => That(packet.Opcode is not (14 or 1681), "材料类型整理只发NOTI13，不重新标记获得图标"));
+            string before = Snapshot(fixture);
+            peer.Send(20, request);
+            peer.Expect(1, 20, [1, 4, 0, 0, 0, 8, 0, 0x10, 0]);
+            peer.Barrier(packet => That(packet.Opcode is not (13 or 14 or 1681), "已按类型整理的材料重复请求只回ACK"));
+            That(Snapshot(fixture) == before, "材料重复整理不改数据库、审计或revision");
+            peer.Send(7);
+            peer.Expect(1, 7, [1]);
+            peer.Expect(0, 2);
+            Bytes(peer.Select()[4].Body, sorted, "材料类型整理后重选回读相同完整物品栏");
         }
         That(fixture.Query("SELECT count(*) FROM character_inventory_items WHERE character_id=2") is [[4L]], "deleted equipment never returns on restart");
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]], "TCP inventory database integrity");
@@ -589,6 +638,47 @@ internal static partial class InventoryTcpTests
                 U16(player, at + 32) == 8 && player[at + 50] == 4 &&
                 player.AsSpan(at + 34, 16).SequenceEqual(new byte[] { 3, 1, 2, 3, 2, 4, 5, 3, 6, 7, 1, 1, 1, 4, 8, 9 }),
                 "完整Player独立消费强化、附魔、增幅、锻造、符文和交错随机属性，包含变换预览");
+        }
+    }
+
+    static void VerifyMaterialSortConditions()
+    {
+        foreach (var page in new[]
+        {
+            (List: InventoryListType.Main, Kind: ItemKind.Material, Start: (short)121, RequestKind: ItemKind.Material),
+            (List: InventoryListType.Main, Kind: ItemKind.Profession, Start: (short)233, RequestKind: ItemKind.Profession),
+            (List: InventoryListType.PersonalCargo, Kind: ItemKind.Material, Start: (short)0, RequestKind: (ItemKind)11),
+            (List: InventoryListType.AccountCargo, Kind: ItemKind.Material, Start: (short)0, RequestKind: ItemKind.Material)
+        })
+        {
+            var catalog = new ItemCatalog(null!, new Dictionary<int, string>(), new Dictionary<int, string>(), 0);
+            catalog.PrefillTemplates(new Dictionary<int, ItemTemplate>
+            {
+                [1] = new(1, page.Kind, 0, 1, 0, 99, 0, 0, 0, "[free]", 1, 0, "分类乙", "[material] 2"),
+                [2] = new(2, page.Kind, 0, 1, 0, 99, 0, 0, 0, "[free]", 1, 0, "分类甲一", "[material] 0"),
+                [3] = new(3, page.Kind, 0, 1, 0, 99, 0, 0, 0, "[free]", 1, 0, "分类甲二", "[material] 0")
+            });
+            var before = new InventorySnapshot([
+                new(1, new(page.List, page.Start), new(1, page.Kind, 2)),
+                new(2, new(page.List, (short)(page.Start + 2)), new(3, page.Kind, 3)),
+                new(3, new(page.List, (short)(page.Start + 4)), new(2, page.Kind, 4))
+            ]) { AccountCargo = new(Capacity: 8) };
+            var result = InventorySortService.Plan(before, page.RequestKind, 6, catalog, 0, page.List);
+            bool materialPage = page.List == InventoryListType.Main && page.Kind == ItemKind.Material;
+            int[] expected = materialPage ? [2, 3, 1] : page.List == InventoryListType.Main ? [1, 3, 2] : [1, 2, 3];
+            That(result.Accepted && result.Plan!.After.Items.Select(item => item.Core.ItemId).SequenceEqual(expected),
+                "condition6仅为Main材料启用类型键，副职业保槽、两仓库保留默认编号序 " + page.List + "/" + page.Kind);
+            if (!materialPage)
+                continue;
+            var legacy = InventorySortService.Plan(before, ItemKind.Material, 3, catalog, 0);
+            That(legacy.Accepted && result.Plan!.After.Items.SequenceEqual(legacy.Plan!.After.Items),
+                "材料condition6与旧3复用相同类型键、完整实例及目标槽");
+            foreach (byte condition in new byte[] { 0, 255 })
+            {
+                var fallback = InventorySortService.Plan(before, ItemKind.Material, condition, catalog, 0);
+                That(fallback.Accepted && fallback.Plan!.After.Items.Select(item => item.Core.ItemId).SequenceEqual(new[] { 1, 3, 2 }),
+                    "材料按栏位和未知条件仍仅压紧原槽位，不借类型或编号排序 " + condition);
+            }
         }
     }
 
