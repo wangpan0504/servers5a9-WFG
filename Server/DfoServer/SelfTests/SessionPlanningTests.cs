@@ -780,6 +780,7 @@ internal static partial class SessionPlanningTests
                 INSERT INTO character_skill_combos VALUES({{id}},0,5,X'');
                 INSERT INTO character_client_settings VALUES({{id}},'planning',zeroblob(512));
                 INSERT INTO character_game_settings VALUES({{id}},'planning',zeroblob(204));
+                INSERT INTO character_hotkey_settings VALUES({{id}},'planning',0,X'4930310937370A');
                 INSERT INTO character_quest_notify VALUES({{id}},'planning',X'02000000000000000000000000000000');
                 INSERT INTO character_npc_bookmarks VALUES({{id}},'planning',X'11000000');
                 INSERT INTO character_privilege_service VALUES({{id}},1000,2000000000,1,1,739916,5,739916,1);
