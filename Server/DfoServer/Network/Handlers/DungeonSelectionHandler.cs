@@ -196,6 +196,24 @@ internal sealed class DungeonSelectionHandler(TownProjection projection, ServerL
         if ((context.Session.HasMultiplePartyMembers?.Invoke() == true || soloHeroParty) &&
             context.Session.Phase is SessionPhase.Town or SessionPhase.MapSelect)
         {
+            if (entry.DungeonIndex == 5000 && context.Session.Phase == SessionPhase.Town)
+            {
+                var before = context.Owner.Execute(() => (context.Session.Selected, context.Session.Ready,
+                    context.Session.SelectionEpoch, Party: context.Session.CurrentParty?.Invoke()));
+                if (before.Party is { Members.Length: > 1 } trainingParty)
+                {
+                    // 当前训练Run只支持单人；不能先用27将全队推进空选图，再在排队16中拒绝。
+                    log.Write("dungeon_entry", new { Connection = context.Id, Accepted = false, Party = true,
+                        Dungeon = entry.DungeonIndex, Members = trainingParty.Members.Length, Reason = "training-party-entry-unavailable" });
+                    // 失败不是已提交成功消息；Post保留取帧守卫，不沿共享成功发布的FIFO收据排队。
+                    context.Sender.Post(1, (ushort)CmdPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionUnavailable(), "training_party_entry_rejected",
+                        () => context.Owner.Execute(() => before.Ready && context.Session.Ready &&
+                            context.Session.Phase == SessionPhase.Town && context.Session.SelectionEpoch == before.SelectionEpoch &&
+                            ReferenceEquals(context.Session.Selected, before.Selected) &&
+                            ReferenceEquals(context.Session.CurrentParty?.Invoke(), trainingParty)));
+                    return CommandResult.Handled;
+                }
+            }
             if (partyDungeons is null) return CommandResult.Unhandled;
             if (entry.DungeonIndex != 0)
             {
