@@ -690,8 +690,8 @@ internal static partial class FormalDungeonTcpTests
             fixture.Sql("UPDATE character_fatigue SET used=maximum,remaining=0");
             string stored = fixture.Snapshot("SELECT * FROM character_fatigue");
             var selected = peer.Select().Single(row => row.Kind == 1 && row.Opcode == 4).Body;
-            That(U16(selected,11) == 0 && U16(selected,228) == 156 && fixture.Snapshot("SELECT * FROM character_fatigue") == stored,
-                "无限疲劳选角显示满值但不覆盖真实零疲劳");
+            That(U16(selected,11) == 0 && U16(selected,13) == 156 && fixture.Snapshot("SELECT * FROM character_fatigue") == stored,
+                "无限疲劳选角显示满值但不覆盖真实零疲劳；头=" + U16(selected,11) + ",疲劳=" + U16(selected,13) + ",前=" + stored + ",后=" + fixture.Snapshot("SELECT * FROM character_fatigue"));
             EntryTown(peer); SelectMap(peer);
             byte[] selection = Selection();
             BinaryPrimitives.WriteUInt32LittleEndian(selection.AsSpan(16),0);
