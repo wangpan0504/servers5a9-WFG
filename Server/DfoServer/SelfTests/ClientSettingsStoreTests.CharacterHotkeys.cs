@@ -17,7 +17,9 @@ internal static partial class ClientSettingsStoreTests
             f.Execute($"INSERT INTO account_hotkey_settings VALUES('settings-a',0,X'{Convert.ToHexString(legacy.AsSpan())}')");
             f.Service.SaveHotkeys(f.Owner, f.First.Id, 0, saved);
             if (localBattery)
-                f.Execute($"DROP TABLE character_hotkey_settings; INSERT INTO character_fatigue_battery VALUES({f.First.Id},17,31)");
+                f.Execute($"DROP TABLE character_hotkey_settings; " +
+                    $"INSERT INTO character_fatigue VALUES({f.First.Id},'settings-a',0,156,0,156,0,0); " +
+                    $"INSERT INTO character_fatigue_battery VALUES({f.First.Id},17,31)");
             else
                 f.Execute("DROP TABLE character_fatigue_battery");
             f.Execute("PRAGMA user_version=208");
