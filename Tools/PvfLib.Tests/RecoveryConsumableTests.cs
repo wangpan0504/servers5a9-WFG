@@ -4,8 +4,28 @@ namespace PvfLib.Tests;
 
 internal static class RecoveryConsumableTests
 {
+    static void RepeatedPurchaseMaterials()
+    {
+        string[] strings = ["[hp recovery]", "+", "myself", "[need material]", "[/need material]"];
+        string Resolve(int at) => strings[at];
+        PvfToken[] prefix = [new(3, 0), new(6, 1), new(0, 410), new(0, 1000), new(6, 2),
+            new(3, 3), new(0, 5050508), new(0, 30), new(3, 4)];
+        PvfToken[] price = [new(3, 3), new(0, 10004697), new(0, 25), new(3, 4)];
+        var parsed = RecoveryConsumableFile.Parse(10004688, "stackable/repeated-price.stk", [..prefix, ..price], Resolve);
+        That(parsed.Diagnostics.IsEmpty && parsed.HpRecovery is { Amount: 410 } && parsed.DeclaredFields.Contains("need material"),
+            "两段完整商店材料价格不影响消耗品效果解析，价格声明仍保留");
+        foreach (PvfToken[] bad in new PvfToken[][] { [new(3, 3), new(3, 4)],
+            [new(3, 3), new(0, 10004697), new(3, 4)], [new(3, 3), new(0, 10004697), new(0, 0), new(3, 4)],
+            [new(3, 3), new(6, 1), new(0, 25), new(3, 4)] })
+            That(!RecoveryConsumableFile.Parse(10004688, "stackable/repeated-price.stk", [..prefix, ..bad], Resolve).Diagnostics.IsEmpty,
+                "重复价格含空值、残缺、非正整数或错类型时仍保留诊断");
+        Reject<InvalidDataException>(() => RecoveryConsumableFile.Parse(10004688, "stackable/repeated-price.stk",
+            [..prefix, new(3, 3), new(0, 10004697), new(0, 25)], Resolve));
+    }
+
     public static void Run()
     {
+        RepeatedPurchaseMaterials();
         UseRestrictionDeclarations();
         string[] strings = ["[cool time]", "[cooltime group]", "[hp recovery]", "+", "myself", "[need material]", "[sub type]",
             "[stat change duration]", "party", "[effect maintenance]", "[cooltime maintenance]", "[quest exp bonus rate]", "[exp bonus rate]",
