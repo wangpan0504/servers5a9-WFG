@@ -85,10 +85,13 @@ internal static class DailyRetainedBoosterTcpTests
                 resources.ItemResources.Boosters.DailyRetainedTemplateIds.All(usedRows.ContainsKey), "无请求时收到完整的礼盒零次数视图");
             var favor = notices.Single(row => row is { Kind: 0, Opcode: 746 });
             Bytes(favor.Body, [1, 17, 0, 0, 0, 48, 117, 0, 0, 0, 4, 0, 47, 1, 0, 2, 0, 3, 0], "NPC好感在线日切保留颜色并清零视图次数");
+            foreach (var notice in notices.Where(row => row.Opcode is 832 or 833)) peer.ValidateServiceDayNotice(notice);
+            That(notices.Count(row => row.Opcode == 832) == 1 && notices.Count(row => row.Opcode == 833) == 1,
+                "在线日切额度各发送一次并严格验证当前角色通知正文");
             That(notices.Any(row => row is { Kind: 0, Opcode: 550, Body.Length: 6 }) &&
                 notices.Any(row => row is { Kind: 0, Opcode: 1536, Body.Length: 5 }) &&
                 notices.Where(row => row.Opcode == 550).All(row => row.Body.Length == 6 && U32(row.Body) > 0) &&
-                notices.All(row => row.Kind == 0 && row.Opcode is 14 or 21 or 356 or 541 or 550 or 574 or 746 or 1343 or 1349 or 1536),
+                notices.All(row => row.Kind == 0 && row.Opcode is 14 or 21 or 356 or 541 or 550 or 574 or 746 or 832 or 833 or 1343 or 1349 or 1536),
                 "礼盒、好感、副本和强袭在线日切通知均按已登记格式接收");
             Bytes(notices.Single(row=>row is {Kind:0,Opcode:14}).Body,Build(writer=>
             {

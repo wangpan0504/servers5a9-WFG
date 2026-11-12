@@ -408,6 +408,11 @@ internal static class LukeRaidClockTests
         readonly object gate = new();
         long stamp;
         internal int Callbacks;
+        internal long[] PendingOneShots
+        {
+            get { lock (gate) return timers.Where(timer => !timer.Stopped && !timer.Inert && timer.Due != long.MaxValue)
+                .Select(timer => timer.Due).ToArray(); }
+        }
         // 只读指定团本one-shot的已登记截止；不把其它Runtime定时器当作Luke重排证据。
         internal (Guid Instance, long Due)[] PendingDeadlines
         {

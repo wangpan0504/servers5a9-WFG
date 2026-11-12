@@ -39,9 +39,27 @@ internal static class AdventureCapsuleTests
             repo.InitializeAdventure(owner, catalog, now);
             using var db = new SqliteConnection("Data Source=" + path + ";Pooling=False;Foreign Keys=True"); db.Open();
             // 周期列必须与当前周四边界一致：否则载入时按公告清空刚种下的胶囊进度。
-            Execute("UPDATE account_adventures SET capsule_experience=" + catalog.Capsule.MinimumExperience +
+            Execute("UPDATE account_adventures SET capsule_experience=" + catalog.Capsule.GaugeExperience +
                 ",capsule_week=" + AdventurePeriod.CapsuleWeek(catalog, now));
             var snapshot = repo.ReadAdventure(owner, catalog, now);
+            var accumulated = snapshot.State with { CapsuleExperience = 0 };
+            for (uint count = 1; count <= catalog.Capsule.MaximumGauges; count++)
+            {
+                accumulated = AdventureProgression.Advance(accumulated, 0, catalog.Capsule.GaugeExperience, catalog);
+                That(accumulated.CapsuleExperience == count * catalog.Capsule.GaugeExperience &&
+                    DfoServer.Network.Builders.AdventurePackets.Claims(accumulated, catalog) == count,
+                    "真实资源逐颗累计与协议颗数一致，不在第一颗封顶");
+            }
+            That(AdventureProgression.Advance(accumulated, 0, 1, catalog).CapsuleExperience == catalog.CapsuleCapacity,
+                "满十颗后继续获得经验仍按资源最大颗数封顶");
+            That(service.Claim(snapshot with { State = snapshot.State with
+                { CapsuleExperience = catalog.Capsule.GaugeExperience - 1 } }, actor).Error == 3,
+                "未满一颗即使超过minimum高亮阈值也不可领取");
+            var partial = service.Claim(snapshot with { State = snapshot.State with
+                { CapsuleExperience = catalog.Capsule.GaugeExperience + catalog.Capsule.MinimumExperience } }, actor).Plan!;
+            That(partial.After.CapsuleExperience == catalog.Capsule.MinimumExperience &&
+                partial.Growth.Learning.Experience == actor.Learning.Experience + catalog.Capsule.GrantedExperience,
+                "领取只扣完整一颗并保留尾数，不把minimum阈值兑换成整颗奖励");
             That(service.Claim(snapshot, actor with { Level = (byte)(catalog.Capsule.MinimumLevel - 1) }).Error == 14 &&
                 service.Claim(snapshot, actor with { Level = (byte)(catalog.Capsule.MaximumLevel + 1) }).Error == 13 &&
                 service.Claim(snapshot, actor with { DungeonState = null }).Error == 3 &&
@@ -51,7 +69,7 @@ internal static class AdventureCapsuleTests
             Execute("CREATE TRIGGER reject_capsule BEFORE INSERT ON account_adventure_receipts BEGIN SELECT RAISE(ABORT,'late failure'); END");
             Reject<SqliteException>(() => repo.CommitAdventureCapsule(owner, plan, catalog, now), "胶囊晚期凭据失败回滚角色成长和账号扣除");
             That(SkillRepositoryTests.Equal(repo.LoadCharacter(owner, actor.Slot), actor) &&
-                Query("SELECT capsule_experience FROM account_adventures") is long progress && progress == (long)catalog.Capsule.MinimumExperience,
+                Query("SELECT capsule_experience FROM account_adventures") is long progress && progress == (long)catalog.Capsule.GaugeExperience,
                 "失败不留下经验、技能、版本或半份胶囊扣除");
             Execute("DROP TRIGGER reject_capsule");
             var committed = repo.CommitAdventureCapsule(owner, plan, catalog, now);

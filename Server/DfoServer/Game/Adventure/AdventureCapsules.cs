@@ -19,10 +19,10 @@ internal sealed class AdventureCapsuleService(AdventureCatalog catalog, Characte
         if (character.DungeonState is null) return (null, 3);
         if (character.Level < catalog.Capsule.MinimumLevel) return (null, 14);
         if (character.Level > catalog.Capsule.MaximumLevel) return (null, 13);
-        if (snapshot.State.CapsuleExperience < catalog.Capsule.MinimumExperience) return (null, 3);
+        if (snapshot.State.CapsuleExperience < catalog.Capsule.GaugeExperience) return (null, 3);
         var result = CharacterGrowthPlan.AddExperience(character, catalog.Capsule.GrantedExperience, growth);
         if (!result.Success) return (null, 3);
-        return (new(snapshot, snapshot.State with { CapsuleExperience = snapshot.State.CapsuleExperience - catalog.Capsule.MinimumExperience },
+        return (new(snapshot, snapshot.State with { CapsuleExperience = snapshot.State.CapsuleExperience - catalog.Capsule.GaugeExperience },
             character, result.Plan!), 0);
     }
 }

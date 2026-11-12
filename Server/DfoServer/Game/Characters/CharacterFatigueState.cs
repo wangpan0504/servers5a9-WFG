@@ -5,6 +5,8 @@ internal sealed record CharacterFatigueState(ushort Used, ushort Maximum, ushort
     ushort Remaining, ushort ContextAuxiliary, ushort SelectionAuxiliary)
 {
     public int ResetDay { get; init; }
+    public ushort BatteryCharging { get; init; }
+    public ushort BatteryBuff { get; init; }
     public const string OrdinaryRoomRuleId = "local-3145-first-room-fatigue-v1";
     public const string NormalRoomRuleId = "local-normal-first-room-fatigue-v1";
     // #511 [use fatigue only start dungeon] N 的入场一次性扣点账本规则。
@@ -38,7 +40,8 @@ internal sealed record CharacterFatigueState(ushort Used, ushort Maximum, ushort
 
     public void Validate()
     {
-        if (Maximum == 0 || Used > Maximum || Remaining > Maximum || ResetDay < 0 || ResetDay > DateOnly.MaxValue.DayNumber)
+        if (Maximum == 0 || Used > Maximum || Remaining > Maximum || BatteryCharging > short.MaxValue ||
+            ResetDay < 0 || ResetDay > DateOnly.MaxValue.DayNumber)
             throw new InvalidDataException("疲劳耗用值或当前剩余量超过实际上限");
     }
 
@@ -47,12 +50,14 @@ internal sealed record CharacterFatigueState(ushort Used, ushort Maximum, ushort
     {
         Validate();
         if (amount == 0 || Remaining < amount) throw new InvalidOperationException("入场疲劳余额不足");
-        return this with { Used = (ushort)Math.Min(Maximum, Used + amount), Remaining = (ushort)(Remaining - amount) };
+        return this with { Used = (ushort)Math.Min(Maximum, Used + amount), Remaining = (ushort)(Remaining - amount),
+            BatteryBuff = (ushort)Math.Max(0, BatteryBuff - amount) };
     }
 
     public CharacterFatigueState ConsumeOrdinaryRoom(ushort amount = 1)
     {
         Validate();
-        return this with { Used = (ushort)Math.Min(Maximum, Used + amount), Remaining = (ushort)Math.Max(0, Remaining - amount) };
+        return this with { Used = (ushort)Math.Min(Maximum, Used + amount), Remaining = (ushort)Math.Max(0, Remaining - amount),
+            BatteryBuff = (ushort)Math.Max(0, BatteryBuff - amount) };
     }
 }

@@ -6,6 +6,10 @@ internal sealed record PreyBoardingState(RaidActor Actor, AntonRaidBattle Battle
 
 internal sealed partial class GameSession
 {
+    // 准备倒数期间只允许原候战区登上甲板，不能据此进入左右待机区或正式副本。
+    bool HasPreyPreparationBoardingAccess => CapturePreyBoarding() is { Area: 2, Battle.PreyGuide: false } boarding &&
+        boarding.Battle.PreyPreparationPending(boarding.Battle.View);
+
     internal AntonRaidBattleChange? CompletePreyBoardingPreparation(Guid instance) => owner.Execute(() =>
     {
         if (CapturePreyBoarding() is not { Area: 2 } boarding || boarding.Battle.Instance != instance ||

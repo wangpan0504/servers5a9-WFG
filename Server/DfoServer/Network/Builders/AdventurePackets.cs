@@ -27,7 +27,7 @@ internal static class AdventurePackets
     public const int PurchasesOffset = 5312;
     public const int ContentCountsOffset = 7360;
     public const int CapsuleOffset = 7424;
-    public const int ClaimsOffset = 7432;
+    public const int CapsulePreviewExperienceOffset = 7432;
 
     public static byte[] Ack(ushort error = 0) => Build(writer =>
     {
@@ -109,7 +109,7 @@ internal static class AdventurePackets
             raw[ContentCountsOffset + type * 3 + 2] = collection[type].Complete ? (byte)1 : (byte)0;
         }
         U64(raw, CapsuleOffset, snapshot.State.CapsuleExperience);
-        U32(raw, ClaimsOffset, Claims(snapshot.State, catalog));
+        U32(raw, CapsulePreviewExperienceOffset, CapsulePreviewExperience(snapshot.State, catalog));
         writer.Write(raw.Length); writer.Write(raw); PacketEncoding.WriteString(writer, snapshot.State.Name);
     });
 
@@ -122,12 +122,18 @@ internal static class AdventurePackets
         // 经验表按level+1自行计算后写入。两条路径写同一份「下一级所需经验」，本服必须下发同一结果：
         // 留0会让每个1349（入城、商店、远征、胶囊提取）到达后把该字段覆盖成0，面板经验显示失真。
         U64(raw, 16, catalog.Experience.GetValueOrDefault(state.Level + 1));
-        U64(raw, 24, state.CapsuleExperience); U32(raw, 32, Claims(state, catalog));
+        U64(raw, 24, state.CapsuleExperience);
+        U32(raw, 32, CapsulePreviewExperience(state, catalog));
         writer.Write(raw.Length); writer.Write(raw); writer.Write(new byte[4]);
     });
+    // 1343 RAW+7432与1349 RAW+32都写manager+2B0；00D91A40直接显示它并计算领取后的等级。
+    // 1499每次只领取一颗，完整颗数另由0102F250按账号计量计算，不能把颗数或全部奖励写进预览。
+    static uint CapsulePreviewExperience(AdventureState state, AdventureCatalog catalog) =>
+        Claims(state, catalog) == 0 ? 0 : catalog.Capsule.GrantedExperience;
+
     // 客户端按胶囊格数展示可领取次数；经验上限可能覆盖多格，但显示不能超过资源声明的最大格数。
     public static uint Claims(AdventureState state, AdventureCatalog catalog) =>
-        (uint)Math.Min(catalog.Capsule.MaximumGauges, state.CapsuleExperience / catalog.Capsule.MinimumExperience);
+        (uint)Math.Min(catalog.Capsule.MaximumGauges, state.CapsuleExperience / catalog.Capsule.GaugeExperience);
 
     public static byte[] Candidates(IReadOnlyList<AdventureMember> rows, byte region) => Build(writer =>
     {

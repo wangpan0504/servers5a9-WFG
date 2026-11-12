@@ -114,7 +114,8 @@ internal static class QuestCompletionPlanTests
             plan.Growth.Learning.Trees[0].Tp != 9 || plan.Growth.Learning.Trees[1].Tp != 11 || plan.Rewards.Length != 7 ||
             plan.ActiveAfter.Length != 0 || !plan.CompletedAfter.SequenceEqual([3000, 3145]) || plan.GoldAmount != 0 ||
             plan.Inventory.After.Gold != character.Inventory.Gold || plan.FrozenAt != now ||
-            !plan.Rewards.Select(reward => reward.Core.ItemId).SequenceEqual(new[] { 10165055, 101010438, 10403, 12403, 14403, 16403, 18403 }) ||
+            !plan.Rewards.Select(reward => reward.Core.ItemId).SequenceEqual(new[] { 10165055, 10005531, 8050536, 12403, 14403, 16403, 18403 }) ||
+            !plan.Rewards.Select(reward => reward.Core.Value).SequenceEqual(new[] { 1, 1, 1, 999999998, 999999998, 999999998, 999999998 }) ||
             plan.Rewards.Any(reward => reward.ExpectedDestinationUid != 0 || reward.GrantedCount != 1) ||
             plan.Inventory.After.Items.Any(item => item.Uid != 0) || character.ActiveMainQuests.Length != 1 || character.Learning.Experience != 0)
             throw new InvalidOperationException("FAIL 3145真实资源七项资产、成长、任务整批只读规划");

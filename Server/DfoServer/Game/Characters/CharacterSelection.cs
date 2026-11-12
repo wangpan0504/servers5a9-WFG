@@ -15,8 +15,8 @@ internal static class CharacterSelection
         ItemCatalog? items = null, TimeProvider? clock = null, ChannelEntry? channel = null,
         int? previousChannelType = null) => owner.Execute(() =>
     {
-        if (BeastChannel.IsEntry(channel) && !completed.Contains(BeastChannel.EntryQuest))
-            throw new InvalidDataException("魔兽频道要求完成5927");
+        if (BeastChannel.IsEntry(channel) && !BeastChannel.Eligible(character.Level, completed.Contains(BeastChannel.EntryQuest)))
+            throw new InvalidDataException("魔兽频道要求90级并完成5927");
         bool leavingRetiredTown = ChannelAreaLanding.LeavesRetiredTown(character.Position);
         bool leavingRaidInstance = ChannelAreaLanding.IsRaidInstanceArea(character.Position);
         // 同城普通/团队入口按来源频道区分；重启丢失频道历史时，保留已经独立记住的普通地区。

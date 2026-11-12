@@ -126,6 +126,7 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
 
     internal static BoosterDefinition Parse(string text)
     {
+        if (!TryNormalizeStackableType(ref text)) return new([], "礼包堆叠类型声明无效");
         if (!BoosterFirstGrowTypes.TryParse(text, out var branches)) return new([], "礼包首转资格声明无效");
         string tags = Regex.Replace(text, "`[^`]*`", match => new string(' ', match.Length));
         var declarations = Regex.Matches(tags, @"\[\s*/?\s*random\s+option\s+unseal[^\]\r\n]*\]?", RegexOptions.IgnoreCase);
@@ -153,6 +154,34 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
                 NumberStyles.Integer, CultureInfo.InvariantCulture, out int abilityGrade) ? abilityGrade : null,
             CoolTime = coolTime, CoolGroup = coolGroup, CooltimeMaintenance = maintenance
         };
+    }
+
+    static bool TryNormalizeStackableType(ref string text)
+    {
+        string tags = Regex.Replace(text, "`[^`]*`", match => new string(' ', match.Length));
+        var fields = Regex.Matches(tags, @"\[\s*/?\s*stackable\s+type[^\]\r\n]*\]?", RegexOptions.IgnoreCase);
+        if (fields.Count < 2) return true;
+        if (text.Count(value => value == '`') % 2 != 0) return false;
+        var normalized = text.ToCharArray();
+        foreach (Match field in fields)
+        {
+            int start = field.Index + field.Length;
+            int end = tags.IndexOf('[', start);
+            if (end < 0) end = text.Length;
+            if (!field.Value.Equals("[stackable type]", StringComparison.OrdinalIgnoreCase) ||
+                !IsRootDeclaration(tags, field.Index)) return false;
+            var declaration = Regex.Match(text[start..end], @"^\s*`\[[^\]`\r\n]+\]`((?:\s+[+-]?\d+){1,4})\s*$");
+            string[] parameters = declaration.Groups[1].Value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+            if (!declaration.Success || parameters.Length is not (1 or 2 or 4) ||
+                parameters.Any(value => !int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out _)))
+                return false;
+            if (field == fields[^1]) continue;
+            // 与原生及统一物品目录一致：最后完整类型覆盖前值，其余资格和奖励声明原样保留。
+            for (int at = field.Index; at < end; at++)
+                if (normalized[at] is not ('\r' or '\n')) normalized[at] = ' ';
+        }
+        text = new string(normalized);
+        return true;
     }
 
     static bool TryParseCooldown(string text, string tags, out int coolTime, out int? coolGroup, out byte? maintenance)

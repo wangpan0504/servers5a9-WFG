@@ -61,7 +61,7 @@ internal static class BlackDiamondTests
 
     static void Fatigue()
     {
-        var raw = new CharacterFatigueState(40, 156, 7, 116, 9, 11);
+        var raw = new CharacterFatigueState(40, 156, 7, 116, 9, 11) { BatteryBuff = 53 };
         var granted = raw.GrantBlackDiamondCapacity();
         That(granted is { Used: 40, Maximum: 188, Remaining: 148, UsedMaximum: 7, ContextAuxiliary: 9, SelectionAuxiliary: 11 },
             "黑钻补32点总容量与剩余量，不复用第三疲劳字段或覆盖辅助owner");
@@ -78,7 +78,7 @@ internal static class BlackDiamondTests
         byte[] body = FatiguePackets.Current(granted);
         That(BinaryPrimitives.ReadUInt16LittleEndian(body.AsSpan(2)) == 188 &&
             BinaryPrimitives.ReadUInt16LittleEndian(body.AsSpan(4)) == 7 &&
-            BinaryPrimitives.ReadUInt16LittleEndian(body.AsSpan(6)) == 148,
+            BinaryPrimitives.ReadUInt16LittleEndian(body.AsSpan(6)) == 53,
             "NOTI36发送实际188上限，不能复制旧版156/32第三字段格式");
     }
 

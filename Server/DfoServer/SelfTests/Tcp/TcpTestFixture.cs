@@ -149,6 +149,8 @@ internal sealed class TcpTestFixture : IAsyncDisposable
         IsolatedMockBattleSuppressed = true;
     }
     readonly Random? fiendwarMazeRandom;
+    readonly DfoServer.GameWorld.Items.SecretShopCatalog? secretShopRules;
+    internal bool DefaultSecretShopSuppressed => resources is not null && secretShopRules is null;
     int cliSequence;
     readonly string pvfSource;
     string? previousPhase;
@@ -158,7 +160,7 @@ internal sealed class TcpTestFixture : IAsyncDisposable
         Func<int, int>? evildomHiddenDraw = null, DfoServer.GameWorld.Towns.TownCatalog? townCatalog = null,
         Func<DfoServer.GameWorld.Items.CashShopPromotionCatalog>? promotions = null, bool sharedResourcePath = false, bool enablePromotionPage = false,
         Random? fiendwarMazeRandom = null, Func<int, DfoServer.GameWorld.Items.ItemTemplate>? promotionItemResolver = null, bool useDefaultActivities = false,
-        bool? monsterMockBattle = null)
+        bool? monsterMockBattle = null, DfoServer.GameWorld.Items.SecretShopCatalog? secretShopRules = null)
     {
         if (sharedResourcePath && (resources is null ||
             !Path.GetFullPath(source.PvfPath).Equals(Path.GetFullPath(resources.PvfPath), StringComparison.OrdinalIgnoreCase)))
@@ -169,6 +171,7 @@ internal sealed class TcpTestFixture : IAsyncDisposable
         this.promotionItemResolver = promotionItemResolver;
         this.enablePromotionPage = enablePromotionPage;
         this.fiendwarMazeRandom = fiendwarMazeRandom;
+        this.secretShopRules = secretShopRules;
         this.useDefaultActivities = useDefaultActivities;
         // 无关业务夹具显式不装配谋略战，防止登录日补给改写其资产准备；默认活动专项仍走正式默认值。
         this.monsterMockBattle = monsterMockBattle ?? useDefaultActivities;
@@ -406,7 +409,9 @@ internal sealed class TcpTestFixture : IAsyncDisposable
                 repository.OpenAdventureLedger(DateTimeOffset.UtcNow);
                 var runtime = ServerRuntime.Create(options, resources.Archive, repository, townCatalog ?? resources.Towns,
                     resources.Characters, resources.Learning, resources.ItemResources, log, quests, resources.Tutorials,
-                    options.DevelopmentDungeonEntryProbe == DungeonEntryProbeMode.Disabled ? resources.TutorialScenes : null, resources.Adventure, resources.Expeditions, clock,resources.Growth,lukeStartPolicy,evildomHiddenDraw, promotions: CurrentPromotions, enablePromotionPage: enablePromotionPage, fiendwarMazeRandom: fiendwarMazeRandom, promotionItemResolver: promotionItemResolver, epicRoad2019Enabled: options.EpicRoad2019Enabled, dungeonCatalog: resources.Dungeons, enableMonsterMockBattle: monsterMockBattle);
+                    options.DevelopmentDungeonEntryProbe == DungeonEntryProbeMode.Disabled ? resources.TutorialScenes : null, resources.Adventure, resources.Expeditions, clock,resources.Growth,lukeStartPolicy,evildomHiddenDraw, promotions: CurrentPromotions, enablePromotionPage: enablePromotionPage, fiendwarMazeRandom: fiendwarMazeRandom, promotionItemResolver: promotionItemResolver, epicRoad2019Enabled: options.EpicRoad2019Enabled, dungeonCatalog: resources.Dungeons, enableMonsterMockBattle: monsterMockBattle,
+                    // 无关业务隔离随机商人支线，专项显式提供出现表；生产Runtime不使用此缺省。
+                    secretShopRules: secretShopRules ?? Inventory.SecretShopTests.Silent());
                 Volatile.Write(ref runtimeHost, runtime);
                 try { await runtime.RunAsync(hostStop.Token); }
                 finally { Volatile.Write(ref runtimeHost, null); }
@@ -414,6 +419,7 @@ internal sealed class TcpTestFixture : IAsyncDisposable
         }
         else
         {
+            if (secretShopRules is not null) throw new InvalidOperationException("显式神秘商店目录需要同进程Runtime装配");
             if (evildomHiddenDraw is not null) throw new InvalidOperationException("显式魔界随机源需要同进程Runtime装配");
             if (fiendwarMazeRandom is not null) throw new InvalidOperationException("显式漩涡迷宫随机源需要同进程Runtime装配");
             if (lukeStartPolicy is not null) throw new InvalidOperationException("显式Luke执行策略需要真实同进程Runtime装配");

@@ -71,7 +71,7 @@ internal static partial class FormalDungeonTcpTests
             if (requested == 0)
             {
                 var fatigue = peer.Expect(0, 36).Body;
-                var row = fixture.Query("SELECT used,maximum,remaining FROM character_fatigue WHERE character_id=$p0", peer.Id).Single();
+                var row = fixture.Query("SELECT f.used,f.maximum,COALESCE(b.buff,0) FROM character_fatigue f LEFT JOIN character_fatigue_battery b ON b.character_id=f.character_id WHERE f.character_id=$p0", peer.Id).Single();
                 That(fatigue.Length == 10 && U16(fatigue, 0) == Convert.ToInt64(row[0]) &&
                     U16(fatigue, 2) == Convert.ToInt64(row[1]) && U16(fatigue, 6) == Convert.ToInt64(row[2]),
                     "普通0保持真实逐房疲劳合同，通知与SQLite一致");

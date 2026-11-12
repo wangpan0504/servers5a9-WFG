@@ -20,7 +20,9 @@ internal static class PreyTeamLandingTests
         Expire(new(9000, 0));
         var view = battle.View;
         var firstLanding = battle.CapturePreyLanding(view, 4);
-        That(firstLanding is { Dungeon: 12, Side: 4, Arrival.FromArea: 301, Arrival.Phase: 0 } &&
+        That(firstLanding is { Side: 4, Arrival.FromArea: 301, Arrival.Phase: 0 } &&
+            firstLanding.Dungeon == view.Symbols["[area_1]"] && source.Phases[0].Dungeons.Any(row =>
+                row.Id == firstLanding.Dungeon && row.Declarations.Any(field => field.Tag == "[type]" && field.Values is [{ Text: "sanctuary" }])) &&
             battle.CapturePreyLanding(view, 5) is null && battle.CapturePreyLanding(view, 3) is null,
             "当前到达圣地只安排左侧，中央及防御侧不授权");
         Expire(new(9001, 0));

@@ -388,7 +388,16 @@ internal static class SqliteMigrations
         new(206, "回归账本与已发布本地205兼容", UpgradeReturningAdventurer206),
         new(207, "账号冒险团四组名称与图标", SocialSchema.UpgradeGroups),
         new(208, "角色独立键位", UpgradeCharacterHotkeys),
+        new(209, "角色键位与本地蓄电池208兼容", UpgradeFatigueBattery209),
     ];
+
+    static void UpgradeFatigueBattery209(SqliteConnection db, SqliteTransaction tx)
+    {
+        // 上游208已有角色键位，不再次回填后来新建的角色；本地208只有电池时才补齐键位。
+        if (!KnownTable(db, tx, "character_hotkey_settings", CharacterHotkeySettingsSchema))
+            UpgradeCharacterHotkeys(db, tx);
+        FatigueBatterySchema.Upgrade(db, tx);
+    }
 
     static void UpgradeReturningAdventurer206(SqliteConnection db, SqliteTransaction tx)
     {
@@ -2741,6 +2750,7 @@ internal static class SqliteMigrations
             (PvpMissionSchema.ClaimTable,PvpMissionSchema.Claims),
             (PvpDailyMissionSchema.Table,PvpDailyMissionSchema.Sql),
             (FatigueDailyResetSchema.Table,FatigueDailyResetSchema.Definition),
+            (FatigueBatterySchema.Table,FatigueBatterySchema.Definition),
             (ServerItemUsageSchema.StateTable,ServerItemUsageSchema.StateDefinition),
             (ServerItemUsageSchema.AccountTable,ServerItemUsageSchema.AccountDefinition),
             ("marriage_records",MarriageSameAccountSchema.Definition),

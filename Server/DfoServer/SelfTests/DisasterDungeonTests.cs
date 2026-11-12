@@ -352,6 +352,10 @@ internal static partial class DisasterDungeonTests
                 enough.Session.DungeonSnapshot is { ConsumedFatigue: 6 },
                 "回访首房不重复扣，实际剩余 " + enough.Read().Fatigue?.Remaining +
                 " 应耗 " + enough.Session.DungeonSnapshot?.ConsumedFatigue);
+            var boss = VerifyStoneReward(enough, back!, 0, kills, growth, items, requireExhaustedMove: true);
+            That(enough.Read().Fatigue!.Remaining == 0 && boss.Snapshot.ConsumedFatigue >= 9,
+                "仅8点入场后仍能耗至0并沿真实路线抵达Boss，账本不负数");
+            VerifyLowCrystalClaim(enough, boss, catalog, pvf, kills, growth, items);
         }
         var burningDebug = new GameDebugSettings { PremiumPcRoom = true };
         using (var burning = Open(towns, characters, skills, growth, quests, incounts, items, position, completed, 8, burningDebug))
@@ -395,7 +399,8 @@ internal static partial class DisasterDungeonTests
     {
         foreach (var monster in receipt.Monsters.Monsters)
         {
-            if (!monster.IsBlocking || !monster.CanReportDeath || !receipt.Snapshot.LivingMonsters.Contains(monster.ObjectKey))
+            if (!monster.IsBlocking || !monster.CanReportDeath ||
+                fixture.Session.DungeonSnapshot?.LivingMonsters.Contains(monster.ObjectKey) != true)
                 continue;
             var death = fixture.Session.ObserveFormalDungeonDeath(
                 FormalDungeonSessionTests.Observation(receipt, monster), kills, growth);

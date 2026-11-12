@@ -13,6 +13,8 @@ internal sealed record FormalDungeonReceipt(Character Character, long Generation
     public TimeProvider? BattlePassMissionClock { get; init; }
     public ImmutableArray<InventorySlot> FatigueEnergySlots { get; init; } = [];
     public bool LostLandStarted { get; init; }
+    // 仅首次真实加载成功时冻结，过房或重复加载不重新启动本地倒计时。
+    public BossRushHud? BossRushStart { get; init; }
     public ImmutableArray<ushort> PartyActors { get; init; } = [];
     public ImmutableArray<DfoServer.Game.Guild.GuildDungeonMembership> GuildMemberships { get; init; } = [];
     public byte PartySlot { get; init; }
@@ -105,6 +107,9 @@ internal sealed record DungeonSettlementPresentation(uint ClearTimeMilliseconds,
     public uint MonsterGrowthContractExperience { get; init; }
     public uint MonsterEquipmentExperience { get; init; }
     public uint MonsterFatigueBurningExperience { get; init; }
+    public uint MonsterGuildExperience { get; init; }
+    public uint MonsterFatigueBuffExperience { get; init; }
+    public uint MonsterPartyExperience { get; init; }
     // 本实例实际到账的领主基础经验合计；客户端结果页“领主”行只读该口径，不取对象明细。
     public uint MonsterBossExperience { get; init; }
     // 按击杀顺序累计；为空时客户端只能显示特殊怪物行而显示不出各自经验。

@@ -283,6 +283,7 @@ internal static class SelfTestRunner
         DungeonPickupPlanningTests.RunCore();
         EquipmentGoldBonusTests.RunCore();
         EpicPieceShopTests.RunCore();
+        SecretShopTests.RunCore();
         DungeonPassiveDropTests.RunCore();
         SkillLearningDisconnectTests.Run();
         GuildParameterTests.RunCore();

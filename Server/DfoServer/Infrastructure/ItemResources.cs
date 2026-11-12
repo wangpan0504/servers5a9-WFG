@@ -34,6 +34,7 @@ internal sealed class ItemResources
     public EpicPieceCatalog EpicPieces { get; }
     public EpicPieceBonusDropCatalog EpicPieceBonusDrops { get; }
     public EpicPieceShopCatalog? EpicPieceShop { get; }
+    public SecretShopCatalog? SecretShop { get; }
     public EpicExchangeCatalog EpicExchanges { get; }
     public BoosterCatalog Boosters { get; }
     public RentalCatalog Rental { get; }
@@ -100,6 +101,7 @@ internal sealed class ItemResources
         AvatarDisjoint = new(archive);
         EpicPieces = new(archive);
         EpicPieceShop = archive.Contains(EpicPieceShopCatalog.Path) ? EpicPieceShopCatalog.Load(archive) : null;
+        SecretShop = archive.Contains(SecretShopCatalog.Path) ? new(archive) : null;
         EpicExchanges = new(archive);
         var equipment = PvfScript.List(archive.ReadText("equipment/equipment.lst"));
         var stackable = PvfScript.List(archive.ReadText("stackable/stackable.lst"));

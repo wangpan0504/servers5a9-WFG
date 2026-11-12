@@ -21,16 +21,17 @@ internal static class RevisedBeastTcpTests
         using (var owner = new AccountOwners().Acquire(account, () => { }))
         {
             var repository = new CharacterRepository(f.Database, resources.Quests);
-            roles = Enumerable.Range(0, 2).Select(index =>
+            roles = Enumerable.Range(0, 4).Select(index =>
             {
+                byte level = index == 1 ? (byte)95 : index == 2 ? (byte)89 : (byte)90;
                 var seed = CharacterCreation.Prepare("BeastTcp" + (char)('A' + index), resources.Characters.Get(0),
                     resources.Towns.Room, resources.Towns.InitialReturn, resources.Learning.Get);
                 var role = repository.Create(owner, seed with
                 {
-                    Level = 95, AcceptedStoryLevel = 95, CompletedQuests = [5927],
-                    ActiveMainQuests = index == 0 ? [] : [new(0, 5970, 0) { AcceptanceId = Guid.NewGuid() }],
-                    InitialLearning = SkillPointLedger.Synchronize(0, 0, 95, seed.InitialLearning with
-                        { Experience = resources.Growth.GetLevelStartExperience(95) }, resources.Learning)
+                    Level = level, AcceptedStoryLevel = level, CompletedQuests = index == 3 ? [] : [5927],
+                    ActiveMainQuests = index == 1 ? [new(0, 5970, 0) { AcceptanceId = Guid.NewGuid() }] : [],
+                    InitialLearning = SkillPointLedger.Synchronize(0, 0, level, seed.InitialLearning with
+                        { Experience = resources.Growth.GetLevelStartExperience(level) }, resources.Learning)
                 });
                 var inventory = new InventoryService(resources.ItemResources.Items, resources.ItemResources.GoldLimits,
                     resources.ItemResources.EpicPieces);
@@ -38,7 +39,20 @@ internal static class RevisedBeastTcpTests
             }).ToArray();
         }
         await f.StartAsync();
-        foreach (var role in roles)
+        foreach (var role in roles.Skip(2))
+        {
+            string before = f.Snapshot("SELECT * FROM characters WHERE id=$p0", role.Id);
+            using var peer = Open(f, account, gamePort: ChannelTcpTests.Endpoints(f)[49], channelNumber: 49);
+            peer.Send(8, [255, 255, 2]); // 原生首次名册确认只消费请求，不重复下发登录名册。
+            peer.Send(4, Build(writer => writer.Write(role.Slot)));
+            peer.Expect(1, 4, [0, 96, 0]);
+            // 拒绝后仍在选角阶段，使用该阶段可用的只读名册请求核对连接。
+            peer.Send(8, [255, 255, 2]);
+            peer.Expect(0, 2);
+            That(f.Snapshot("SELECT * FROM characters WHERE id=$p0", role.Id) == before,
+                "89级已完成5927及90级未完成5927均拒绝选角，连接继续且完整角色不变");
+        }
+        foreach (var role in roles.Take(2))
         {
             string ReturnSnapshot() => f.Snapshot("SELECT return_town,return_area,return_x,return_y,return_direction FROM characters WHERE id=$p0", role.Id);
             string ordinaryReturn = ReturnSnapshot();

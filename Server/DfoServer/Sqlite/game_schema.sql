@@ -964,6 +964,12 @@ CREATE TABLE character_fatigue_reset_days(
   service_day INTEGER NOT NULL CHECK(typeof(service_day)='integer' AND service_day BETWEEN 1 AND 3652058)
 );
 
+CREATE TABLE character_fatigue_battery(
+  character_id INTEGER PRIMARY KEY REFERENCES character_fatigue(character_id) ON DELETE CASCADE,
+  charging INTEGER NOT NULL CHECK(typeof(charging)='integer' AND charging BETWEEN 0 AND 32767),
+  buff INTEGER NOT NULL CHECK(typeof(buff)='integer' AND buff BETWEEN 0 AND 65535)
+);
+
 CREATE TABLE character_dungeon_fatigue_receipts(
   character_id INTEGER NOT NULL,account TEXT NOT NULL,instance_id TEXT NOT NULL CHECK(length(instance_id)=32),
   task_attempt INTEGER NOT NULL CHECK(task_attempt>0),map_id INTEGER NOT NULL CHECK(map_id>0),

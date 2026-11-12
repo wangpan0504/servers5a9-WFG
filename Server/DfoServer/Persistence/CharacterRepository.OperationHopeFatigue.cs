@@ -63,6 +63,7 @@ internal sealed partial class CharacterRepository
         command.CommandText = "UPDATE character_fatigue SET used=$used,remaining=$remaining WHERE character_id=$id AND account=$account";
         if (command.ExecuteNonQuery() != 1)
             throw new InvalidOperationException("首次房间扣点缺少原疲劳owner");
+        WriteFatigueBattery(db, tx, owner.Account, expected.Id, target);
         ApplyBattlePassDungeonActivity(db,tx,owner.Account,DfoServer.Game.BattlePass.BattlePassDungeonActivity.PrepareFatigue(
             identity,"hope_area",area,state,target,battlePassClock ?? TimeProvider.System));
         var committed = Require(db, tx, owner.Account, expected.Name, current.Inventory);

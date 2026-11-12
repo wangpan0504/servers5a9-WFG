@@ -87,11 +87,9 @@ internal static class QuestFixedRewardTests
         if (definition.Path != FirstQuestPath || !definition.Tokens.SequenceEqual(quest.Rewards))
             throw new InvalidOperationException("FAIL 3145固定奖励资源身份或原token变化");
 
-        int[] weapons = [101010438, 102040220, 104010230, 106020186, 108000198, 104010230, 109000203,
-            102040220, 106020186, 101010438, 106040494, 101010438, 101030473, 114000021, 108000198, 116000005];
-        for (byte job = 0; job < weapons.Length; job++)
+        for (byte job = 0; job < 16; job++)
         {
-            QuestFixedItemReward[] expected = [new(10165055, 1), new(weapons[job], 1), new(10403, 1),
+            QuestFixedItemReward[] expected = [new(10165055, 1), new(10005531, 1), new(8050536, 1),
                 new(12403, 1), new(14403, 1), new(16403, 1), new(18403, 1)];
             if (!definition.ForJob(job).SequenceEqual(expected))
                 throw new InvalidOperationException("FAIL 3145固定奖励原顺序或职业条件: job=" + job);

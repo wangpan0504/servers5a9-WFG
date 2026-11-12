@@ -176,7 +176,7 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
                         EndlessAdventurePackets.Npc(endless, towns), "endless_adventure_npc",
                         () => publish?.Invoke() != false && context.Session.CanPublishEndlessAdventure(view));
             }
-            await EndlessAdventureProjection.PublishAsync(context, force: endless);
+            await EndlessAdventureProjection.PublishAsync(context, force: endless, eventCatalogActive: endless);
         }
         if (publish?.Invoke() != false) context.WeeklyAttendance?.EventsPublished(weeklyEnabled);
         if (mileage && context.Session.Selected is { } selected)

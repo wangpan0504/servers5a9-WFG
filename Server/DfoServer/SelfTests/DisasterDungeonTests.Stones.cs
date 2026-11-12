@@ -11,7 +11,7 @@ namespace DfoServer;
 internal static partial class DisasterDungeonTests
 {
     static FormalDungeonReceipt VerifyStoneReward(QuestSceneTests.Fixture fixture, FormalDungeonReceipt receipt, int tier,
-        DungeonKillExperienceCatalog kills, CharacterGrowthCatalog growth, ItemResources items)
+        DungeonKillExperienceCatalog kills, CharacterGrowthCatalog growth, ItemResources items, bool requireExhaustedMove = false)
     {
         var start = receipt.Snapshot.CurrentMap.Position;
         var boss = receipt.Entry.BossMap.Position;
@@ -27,13 +27,21 @@ internal static partial class DisasterDungeonTests
         That(previous.ContainsKey(boss), "五张灾难实图均有通向Boss房的原路线");
         var path = new Stack<DungeonPoint>();
         for (var at = boss; at != start; at = previous[at]) path.Push(at);
+        int exhaustedMoves = 0;
         while (path.TryPop(out var next))
         {
             ClearBlocking(fixture, receipt, kills, growth);
+            bool exhausted = fixture.Read().Fatigue!.Remaining == 0;
             That(fixture.Session.MoveFormalDungeon(checked((byte)next.X), checked((byte)next.Y)) is not null,
                 "按原路线进入灾难下一个房间");
             receipt = fixture.Session.CompleteFormalDungeonLoading() ?? throw new InvalidOperationException("灾难Boss路线加载失败");
+            if (exhausted)
+            {
+                exhaustedMoves++;
+                That(fixture.Read().Fatigue!.Remaining == 0, "0疲劳仍可沿路线跨房，余额保持0");
+            }
         }
+        That(!requireExhaustedMove || exhaustedMoves > 0, "8点入场场景明确覆盖疲劳耗0后的继续跨房");
         var stones = receipt.Monsters.Monsters.Where(monster => DisasterDungeonPolicy.IsRewardStone(receipt.Entry, monster)).ToArray();
         That(stones.Length == 5 && stones.Select(monster => monster.MonsterId).Order().SequenceEqual(Enumerable.Range(63489, 5)),
             "Boss房五档石头均绑定真实MOB路径和本实例对象键");

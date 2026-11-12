@@ -426,7 +426,8 @@ internal static class DungeonDropRuleCatalogTests
         That(rules.ProbabilityRows.Length == 10 && rules.ProbabilityRows[0].MinimumLevel == 1 &&
             rules.ProbabilityRows[0].MaximumLevel == 15 && rules.ProbabilityRows[0].Values.SequenceEqual(new[] { 986, 60, 250, 0, 0 }) &&
             rules.RarityDecision.Length == 28 && rules.ItemReferences.Length == 200 && rules.GoldReferences.Length == 200 &&
-            rules.GoldReferences[0] == new DungeonDropGoldReference(1, 17, 13),
+            rules.GoldReferences.SequenceEqual(Enumerable.Range(1, 200)
+                .Select(level => new DungeonDropGoldReference(level, 80000, level <= 77 ? 99 : 9))),
             "匹配PVF全局概率、等级引用及金币表可完整读取；不是掉落计算或界面验收");
     }
 }

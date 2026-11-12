@@ -59,7 +59,7 @@ internal static partial class TownPackets
             writer.Write(training ? (byte)0 : (byte)1);
             if (!training) writer.Write((byte)31);
             writer.Write(fatigue.SelectionAuxiliary);
-            writer.Write(fatigue.Remaining);
+            writer.Write(fatigue.BatteryBuff); // 02341F34/02341F3E：当前与上一蓄电池祝福。
             writer.Write((byte)0);
             writer.Write(fatigue.ContextAuxiliary);
             writer.Write((byte)0);

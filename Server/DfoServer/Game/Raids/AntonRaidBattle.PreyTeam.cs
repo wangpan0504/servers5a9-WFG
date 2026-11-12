@@ -10,8 +10,8 @@ internal sealed partial class AntonRaidBattle
 
     ImmutableDictionary<string, int> InitializePreyTeamSymbols(int phase, ImmutableDictionary<string, int> symbols)
     {
-        symbols = symbols.SetItem("[slenikon hp]", PreyHeader("[max hp]"))
-            .SetItem("[slenikon armor level]", 0);
+        symbols = symbols.SetItem("[slenikon hp]", PreyHeader("[max hp]"));
+        if (phase == 0) symbols = symbols.SetItem("[slenikon armor level]", 0);
         if (phase != 0) return symbols;
         // 原生TYPE 0是普通据点；空区域用7关闭卡片，不能只清DGN或投影Hide。
         for (int slot = 1; slot <= 20; slot++)
@@ -22,6 +22,7 @@ internal sealed partial class AntonRaidBattle
                 action.RawIntegers is [{ } value] && value > 0)?.RawIntegers[0] ?? 0;
         // 四圣地固定在1/5/9/13；开局两处阻击按原RATE选不同模板，后续仍由魔塔生成。
         int[] sanctuaries = [1, 5, 9, 13];
+        preyRandom.Shuffle(sanctuaries);
         int[] positions = Enumerable.Range(1, 16).Except(sanctuaries).ToArray();
         preyRandom.Shuffle(positions);
         int Weight(RaidDungeon row) => row.Declarations.Single(field => field.Tag == "[rate]").Values.Single().Number;
@@ -93,7 +94,7 @@ internal sealed partial class AntonRaidBattle
                 candidate = candidate with { Symbols = candidate.Symbols.SetItem("[clear garden]",
                     script.Phases[0].Dungeons.Count(row => PreyDungeonType(row) == 2 &&
                         candidate.Dungeons.GetValueOrDefault(row.Id) == RaidDungeonState.Clear)) };
-            if (PreyDungeonType(definition) == 5) candidate = RemovePreyArea(candidate, dungeon);
+            if (PreyDungeonType(definition) == 5) candidate = RemovePreyArea(candidate, dungeon, run.PreyArea);
             candidate = EvaluatePreyTeam(candidate, repeatable ? null : dungeon, definition.HpSymbol, null, dungeon);
             RecordGuildClearParty(facts.Select(row => row.Actor.Character));
             foreach (var row in facts)
@@ -173,17 +174,18 @@ internal sealed partial class AntonRaidBattle
             view.Symbols.GetValueOrDefault("[prepare raid]") != 1;
     }
 
-    // 原客户端在594倒数/飞鸟就绪后发送36；该事件提前完成准备，不等待导航备用期限。
+    // 36只表示登船场景就绪；飞行回调不能吞掉到达圣地后的十秒准备倒数。
     internal AntonRaidBattleChange? CompletePreyBoardingPreparation(RaidActor actor)
     {
         lock (gate)
         {
-            if (!actor.IsCurrent || !members.ContainsKey(actor) || !PreyPreparationPending(current)) return null;
+            if (!actor.IsCurrent || !members.ContainsKey(actor) || !PreyPreparationPending(current) ||
+                !PreyGuide && PreyPreparationSeconds(current) is not null) return null;
             return ExpireTimer(Instance, current.Revision, new(9000, 0));
         }
     }
 
-    // 原资源准备期限仅作无登船回调时的备用计时；原生可视倒数由594播放。
+    // 原资源期限覆盖登船飞行和开战倒数，原生可视倒数由594播放。
     internal uint? PreyPreparationSeconds(AntonRaidBattleView view)
     {
         lock (gate)
@@ -231,6 +233,9 @@ internal sealed partial class AntonRaidBattle
     AntonRaidBattleView EvaluatePreyTeam(AntonRaidBattleView state, int? dungeon, string? symbol, RaidTimer? timer,
         int? clear = null, RaidStageFact? stageFact = null)
     {
+        // 此商人由一阶段圣地开启，跨阶段继承的到期事件仍须关闭原存在位。
+        if (state.Phase != 0 && timer == new RaidTimer(10001, 150))
+            state = state with { Symbols = state.Symbols.SetItem("[merchant]", 0) };
         if (timer == new RaidTimer(9000, 0))
         {
             state = state with { Symbols = state.Symbols.SetItem("[prepare raid]", 1) };
@@ -273,8 +278,12 @@ internal sealed partial class AntonRaidBattle
                                 TimerGenerations = state.TimerGenerations.Remove(reset) };
                             break;
                         case "[clear phase]":
-                            state = state with { State = AntonRaidBattleState.Reward, Timers = state.Timers.Clear(),
-                                TimerAnchors = state.TimerAnchors.Clear(), TimerGenerations = state.TimerGenerations.Clear() };
+                            // 最后圣地刚开启的商人仍沿同一30秒期限进入二阶段；不能只继承存在位而丢失到期任务。
+                            var merchantTimer = new RaidTimer(10001, 150);
+                            state = state with { State = AntonRaidBattleState.Reward,
+                                Timers = state.Timers.Where(row => row.Key == merchantTimer).ToImmutableDictionary(),
+                                TimerAnchors = state.TimerAnchors.Where(row => row.Key == merchantTimer).ToImmutableDictionary(),
+                                TimerGenerations = state.TimerGenerations.Where(row => row.Key == merchantTimer).ToImmutableDictionary() };
                             break;
                         case "[reserve spawn]": state = ReservePreyTeamSpawn(state, action.DungeonId!.Value, action.RawIntegers[1]); break;
                         case "[spawn]": state = SpawnPreyTeamDefence(state, action.DungeonId!.Value); break;
@@ -346,6 +355,18 @@ internal sealed partial class AntonRaidBattle
         PreyExpelledRuns = state.PreyExpelledRuns.Union(dungeonRuns.Values.Where(run => run.Installed).Select(run => run.Id))
     };
 
+    AntonRaidBattleView InheritPreyTeamMerchant(AntonRaidBattleView before, AntonRaidBattleView after)
+    {
+        var timer = new RaidTimer(10001, 150);
+        if (after.Symbols.GetValueOrDefault("[merchant]") == 0) return after;
+        if (!before.Timers.TryGetValue(timer, out int seconds) || !before.TimerAnchors.TryGetValue(timer, out long anchor) ||
+            lukeClock.GetElapsedTime(anchor) >= TimeSpan.FromSeconds(seconds))
+            return after with { Symbols = after.Symbols.SetItem("[merchant]", 0) };
+        return after with { Timers = after.Timers.SetItem(timer, seconds),
+            TimerAnchors = after.TimerAnchors.SetItem(timer, anchor),
+            TimerGenerations = after.TimerGenerations.SetItem(timer, before.TimerGenerations[timer]) };
+    }
+
     AntonRaidBattleView AdvancePreyTeamShip(AntonRaidBattleView state)
     {
         int departed = state.Symbols["[slenikon from area]"];
@@ -372,8 +393,10 @@ internal sealed partial class AntonRaidBattle
         if (!PreyTeamSpawnSlotFree(state, tower, slot))
             slot = ChoosePreyTeamSpawnSlot(state, tower);
         if (slot == 0) return state;
+        // 怪物编号是模板，不是战略图据点身份；同种阻击允许在多个空格分别生成。
         var candidates = script.Phases[0].Dungeons.Where(row => PreyDungeonType(row) == 5 &&
-            !Enumerable.Range(1, 16).Any(value => state.Symbols[$"[area_{value}]"] == row.Id)).ToArray();
+            row.InitialState == RaidDungeonState.Open &&
+            row.Declarations.Single(field => field.Tag == "[rate]").Values.Single().Number > 0).ToArray();
         if (candidates.Length == 0) return state;
         int Weight(RaidDungeon row) => row.Declarations.Single(field => field.Tag == "[rate]").Values.Single().Number;
         int roll = preyRandom.Next(candidates.Sum(Weight));
