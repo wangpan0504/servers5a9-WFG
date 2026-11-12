@@ -110,6 +110,22 @@ internal sealed class ExpertJobScriptCatalog
     // 等级 1 起按 [expertness exp] 阈值累计；达到第 N-1 个阈值时显示 N 级，与服务端 Level 一致。
     public int MaxLevel(byte job) => jobs.TryGetValue(job, out var script) ? Math.Max(script.Thresholds.Length, 1) : 0;
 
+    // 满级仍显示最后一档累计经验上限，不能用满级起始经验截断经验条。
+    public int ClampExperience(byte job, int experience)
+    {
+        if (!jobs.TryGetValue(job, out var script)) throw new InvalidDataException("PVF 没有该副职业的等级阈值");
+        int maximum = script.Thresholds.LastOrDefault();
+        if (maximum < 0) throw new InvalidDataException("副职业累计熟练度上限不能为负数");
+        return Math.Clamp(experience, 0, maximum);
+    }
+
+    public int AddExperience(byte job, int experience, long gained)
+    {
+        if (gained < 0) throw new InvalidDataException("副职业熟练度增量不能为负数");
+        int current = ClampExperience(job, experience), maximum = ClampExperience(job, int.MaxValue);
+        return current + (int)Math.Min(gained, maximum - current);
+    }
+
     // 写入某等级的最低累计熟练度：1 级为 0，其余取该等级的起始阈值。
     public int ExperienceForLevel(byte job, int level)
     {
