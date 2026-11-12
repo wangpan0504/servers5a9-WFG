@@ -202,6 +202,11 @@ internal static partial class PartyDungeonTcpTests
             // 只准备普通路线的前置资格；战斗、奖励和清图均经过真实生产协议。
             fixture.Sql("INSERT INTO character_completed_quests(character_id,quest_id) VALUES($p0,3145)", peer.Id);
             fixture.Sql("UPDATE characters SET revive_coins=1 WHERE id=$p0", peer.Id);
+            // 成功拾取核对完整随机金币；在选角前准备容量，保持等级及生产上限规则不变。
+            int goldCapacity = DfoServer.Game.Currency.CurrencyService.ExpandedLimit(4);
+            fixture.Sql("UPDATE characters SET gold_carry_limit=$p0 WHERE id=$p1", goldCapacity, peer.Id);
+            That(fixture.Query("SELECT gold_carry_limit FROM characters WHERE id=$p0", peer.Id) is [[long capacity]] && capacity == goldCapacity,
+                "组队成功拾取角色已准备独立金币携带容量");
             if (checkFrames)
             {
                 int member = Array.IndexOf(participants, peer);
