@@ -78,7 +78,8 @@ internal static partial class ClientSettingsStoreTests
         var migrated = new ClientSettingsRepository(f.Path);
         Check(f.Query("PRAGMA user_version") is long version && version == SqliteMigrations.CurrentVersion &&
             f.Query("SELECT sql FROM sqlite_schema WHERE name='character_hotkey_settings'") is string upgradedSchema &&
-            freshSchema == upgradedSchema && f.Assets() == assets && Legacy() == original,
+            freshSchema.ReplaceLineEndings("\n") == upgradedSchema.ReplaceLineEndings("\n") &&
+            f.Assets() == assets && Legacy() == original,
             "v207升级角色键位与新建库结构同构，旧账号原文及其他资产保持");
         Check(Same(migrated.Load(f.Owner, f.First.Id).Hotkeys, common) && Same(migrated.Load(f.Owner, f.Second.Id).Hotkeys, common) &&
             Same(migrated.Load(f.Owner, creator.Id).Hotkeys, creatorKeys) && migrated.Load(f.OtherOwner, f.Other.Id).Hotkeys.IsDefault &&
