@@ -6,6 +6,15 @@
 
 ## 命令
 
+`prepare-support-graduation current.pvf OverdriveConfiguration.json new-output`为现行装备与毕业平衡差量，
+专项验证使用测试项目的`--graduation`同参数入口。奶妈继承王富贵20905的12件战斗装备三元组，
+小魔女仅换界·夜语黑瞳扫把，光兵换超界苍天布甲五件和界·夜语黑瞳手套，外观保持。
+共享装备继承、套装阈值与原生buff-option门禁计算真实加级，调整两女学习等级以保留同档有效主BUFF及一觉等级。
+三奶仅`huge`（中文毕业）档按原技能表和适用属性反算百分比列：主BUFF力智10915、三攻1739，
+一觉额外力智15470.144。其余档位、持续时间、伤害、偏爱与圣歌保持；不修改真人SKL或客户端最终属性。
+战斗装备后两个原生整数逐项复制参考模板，不把字段猜作额外增幅或附魔；参考当前均为0。
+实际装备追加效果和最终队友面板仍须游戏验收。工具输出逐资源before守卫，不可用旧整PVF覆盖累计。
+
 现行两女平衡使用 `prepare-support-balanced-tiers current.pvf verified-overdrive-report.json new-output`，
 专项验证为测试项目 `--balanced-tiers current.pvf verified-overdrive-report.json new-output`。
 它核对134个专用模板、实际装备和已验证的装备加级，保留学习/被动/装备/AI/KEY，替换旧主BUFF保底加值，

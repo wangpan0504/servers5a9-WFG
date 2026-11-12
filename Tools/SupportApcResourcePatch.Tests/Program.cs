@@ -1,6 +1,12 @@
 using System.Text.Json;
 using PvfLib;
 
+if (args is ["--graduation", var graduationPvf, var graduationConfig, var graduationOutput])
+{
+    SupportGraduationTests.Run(graduationPvf, graduationConfig, graduationOutput);
+    return;
+}
+
 if (args is ["--balanced-tiers", var balancedPvf, var balancedEvidence, var balancedOutput])
 {
     SupportBalancedTierTests.Run(balancedPvf, balancedEvidence, balancedOutput);
