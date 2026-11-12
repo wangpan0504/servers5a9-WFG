@@ -45,14 +45,18 @@ internal static partial class PartyDungeonTcpTests
     {
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "party-quick-slot-energy"), gm: true, resources: resources);
         await fixture.StartAsync();
-        That(DfoServer.Network.Management.DevelopmentGmClient.TryExecute(fixture.Options.GmPort, "infinite-fatigue off", out _),
-            "组队能量回归使用真实有限疲劳");
         foreach (bool entryCost in new[] { false, true })
         {
             var entrance = entryCost ? OrdinaryLukePartyTests.Entrance(resources) :
                 (Position: new DfoServer.GameWorld.Towns.Location(38, 2, 1085, 249), Completed: new[] { 3145 });
-            using var group = new Coop(fixture, resources, entryCost ? "energyluke" : "energyroom", entrance.Position,
-                entrance.Completed, 95, 2, rewards: [new(400360000, 1), new(2683829, 1)]);
+            string accountPrefix = entryCost ? "energyluke" : "energyroom";
+            const int memberCount = 2;
+            for (int member = 0; member < memberCount; member++)
+                That(DfoServer.Network.Management.DevelopmentGmClient.TryExecute(fixture.Options.GmPort,
+                    $"account {accountPrefix}{member} infinite-fatigue off", out var energyReply) &&
+                    energyReply == "OK {\"infiniteFatigue\":false}", "组队能量回归使用真实有限疲劳");
+            using var group = new Coop(fixture, resources, accountPrefix, entrance.Position,
+                entrance.Completed, 95, memberCount, rewards: [new(400360000, 1), new(2683829, 1)]);
             var cores = new DfoServer.Game.Inventory.Models.ItemCore[2];
             var uids = new long[2];
             var initialFatigue = new long[2];
@@ -175,13 +179,16 @@ internal static partial class PartyDungeonTcpTests
             Path.Combine(root, "party-dungeon-" + count + (rollback ? "-rollback" : rejectRetry ? "-retry-rejected" : "")),
             gm: checkFatigue, resources: resources, clock: frameClock);
         await fixture.StartAsync();
+        string[] accounts = count == 4 ? ["partyalpha", "partybeta", "partygamma", "partydelta"] : ["partyalpha", "partybeta"];
         if (checkFatigue)
-            That(DfoServer.Network.Management.DevelopmentGmClient.TryExecute(fixture.Options.GmPort, "infinite-fatigue off", out _),
-                "组队入场拒绝使用实际疲劳余额");
-        using var alpha = Open(fixture, "partyalpha");
-        using var beta = Open(fixture, "partybeta");
-        using var gamma = count == 4 ? Open(fixture, "partygamma") : null;
-        using var delta = count == 4 ? Open(fixture, "partydelta") : null;
+            foreach (string account in accounts)
+                That(DfoServer.Network.Management.DevelopmentGmClient.TryExecute(fixture.Options.GmPort,
+                    $"account {account} infinite-fatigue off", out var initialReply) && initialReply == "OK {\"infiniteFatigue\":false}",
+                    "组队入场拒绝使用实际疲劳余额");
+        using var alpha = Open(fixture, accounts[0]);
+        using var beta = Open(fixture, accounts[1]);
+        using var gamma = count == 4 ? Open(fixture, accounts[2]) : null;
+        using var delta = count == 4 ? Open(fixture, accounts[3]) : null;
         var participants = count == 4 ? new[] { alpha, beta, gamma!, delta! } : new[] { alpha, beta };
         for (int i = 0; i < participants.Length; i++) participants[i].Create("PartyMember" + i);
         Dictionary<TcpPeer, WirePacket[]> All(TcpPeer requester)
@@ -195,10 +202,15 @@ internal static partial class PartyDungeonTcpTests
             // 只准备普通路线的前置资格；战斗、奖励和清图均经过真实生产协议。
             fixture.Sql("INSERT INTO character_completed_quests(character_id,quest_id) VALUES($p0,3145)", peer.Id);
             fixture.Sql("UPDATE characters SET revive_coins=1 WHERE id=$p0", peer.Id);
+            // 成功拾取核对完整随机金币；在选角前准备容量，保持等级及生产上限规则不变。
+            int goldCapacity = DfoServer.Game.Currency.CurrencyService.ExpandedLimit(4);
+            fixture.Sql("UPDATE characters SET gold_carry_limit=$p0 WHERE id=$p1", goldCapacity, peer.Id);
+            That(fixture.Query("SELECT gold_carry_limit FROM characters WHERE id=$p0", peer.Id) is [[long capacity]] && capacity == goldCapacity,
+                "组队成功拾取角色已准备独立金币携带容量");
             if (checkFrames)
             {
                 int member = Array.IndexOf(participants, peer);
-                string account = member == 0 ? "partyalpha" : "partybeta";
+                string account = accounts[member];
                 That(DfoServer.Network.Management.DevelopmentGmClient.TryExecute(fixture.Options.GmPort,
                     $"account {account} black-diamond PartyMember{member} 30", out var reply) && reply.StartsWith("OK ", StringComparison.Ordinal),
                     "两名成员沿实际契约入口准备独立黑钻附加牌");
@@ -300,8 +312,10 @@ internal static partial class PartyDungeonTcpTests
             That(rejected[alpha].Any(p => p is { Kind: 1, Opcode: 16 } && p.Body.SequenceEqual(new byte[] { 0, 22, 0, failedSlot })) &&
                 rejected.Values.All(rows => rows.All(p => p.Opcode is not (28 or 29))) && fixture.Snapshot() == before,
                 "组队疲劳不足的拒绝指向实际失败成员槽，整队不扣费或安装实例");
-            That(DfoServer.Network.Management.DevelopmentGmClient.TryExecute(fixture.Options.GmPort, "infinite-fatigue on", out _),
-                "随后开启无限疲劳，验证同一队伍拒绝后仍可重新入场");
+            foreach (string account in accounts)
+                That(DfoServer.Network.Management.DevelopmentGmClient.TryExecute(fixture.Options.GmPort,
+                    $"account {account} infinite-fatigue on", out var enabledReply) && enabledReply == "OK {\"infiniteFatigue\":true}",
+                    "随后开启无限疲劳，验证同一队伍拒绝后仍可重新入场");
         }
         alpha.Send(16, selection);
         var entered = All(alpha); var enteredA = entered[alpha];
@@ -553,8 +567,10 @@ internal static partial class PartyDungeonTcpTests
                 if (checkFrames || count == 4) VerifyIndependentPaidCards();
                 if (rejectRetry)
                 {
-                    That(DfoServer.Network.Management.DevelopmentGmClient.TryExecute(fixture.Options.GmPort, "infinite-fatigue off", out _),
-                        "结算时恢复队员的真实零疲劳，验证再挑战失败");
+                    foreach (string account in accounts)
+                        That(DfoServer.Network.Management.DevelopmentGmClient.TryExecute(fixture.Options.GmPort,
+                            $"account {account} infinite-fatigue off", out var restoredReply) && restoredReply == "OK {\"infiniteFatigue\":false}",
+                            "结算时恢复队员的真实零疲劳，验证再挑战失败");
                     string entries = fixture.Snapshot("SELECT * FROM character_dungeon_state ORDER BY character_id");
                     string fatigue = fixture.Snapshot("SELECT * FROM character_fatigue ORDER BY character_id");
                     string assets = fixture.Snapshot("SELECT * FROM character_inventory_items ORDER BY item_uid");
