@@ -4,6 +4,7 @@ using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Mailbox;
+using DfoServer.Game.Party;
 using DfoServer.Game.Session;
 using DfoServer.Game.Skills;
 using DfoServer.GameWorld.Characters;
@@ -202,6 +203,104 @@ internal static class DungeonSelectionReturnTests
         }
         finally { TestFiles.DeleteDirectory(root, recursive: true); }
         Console.WriteLine($"PASS {Count - checks} dungeon selection publication assertions");
+    }
+
+    internal static async Task VerifyTrainingPartyEntryAsync(TownCatalog towns, CharacterCatalog characters, ItemResources items, string root)
+    {
+        // 复用受控发送器核验失败投递身份；真实39/0请求和排队16另由训练TCP覆盖。
+        root = Path.Combine(root, "training-party-publication");
+        Directory.CreateDirectory(root);
+        foreach (string scenario in new[] { "normal", "owner", "reselect", "selection", "party" })
+        {
+            var repository = new CharacterRepository(Path.Combine(root, scenario + ".db"));
+            var owners = new AccountOwners();
+            using var owner = owners.Acquire("training-" + scenario, () => { });
+            using var peerOwner = owners.Acquire("training-peer", () => { });
+            var point = new Location(38, 2, 1085, 249);
+            repository.Create(owner, new("TrainLeader", point, point));
+            repository.Create(peerOwner, new("TrainMember", point, point));
+            var session = new GameSession(repository, towns, owner);
+            var member = new GameSession(repository, towns, peerOwner);
+            var parties = new PartyService(repository);
+            foreach (var current in new[] { session, member })
+            {
+                current.Select(0, resumeTown: true);
+                current.MarkReady();
+                current.HasMultiplePartyMembers = () => parties.HasMultipleMembers(current);
+                current.CurrentParty = () => parties.Current(current);
+            }
+            That(parties.Invite(session, member, 0).Accepted &&
+                parties.Respond(member, session.Selected!.Id, 0, true).Accepted,
+                "训练失败投递夹具由实际队伍服务建立双成员队伍");
+            var before = session.Selected;
+            var peerBefore = member.Selected;
+            var party = parties.Current(session);
+            string persisted = JsonSerializer.Serialize(repository.LoadCharacter(owner, 0));
+            string peerPersisted = JsonSerializer.Serialize(repository.LoadCharacter(peerOwner, 0));
+            var presence = new TownPresence(towns);
+            var projection = new TownProjection(towns, new CharacterStatComputer(characters), presence, items.EpicPieces);
+            using var log = new ServerLog(Path.Combine(root, scenario));
+            using var stop = new CancellationTokenSource();
+            using var stream = new HeldOutput { Hold = true };
+            var sent = new List<(byte Kind, ushort Opcode, byte[] Body)>();
+            await using var sender = new GameConnectionSender(owner, stream, stop, 0,
+                (kind, opcode, _, body, _) => sent.Add((kind, opcode, body.ToArray())));
+            var context = new GameConnectionContext(new(1, IPAddress.Loopback, stream, stop), owner, session, sender);
+            var commands = new GameCommandRegistry();
+            new DungeonSelectionHandler(projection, log).Register(commands);
+            commands.Seal();
+            projection.Join(context);
+            var queued = sender.Send(1, 1347, [1], "training_failure_queue_barrier");
+            await stream.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            AccountOwners.Lease? replacement = null;
+            try
+            {
+                That(await commands.DispatchAsync(context, new(1, 15, Convert.FromHexString("88130000"))) == CommandResult.Handled,
+                    "训练失败沿实际分派入队，不持共享门禁等待慢连接");
+                That(ReferenceEquals(before, session.Selected) && ReferenceEquals(peerBefore, member.Selected) &&
+                    ReferenceEquals(party, parties.Current(session)) && presence.Count == 1 &&
+                    session.Phase == SessionPhase.Town && member.Phase == SessionPhase.Town &&
+                    session.CurrentDungeonSelection is null && member.CurrentDungeonSelection is null &&
+                    session.PartyDungeon is null && member.PartyDungeon is null &&
+                    JsonSerializer.Serialize(repository.LoadCharacter(owner, 0)) == persisted &&
+                    JsonSerializer.Serialize(repository.LoadCharacter(peerOwner, 0)) == peerPersisted,
+                    "拒绝不安装任何成员选图或Run，不移除城镇实体、不改变双方快照或持久资产");
+                if (scenario == "owner")
+                    replacement = owners.Acquire(owner.Account, () => { });
+                else if (scenario == "reselect")
+                {
+                    session.ReturnToRoster();
+                    session.Select(0, resumeTown: true);
+                    session.MarkReady();
+                }
+                else if (scenario == "selection")
+                    That(session.BeginDungeonSelection(partyAdmission: true) is not null,
+                        "同选角epoch的新合法选图使旧Town失败不再适用");
+                else if (scenario == "party")
+                    That(parties.Leave(member).Accepted, "退队改变实际队伍快照而不改变队长选角epoch");
+                stream.Release.TrySetResult();
+                bool failed = false;
+                try { await queued; await sender.DrainAsync(); }
+                catch (Exception error) when (error is IOException or InvalidOperationException or OperationCanceledException)
+                { failed = true; }
+                That(failed == (scenario == "owner"), "只有失效owner终止发送，场景/队伍过期只丢弃原失败：" + scenario);
+                var failures = sent.Where(frame => frame is { Kind: 1, Opcode: 15 }).ToArray();
+                That(scenario == "normal"
+                    ? failures.Length == 1 && failures[0].Body.SequenceEqual(new byte[] { 0, 1, 0 })
+                    : failures.Length == 0,
+                    "ACK15失败只向原Town/角色代次/队伍发送，不污染接管或后续合法选图：" + scenario);
+            }
+            finally
+            {
+                stream.Release.TrySetResult();
+                replacement?.Dispose();
+                parties.Detach(session);
+                parties.Detach(member);
+                session.End();
+                member.End();
+            }
+        }
+        Console.WriteLine("PASS 训练入口拒绝的双方状态、owner/epoch、场景与队伍快照发送守卫（受控发送，非实机）");
     }
 
     static async Task UnavailableEntryAsync(TownCatalog towns, CharacterCatalog characters, ItemResources items, string root)
