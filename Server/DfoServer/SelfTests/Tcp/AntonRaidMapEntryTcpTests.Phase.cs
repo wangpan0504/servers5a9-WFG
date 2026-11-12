@@ -454,11 +454,29 @@ internal static partial class AntonRaidMapEntryTcpTests
                     peers[1].Send(37, new byte[8]);
                     loadedSettlement = ReadPhase(peers[0]);
                     var memberSettlement = ReadPhase(peers[1]);
+                    if (scene.Entry.Maze.ClearConditions.Count != 0)
+                    {
+                        That(scene.Entry.Maze.ClearConditions is [{ Type: "destroy object", TargetId: 15467, Count: 1 }],
+                            "候选震颤的显式终末条件绑定真实15467物件");
+                        That(new[] { loadedSettlement, memberSettlement }.All(rows => rows.All(packet => packet.Opcode is not (31 or 115))) &&
+                            sessions.All(session => session.Phase == SessionPhase.Dungeon),
+                            "显式物件条件下全员加载仅释放屏障，不提前结算");
+                        peers[1].Send(39, QuestPassiveClearTcpTests.PassiveDeath(15467));
+                        That(ReadPhase(peers[1]).All(packet => packet.Opcode is not (31 or 115)), "非host不能完成震颤终末物件");
+                        peers[0].Send(39, QuestPassiveClearTcpTests.PassiveDeath(15470));
+                        That(ReadPhase(peers[0]).All(packet => packet.Opcode is not (31 or 115)), "错误物件不能完成震颤终末条件");
+                        peers[0].Send(39, QuestPassiveClearTcpTests.PassiveDeath(15467));
+                        loadedSettlement = ReadPhase(peers[0]);
+                        memberSettlement = ReadPhase(peers[1]);
+                    }
                     That(new[] { loadedSettlement, memberSettlement }.All(rows =>
                             rows.Count(packet => packet is { Kind: 0, Opcode: 31 }) == 1 &&
                             rows.All(packet => packet.Opcode != 115)) &&
                         sessions.All(session => session.Phase == SessionPhase.Settlement),
-                        "官方空条件下全员终点加载后各获得一次31，不伪造Boss115");
+                        "按候选终末条件完成后各获得一次31，不伪造Boss115；实际 " +
+                        string.Join(" / ", new[] { loadedSettlement, memberSettlement }.Select((rows, member) =>
+                            $"member={member} phase={sessions[member].Phase} packets=" +
+                            string.Join(',', rows.Select(packet => packet.Kind + ":" + packet.Opcode)))));
                     peers[1].Send(39, QuestPassiveClearTcpTests.PassiveDeath(15467));
                     That(ReadPhase(peers[1]).All(packet => packet.Opcode != 31 && packet.Opcode != 115), "通关后非host的15467不能再发31或115");
                     peers[0].Send(39, QuestPassiveClearTcpTests.PassiveDeath(15470));
