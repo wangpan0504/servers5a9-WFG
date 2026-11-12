@@ -18,6 +18,7 @@ internal static partial class FormalDungeonTcpTests
 {
     public static async Task RunEndlessAdventureAsync(ServerOptions options, string root, TcpTestResources resources)
     {
+        await VerifyEndlessCatalogOrderingAsync(options, root, resources);
         foreach (bool infinite in new[] { false, true })
         {
             var clock = new DailyBoosterTestClock(DateTimeOffset.Parse("2026-11-03T07:00:00+08:00"));
