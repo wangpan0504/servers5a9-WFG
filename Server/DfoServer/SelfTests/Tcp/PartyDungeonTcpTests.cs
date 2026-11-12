@@ -639,17 +639,19 @@ internal static partial class PartyDungeonTcpTests
 
         void VerifyIndependentPaidCards()
         {
+            var instanceId = (string)fixture.Query("SELECT instance_id FROM character_dungeon_settlement_receipts WHERE character_id=$p0", alpha.Id).Single()[0]!;
             foreach (var peer in participants) Drain(peer);
             var goldBefore = participants.ToDictionary(peer => peer.Id,
                 peer => (long)fixture.Query("SELECT gold FROM characters WHERE id=$p0", peer.Id)[0][0]!);
             foreach (var peer in participants) peer.Send(71, [1, 1]);
             var published = All(alpha);
             foreach (var peer in participants) published[peer] = [.. published[peer], .. Drain(peer)];
-            var claims = fixture.Query("SELECT character_id FROM character_dungeon_card_options WHERE paid_reward_json IS NOT NULL");
+            var claims = fixture.Query("SELECT character_id FROM character_dungeon_card_options WHERE instance_id=$p0 AND paid_reward_json IS NOT NULL", instanceId);
             That(claims.Length == count && published.Values.All(packets => packets.All(p =>
                 p is not { Kind: 1, Opcode: 71, Body: [0, ..] })),
                 "同时选择同一位置的付费牌全部成功，各人都有独立领取回执");
             var rows = new List<(byte Free, byte Paid, (uint Item, uint Count)[] Items)[]>();
+            var expectedPaid = new List<(uint Item, uint Count)[]>();
             foreach (var peer in participants)
             {
                 var events = published[peer].Where(p => p is { Kind: 1, Opcode: 71, Body: [1, ..] })
@@ -658,16 +660,36 @@ internal static partial class PartyDungeonTcpTests
                     .SequenceEqual(Enumerable.Range(1, count)),
                     "连续快速翻牌时每次提交均向每位成员排队通知，不只收到最后一份汇总快照");
                 rows.Add(events[^1]);
-                var amounts = fixture.Query("SELECT paid_cost,json_extract(paid_reward_json,'$.Gold') FROM character_dungeon_card_options WHERE character_id=$p0", peer.Id);
-                That(amounts is [[long cost, long gain]] && fixture.Query("SELECT gold FROM characters WHERE id=$p0", peer.Id) is [[long after]] &&
+                var amounts = fixture.Query("SELECT paid_cost,json_extract(paid_reward_json,'$.Gold'),paid_reward_json FROM character_dungeon_card_options WHERE character_id=$p0 AND instance_id=$p1", peer.Id, instanceId);
+                That(amounts is [[long cost, long gain, string]] && fixture.Query("SELECT gold FROM characters WHERE id=$p0", peer.Id) is [[long after]] &&
                     after == goldBefore[peer.Id] - cost + gain,
                     "每人只扣自己的费用、增加自己的奖励金币，不影响其他成员");
+                using var reward = System.Text.Json.JsonDocument.Parse((string)amounts.Single()[2]!);
+                var expectedItems = new List<(uint Item, uint Count)>();
+                // 独立读取已提交核心，按合同合并同ID数量；装备Value是品级，不是件数。
+                foreach (var field in new[] { "Item", "ExtraItem", "HopeEquipment", "HopeSealingItem", "TayberrsWish" })
+                {
+                    if (!reward.RootElement.TryGetProperty(field, out var item) || item.ValueKind == System.Text.Json.JsonValueKind.Null) continue;
+                    uint itemId = checked((uint)item.GetProperty("ItemId").GetInt32());
+                    var kind = (DfoServer.GameWorld.Items.ItemKind)item.GetProperty("Kind").GetByte();
+                    bool stackable = kind is DfoServer.GameWorld.Items.ItemKind.Consumable or DfoServer.GameWorld.Items.ItemKind.Material or
+                        DfoServer.GameWorld.Items.ItemKind.Quest or DfoServer.GameWorld.Items.ItemKind.CreatureConsumable or
+                        DfoServer.GameWorld.Items.ItemKind.Emblem or DfoServer.GameWorld.Items.ItemKind.Profession or
+                        DfoServer.GameWorld.Items.ItemKind.GuardianGem or DfoServer.GameWorld.Items.ItemKind.Rune;
+                    uint quantity = stackable ? checked((uint)item.GetProperty("Value").GetInt32()) : 1u;
+                    int index = expectedItems.FindIndex(entry => entry.Item == itemId);
+                    if (index < 0) expectedItems.Add((itemId, quantity));
+                    else expectedItems[index] = (itemId, checked(expectedItems[index].Count + quantity));
+                }
+                uint gold = checked((uint)reward.RootElement.GetProperty("Gold").GetInt32());
+                // 全空牌没有条目；有物品时即使金币为0，也必须保留首项金币槽。
+                expectedPaid.Add(gold == 0 && expectedItems.Count == 0 ? [] : [(0, gold), .. expectedItems]);
             }
             That(rows.All(members => Enumerable.Range(0, count).All(slot => members[slot].Free == slot && members[slot].Paid == slot &&
-                    members[slot].Items.Length > 0)) && rows.All(members => Enumerable.Range(0, 8).All(slot =>
+                    members[slot].Items.SequenceEqual(expectedPaid[slot]))) && rows.All(members => Enumerable.Range(0, 8).All(slot =>
                     members[slot].Free == rows[0][slot].Free && members[slot].Paid == rows[0][slot].Paid &&
                     members[slot].Items.SequenceEqual(rows[0][slot].Items))),
-                "各客户端完整成员归属和付费奖励一致，不因选择相同位置而覆盖结果");
+                "各客户端完整成员归属和付费奖励与各人本实例已提交回执精确一致，不因选择相同位置而覆盖结果");
             foreach (var group in new[] { 0, 2 })
             {
                 var first = DungeonSettlementProtocolTests.CardRewards(published[alpha].Last(p => p is { Kind: 0, Opcode: 35 }).Body)[group];
