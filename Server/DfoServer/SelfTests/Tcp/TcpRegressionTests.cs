@@ -169,6 +169,7 @@ internal static class TcpRegressionTests
         }),
         ("packet-http", PacketCaptureTcpTests.RunHttpAsync),
         ("town", TownProtocolTcpTests.RunAsync),
+        ("raid-npc-travel", RaidChannelLandingTcpTests.RunNpcTravelAsync),
         ("party-dungeon", PartyDungeonTcpTests.RunAsync),
         ("helper-hell-rotation", PartyDungeonTcpTests.RunHelperHellAsync),
         ("guild-dungeon-party", PartyDungeonTcpTests.RunGuildPartyBuffAsync),

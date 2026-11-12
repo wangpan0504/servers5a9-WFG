@@ -85,7 +85,8 @@ internal sealed class TownHandler(TownProjection projection, ServerLog log, TagE
                 }
             }
         }
-        else if (session.TravelReason is "guild-membership-required" or "evildom-war-party-required" or "luke-raid-required" or "prey-raid-required" or "prey-boarding-full")
+        else if (session.TravelReason is "guild-membership-required" or "evildom-war-party-required" or "luke-raid-required" or "prey-raid-required" or "prey-boarding-full"
+            or "raid-npc-membership-required" or "raid-npc-mode-room-mismatch")
         {
             await context.Reply(CmdPacketType.SET_USER_AREA, [0, 1, 0, requested.Town, requested.Area], "town_admission_denied");
             if (session.TravelReason == "evildom-war-party-required")

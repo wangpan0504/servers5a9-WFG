@@ -125,7 +125,8 @@ internal static class QuestCoverage
         definition.Fields.Where(field => field.Name == "attribute").ToArray() is
             [{ Children.Length: 0, Values: [{ Type: 6, Text: "not check auto clear" }] }];
 
-    static bool SupportedAttribute(string? value) => value is "not give exp quest" or "slot expansion" or "magic stone";
+    // 原生属性25只控制副本交付对话；进度、清图凭据及原接取的领奖校验保持不变。
+    static bool SupportedAttribute(string? value) => value is "not give exp quest" or "slot expansion" or "magic stone" or "complete quest in dungeon";
 
     // 觉醒成就（如5154）省略 [reward type]，奖励数组是 0 0，金币只来自 [gold multiple]。
     internal static bool GoldOnlyReward(StoryQuest quest) =>

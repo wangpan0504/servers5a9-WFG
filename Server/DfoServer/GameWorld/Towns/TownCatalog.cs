@@ -77,6 +77,7 @@ internal sealed class TownCatalog
     public TownDock Dock { get; }
     public RoomPortal[] RoomPortals { get; }
     public IReadOnlyDictionary<uint, uint[]> NpcMoves { get; }
+    public IReadOnlyList<RaidNpcRoute> RaidNpcRoutes { get; init; } = [];
     public IReadOnlySet<uint> NpcExits { get; init; } = new HashSet<uint>();
     public IReadOnlySet<uint> EquipmentTransportNpcs { get; init; } = new HashSet<uint>();
     public IReadOnlySet<uint> EquipmentResealNpcs { get; init; } = new HashSet<uint>();
@@ -376,6 +377,18 @@ internal sealed class TownCatalog
         var area = Areas[(target.Town, target.Area)];
         if (targetNpc != 0)
         {
+            // 原生攻坚菜单按WAITING ROOM NPC跳转；仍要求两端当前阶段真实放置对应NPC。
+            if (Areas.TryGetValue((current.Town, current.Area), out var raidSource) &&
+                area.Map(completed).Npcs.Any(n => n.Id == targetNpc) && RaidNpcRoutes.Any(route =>
+                    targetNpc == route.WaitingNpc &&
+                    raidSource.Map(completed).Npcs.Any(n => n.Id == route.RecruitNpc) &&
+                    new[] { route.WaitingRoom, route.SingleWaitingRoom }.OfType<Location>()
+                        .Any(room => room.Town == target.Town && room.Area == target.Area) ||
+                    targetNpc == route.RecruitNpc &&
+                    raidSource.Map(completed).Npcs.Any(n => n.Id == route.WaitingNpc) &&
+                    new[] { route.WaitingRoom, route.SingleWaitingRoom }.OfType<Location>()
+                        .Any(room => room.Town == current.Town && room.Area == current.Area)))
+                return "ready";
             if (!Areas.TryGetValue((current.Town, current.Area), out var npcSource) || !npcSource.Map(completed).Npcs.Any(n => NpcMoves.TryGetValue(n.Id, out var to) && to.Contains(targetNpc)))
                 return "npc-route-not-in-pvf";
             if (!area.Map(completed).Npcs.Any(n => n.Id == targetNpc))
@@ -531,7 +544,8 @@ internal sealed class TownCatalog
         var catalog = new TownCatalog(areas, room, new(38, 0, checked((ushort)origin.Gate.X), checked((ushort)origin.Gate.Y)), TownDock.Load(pvf), LoadRoomPortals(pvf), npcMoves,dungeonMaps)
             { Geometry = geometry, GeometryPaths = Array.AsReadOnly(texts.Keys.ToArray()), SpecialChannelQuests = LoadSpecialChannelQuests(pvf), NpcExits = npcExits, EpisodeTowns = episodes,
                 LostLandEntryNpcs = lostLandNpcs, MarriageDungeonEntryNpcs = marriageDungeonNpcs,
-                EquipmentTransportNpcs = equipmentTransportNpcs, EquipmentResealNpcs = equipmentResealNpcs };
+                EquipmentTransportNpcs = equipmentTransportNpcs, EquipmentResealNpcs = equipmentResealNpcs,
+                RaidNpcRoutes = RaidNpcRoute.Load(pvf) };
         if (!catalog.IsPosition(room) || !catalog.IsPosition(catalog.InitialReturn))
             throw new InvalidDataException("PVF initial position outside native movable regions");
         return catalog;
