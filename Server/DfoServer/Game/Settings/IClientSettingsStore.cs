@@ -9,7 +9,7 @@ internal interface IClientSettingsStore
     bool SaveGameOptions(AccountOwners.Lease owner, ImmutableArray<byte> payload, ushort? characterId = null,
         ImmutableArray<byte> characterGameOptions = default);
     bool SaveCharacterOptions(AccountOwners.Lease owner, ushort characterId, ImmutableArray<byte> payload);
-    bool SaveHotkeys(AccountOwners.Lease owner, byte profile, ImmutableArray<byte> text);
+    bool SaveHotkeys(AccountOwners.Lease owner, ushort characterId, byte profile, ImmutableArray<byte> text);
     bool SaveQuickChat(AccountOwners.Lease owner, byte bank, ImmutableArray<byte> text);
     bool SaveChatEmoticons(AccountOwners.Lease owner, ImmutableArray<ChatEmoticonMacro> macros);
     bool SaveRecentEmoticons(AccountOwners.Lease owner, ImmutableArray<byte> entries);

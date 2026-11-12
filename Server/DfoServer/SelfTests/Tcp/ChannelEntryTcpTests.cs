@@ -134,7 +134,7 @@ internal static class ChannelEntryTcpTests
         using var switched = Open(fixture, "entrya", gamePort: endpoints[21], channelNumber: 21);
         switched.ExpectedOpenEvents = [282, 2449, 414, 181, ServerEventService.NolanVisibilityId, ServerEventService.MileageShopId];
         var reentry = switched.Select(resumeTown: true, room: false, settings: settings);
-        That(switched.ClientSettings is [{ Kind: 0, Opcode: 390 }, { Kind: 0, Opcode: 454 }], "换频道的设置回放在最终24绑定后逐包核对，保留角色选项与账号键位");
+        That(switched.ClientSettings is [{ Kind: 0, Opcode: 390 }, { Kind: 0, Opcode: 454 }], "换频道的设置回放在最终24绑定后逐包核对，保留角色选项与角色键位");
         That(switched.Id == id && fixture.Query("SELECT count(*) FROM characters WHERE account='entrya'") is [[1L]] &&
             fixture.Snapshot("SELECT town,area,x,y,direction,revision,return_town,return_area FROM characters WHERE id=$p0", id) == location,
             "非gate原生换频道保留完整位置与revision，不建第二份角色或重新发放资产");

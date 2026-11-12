@@ -49,11 +49,11 @@ internal sealed class ClientSettingsService(IClientSettingsStore store, DfoServe
         QuestNotifyRules.Validate(entries);
         return store.SaveQuestNotify(owner, characterId, entries);
     }
-    public bool SaveHotkeys(AccountOwners.Lease owner, byte profile, ImmutableArray<byte> text)
+    public bool SaveHotkeys(AccountOwners.Lease owner, ushort characterId, byte profile, ImmutableArray<byte> text)
     {
         if (profile > 1) throw new InvalidDataException("键位配置类型无效");
         HotkeySettingsRules.Validate(text);
-        return store.SaveHotkeys(owner, profile, text);
+        return store.SaveHotkeys(owner, characterId, profile, text);
     }
     public bool SaveGameOptions(AccountOwners.Lease owner, ImmutableArray<byte> payload, ushort? characterId = null)
     {

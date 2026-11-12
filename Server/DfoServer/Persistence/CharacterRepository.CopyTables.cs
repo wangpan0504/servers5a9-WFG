@@ -42,6 +42,7 @@ internal sealed partial class CharacterRepository
         new("character_fatigue_reset_days", "character_id", "character_id,service_day"),
         new("character_fiendwar_title_facts", "character_id", "character_id,account,quest_id,total,applied"),
         new("character_game_settings", "character_id", "character_id,account,game_options"),
+        new("character_hotkey_settings", "character_id", "character_id,account,profile,hotkeys"),
         new("character_gold_card_uses", "character_id", "character_id,account,service_day,used"),
         new("character_grief_tower", "character_id", "character_id,account,game_day,cleared,layer,instance_id,task_attempt"),
         new("character_growup_change", "character_id", "character_id,account,change_count"),

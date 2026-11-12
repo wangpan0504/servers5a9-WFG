@@ -3637,7 +3637,7 @@ internal static partial class DatabaseSchemaTests
             Execute(db, "ALTER TABLE characters DROP COLUMN emotion");
     }
 
-    internal static void RemoveHotkeySchema(SqliteConnection db) => Execute(db, "DROP TABLE IF EXISTS account_hotkey_settings");
+    internal static void RemoveHotkeySchema(SqliteConnection db) => Execute(db, "DROP TABLE IF EXISTS character_hotkey_settings; DROP TABLE IF EXISTS account_hotkey_settings");
 
     internal static void RemoveTutorialSchema(SqliteConnection db) => Execute(db,
         "DROP TABLE IF EXISTS character_tutorial_receipts; DROP TABLE IF EXISTS character_tutorial_state");

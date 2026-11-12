@@ -116,7 +116,7 @@ internal sealed class SettingsHandler(ClientSettingsService settings, ServerLog 
     {
         var text = SettingsRequests.Hotkeys(packet.Body);
         bool changed = context.Session.SaveHotkeys(settings, text);
-        log.Write("client_settings_saved", new { Connection = context.Id, Scope = "account_hotkeys", Bytes = text.Length, Changed = changed });
+        log.Write("client_settings_saved", new { Connection = context.Id, Scope = "character_hotkeys", Bytes = text.Length, Changed = changed });
         // 454会重置原生键位模型，仅在选角回放；保存时不发ACK或即时刷新。
         return Task.FromResult(CommandResult.Handled);
     }
