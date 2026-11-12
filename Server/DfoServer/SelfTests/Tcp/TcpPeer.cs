@@ -1245,7 +1245,7 @@ internal sealed partial class TcpPeer : IDisposable
                 packet = Read();
             }
             TestCheck.That(packet.Kind == expected[index].Kind && packet.Opcode == expected[index].Opcode,
-                $"entry packet order at {index}");
+                $"entry packet order at {index}; expected={expected[index].Kind}/{expected[index].Opcode}, actual={packet.Kind}/{packet.Opcode}/{packet.Body.Length}");
             if (packet is { Kind: 0, Opcode: 356 })
             {
                 // Actor头部为5B+116B状态+u16角色号+u32名字字节数，名字后才是职业。
