@@ -240,7 +240,9 @@ internal sealed partial class InventoryProjection(CharacterStatComputer stats, T
                         await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(current.Inventory, list, emptySlots, index: receipt.Index),
                             "inventory_move_empty", CanSend);
                     await context.Notify(NotiPacketType.ITEM_LIST,
-                        list == InventoryListType.Main ? InventoryPackets.Full(current.Inventory) : town.SpecialFull(context, current.Inventory, list),
+                        list == InventoryListType.Main ? InventoryPackets.Full(current.Inventory)
+                            : list is InventoryListType.PersonalCargo or InventoryListType.AccountCargo ? CargoPackets.Full(current.Inventory, list)
+                            : town.SpecialFull(context, current.Inventory, list),
                         "inventory_move_counts", CanSend);
                 }
                 continue;
