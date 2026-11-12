@@ -14,6 +14,8 @@ internal static partial class FormalDungeonTcpTests
             "修炼场回归关闭GM无限疲劳，独立证明玩法免疲劳");
         VerifyTrainingRoom(fixture);
         VerifyTrainingItems(fixture,resources);
+        PartyDungeonTcpTests.VerifyTrainingPartyEntry(fixture, resources);
+        await DungeonSelectionReturnTests.VerifyTrainingPartyEntryAsync(resources.Towns, resources.Characters, resources.ItemResources, root);
     }
 
     static void VerifyTrainingRoom(TcpTestFixture fixture)
