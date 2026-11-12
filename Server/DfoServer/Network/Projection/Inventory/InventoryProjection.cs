@@ -240,7 +240,9 @@ internal sealed partial class InventoryProjection(CharacterStatComputer stats, T
                         await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(current.Inventory, list, emptySlots, index: receipt.Index),
                             "inventory_move_empty", CanSend);
                     await context.Notify(NotiPacketType.ITEM_LIST,
-                        list == InventoryListType.Main ? InventoryPackets.Full(current.Inventory) : town.SpecialFull(context, current.Inventory, list),
+                        list == InventoryListType.Main ? InventoryPackets.Full(current.Inventory)
+                            : list is InventoryListType.PersonalCargo or InventoryListType.AccountCargo ? CargoPackets.Full(current.Inventory, list)
+                            : town.SpecialFull(context, current.Inventory, list),
                         "inventory_move_counts", CanSend);
                 }
                 continue;
@@ -271,7 +273,8 @@ internal sealed partial class InventoryProjection(CharacterStatComputer stats, T
                 quietReloaded.Add(list);
                 continue;
             }
-            bool suppressNotice = plan.Reason == "sort_item" || suppressMainNotice && list == InventoryListType.Main || list == suppressMoveNoticeList;
+            bool suppressNotice = plan.Reason == "sort_item" || suppressMainNotice && list == InventoryListType.Main ||
+                list == suppressMoveNoticeList || plan.Reason == "avatar_preset_select" && list == InventoryListType.Equipment;
             // 包裹回填仍先清槽再载入，保留图标effect而不播报获得。
             // CMD19已安装的穿戴对象不能再清空；统一按容器保护，不用部位白名单遗漏宠物等槽。
             // 同模板堆叠对象的NOTI14分支不重写卡片等级，等级变化必须重建对象后再载入完整核心。
@@ -423,7 +426,8 @@ internal sealed partial class InventoryProjection(CharacterStatComputer stats, T
         await SkillSwitchInventoryProjection.RefreshInventoryAsync(context, receipt, plan.Before);
 
         static bool QuietExistingReload(string reason, InventoryListType list, InventoryListType? suppressMoveNoticeList) =>
-            (reason == "sort_item" || list == suppressMoveNoticeList) &&
+            (reason == "sort_item" || list == suppressMoveNoticeList ||
+                reason == "avatar_preset_select" && list == InventoryListType.Avatar) &&
             list is InventoryListType.Main or InventoryListType.Avatar or InventoryListType.Pet or
                 InventoryListType.AccountCargo or InventoryListType.GuildMedal or InventoryListType.Talisman;
         byte[] QuietList(GameConnectionContext connection, InventorySnapshot inventory, InventoryListType list) => list switch

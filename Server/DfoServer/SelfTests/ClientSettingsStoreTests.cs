@@ -6,6 +6,7 @@ using System.Text.Json;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
+using DfoServer.Game.Session;
 using DfoServer.Game.Settings;
 using DfoServer.GameWorld.Items;
 using DfoServer.GameWorld.Towns;
@@ -26,7 +27,11 @@ internal static partial class ClientSettingsStoreTests
         SaveAndIsolation();
         CharacterGameSnapshots();
         RawAccountAndCanonicalCharacter();
+        HotkeyCharacterIsolation();
         HotkeyStorage();
+        CharacterHotkeyMigration();
+        BatteryAndHotkey208Upgrade();
+        CharacterHotkeyDeletionRollback();
         QuickChatStorage();
         ChatEmoticonStorage();
         RecentEmoticonStorage();
@@ -202,6 +207,41 @@ internal static partial class ClientSettingsStoreTests
         f.Integrity();
     }
 
+    static void HotkeyCharacterIsolation()
+    {
+        using var f = new Fixture();
+        var repository = new CharacterRepository(f.Path);
+        var point = f.First.Position;
+        var map = new TownMap("settings.map", [new(new(0, 0, 800, 600), [], [])], [], false, []);
+        var towns = new TownCatalog(new() { [(point.Town, point.Area)] = new(point.Town, point.Area, 1, [], [], [], point, map, [], []) },
+            point, point, new(0, [], []), [], new Dictionary<uint, uint[]>());
+        var session = new GameSession(repository, towns, f.Owner);
+        ImmutableArray<byte> firstKeys = [.. "I01\t77\nI02\t55\n"u8.ToArray()];
+        ImmutableArray<byte> existingKeys = [.. "I01\t31\nI02\t134\n"u8.ToArray()];
+        try
+        {
+            // 先保存已有角色c，再改a；新增b不能继承a，c也不能被a覆盖。
+            session.Select(f.Second.Slot);
+            Check(session.SaveHotkeys(f.Service, existingKeys), "已有角色c通过当前选角会话保存独立键位");
+            session.ReturnToRoster();
+            session.Select(f.First.Slot);
+            Check(session.SaveHotkeys(f.Service, firstKeys), "角色a通过当前选角会话保存不同键位");
+            session.ReturnToRoster();
+            var created = repository.Create(f.Owner, new("NewKeys", point, point));
+            session.Select(created.Slot);
+            bool newCharacterDefault = session.LoadClientSettings(f.Service).Settings.Hotkeys.IsDefault;
+            session.ReturnToRoster();
+            session.Select(f.Second.Slot);
+            bool existingUnchanged = Same(session.LoadClientSettings(f.Service).Settings.Hotkeys, existingKeys);
+            session.ReturnToRoster();
+            session.Select(f.First.Slot);
+            bool firstUnchanged = Same(session.LoadClientSettings(f.Service).Settings.Hotkeys, firstKeys);
+            Check(newCharacterDefault && existingUnchanged && firstUnchanged,
+                $"键位按角色隔离：a改键后新b缺省={newCharacterDefault}、已有c未变={existingUnchanged}、a原文保留={firstUnchanged}");
+        }
+        finally { session.End(); }
+    }
+
     static void HotkeyStorage()
     {
         using var f = new Fixture();
@@ -213,29 +253,42 @@ internal static partial class ClientSettingsStoreTests
         string assets = f.Assets();
         Check(f.Service.Load(f.Owner, creator.Id).Hotkeys.IsDefault && f.Query("SELECT count(*) FROM account_hotkey_settings") is 0L,
             "缺省键位不建行、不生成未知默认表");
-        Check(f.Service.SaveHotkeys(f.Owner, 0, keys) && !f.Service.SaveHotkeys(f.Owner, 0, keys), "键位首次持久化及相同字节零变化");
-        Check(Same(f.Service.Load(f.Owner, f.First.Id).Hotkeys, keys) && Same(f.Service.Load(f.Owner, f.Second.Id).Hotkeys, keys) &&
+        Check(f.Service.SaveHotkeys(f.Owner, f.First.Id, 0, keys) && !f.Service.SaveHotkeys(f.Owner, f.First.Id, 0, keys), "键位首次持久化及相同字节零变化");
+        Check(Same(f.Service.Load(f.Owner, f.First.Id).Hotkeys, keys) && f.Service.Load(f.Owner, f.Second.Id).Hotkeys.IsDefault &&
             f.Service.Load(f.OtherOwner, f.Other.Id).Hotkeys.IsDefault && f.Service.Load(f.Owner, creator.Id).Hotkeys.IsDefault,
-            "同账号普通角色共享键位，其他账号与缔造者不串配置");
-        Check(f.Service.SaveHotkeys(f.Owner, 1, creatorKeys) && Same(f.Service.Load(f.Owner, creator.Id).Hotkeys, creatorKeys) &&
+            "同账号其他角色缺省，其他账号与缔造者不串配置");
+        Check(f.Service.SaveHotkeys(f.Owner, creator.Id, 1, creatorKeys) && Same(f.Service.Load(f.Owner, creator.Id).Hotkeys, creatorKeys) &&
             Same(f.Service.Load(f.Owner, f.First.Id).Hotkeys, keys), "缔造者配置独立保留包括未分配键134");
+        Reject<InvalidDataException>(() => f.Service.SaveHotkeys(f.Owner, f.Other.Id, 0, keys), "跨账号角色不能保存键位");
+        Reject<InvalidDataException>(() => f.Service.SaveHotkeys(f.Owner, ushort.MaxValue, 0, keys), "不存在角色不能保存键位");
+        Reject<InvalidDataException>(() => f.Service.SaveHotkeys(f.Owner, f.First.Id, 1, keys), "普通职业不能写缔造者profile");
+        Reject<InvalidDataException>(() => f.Service.SaveHotkeys(f.Owner, creator.Id, 0, keys), "缔造者不能写普通profile");
+        var secondCreator = new CharacterRepository(f.Path).Create(f.Owner, new("KeyCreator2", f.First.Position, f.First.Return) { Job = 10 });
+        Check(f.Service.Load(f.Owner, secondCreator.Id).Hotkeys.IsDefault &&
+            f.Service.SaveHotkeys(f.Owner, secondCreator.Id, 1, keys) && Same(f.Service.Load(f.Owner, creator.Id).Hotkeys, creatorKeys),
+            "两名缔造者也独立保存，不因相同profile共享配置");
+        assets = f.Assets();
+        Reject<SqliteException>(() => f.Execute($"INSERT INTO character_hotkey_settings VALUES({f.Second.Id},'settings-b',0,X'31')"), "角色键位复合外键拒绝错误账号");
+        Reject<SqliteException>(() => f.Execute($"INSERT INTO character_hotkey_settings VALUES({f.Second.Id},'settings-a',2,X'31')"), "角色键位数据库拒绝未知profile");
+        foreach (int length in new[] { 0, 1400 })
+            Reject<SqliteException>(() => f.Execute($"INSERT INTO character_hotkey_settings VALUES({f.Second.Id},'settings-a',0,zeroblob({length}))"), "角色键位数据库拒绝越界长度");
         using (var db = Open(f.Path))
         using (var writer = db.BeginTransaction(deferred: false))
-            Check(!f.Service.SaveHotkeys(f.Owner, 0, keys), "外部writer占用时重复键位保存仍不申请写事务");
-        f.Execute("CREATE TRIGGER hotkey_fail BEFORE UPDATE ON account_hotkey_settings BEGIN SELECT RAISE(ABORT,'hotkey rollback'); END");
-        Reject<SqliteException>(() => f.Service.SaveHotkeys(f.Owner, 0, creatorKeys), "键位SQL失败传播");
+            Check(!f.Service.SaveHotkeys(f.Owner, f.First.Id, 0, keys), "外部writer占用时重复键位保存仍不申请写事务");
+        f.Execute("CREATE TRIGGER hotkey_fail BEFORE UPDATE ON character_hotkey_settings BEGIN SELECT RAISE(ABORT,'hotkey rollback'); END");
+        Reject<SqliteException>(() => f.Service.SaveHotkeys(f.Owner, f.First.Id, 0, creatorKeys), "键位SQL失败传播");
         Check(Same(f.Service.Load(f.Owner, f.First.Id).Hotkeys, keys) && f.Assets() == assets, "失败保留键位及账号凭据、角色revision与全部资产");
         f.Execute("DROP TRIGGER hotkey_fail");
         var reopened = new ClientSettingsService(new ClientSettingsRepository(f.Path));
         Check(Same(reopened.Load(f.Owner, creator.Id).Hotkeys, creatorKeys), "重开仓储恢复完整键位字节");
-        Reject<InvalidDataException>(() => f.Service.SaveHotkeys(f.Owner, 2, keys), "未知配置不得保存");
+        Reject<InvalidDataException>(() => f.Service.SaveHotkeys(f.Owner, f.First.Id, 2, keys), "未知配置不得保存");
         using var replacement = f.Owners.Acquire(f.Owner.Account, () => { });
-        Reject<InvalidOperationException>(() => f.Service.SaveHotkeys(f.Owner, 0, keys), "旧generation不能覆盖新账号键位");
+        Reject<InvalidOperationException>(() => f.Service.SaveHotkeys(f.Owner, f.First.Id, 0, keys), "旧generation不能覆盖新角色键位");
         Check(Same(reopened.Load(replacement, f.First.Id).Hotkeys, keys), "拒绝旧owner后存档仍可恢复");
 
         DatabaseSchemaTests.RemoveAdventureSchema(f.Path);
         DatabaseSchemaTests.RewindRaidLifecycle(f.Path);
-        f.Execute("ALTER TABLE characters DROP COLUMN emotion; DROP TABLE account_hotkey_settings; DROP TABLE account_quick_chat; PRAGMA user_version=26");
+        f.Execute("ALTER TABLE characters DROP COLUMN emotion; DROP TABLE character_hotkey_settings; DROP TABLE account_hotkey_settings; DROP TABLE account_quick_chat; PRAGMA user_version=26");
         string existing = f.ExistingSettings();
         _ = new ClientSettingsRepository(f.Path);
         Check(f.Query("PRAGMA user_version") is long version && version == SqliteMigrations.CurrentVersion && f.Query("SELECT count(*) FROM account_hotkey_settings") is 0L &&
@@ -248,7 +301,7 @@ internal static partial class ClientSettingsStoreTests
         f.Execute($"UPDATE characters SET stamina_until=0 WHERE id={f.First.Id}");
         DatabaseSchemaTests.RemoveAdventureSchema(f.Path);
         DatabaseSchemaTests.RewindRaidLifecycle(f.Path);
-        f.Execute("ALTER TABLE characters DROP COLUMN emotion; DROP TABLE account_hotkey_settings; PRAGMA user_version=26; CREATE TABLE account_hotkey_settings(collision INTEGER)");
+        f.Execute("ALTER TABLE characters DROP COLUMN emotion; DROP TABLE character_hotkey_settings; DROP TABLE account_hotkey_settings; PRAGMA user_version=26; CREATE TABLE account_hotkey_settings(collision INTEGER)");
         string rollbackAssets = f.Assets();
         Reject<SqliteException>(() => new ClientSettingsRepository(f.Path), "键位迁移碰撞不吞错误");
         Check(f.Query("PRAGMA user_version") is 26L && f.Assets() == rollbackAssets, "键位DDL失败回滚版本并保留资产");
@@ -693,7 +746,7 @@ internal static partial class ClientSettingsStoreTests
         {
             using var db = Open(Path);
             using var tables = db.CreateCommand();
-            tables.CommandText = "SELECT name FROM sqlite_schema WHERE type='table' AND name NOT IN ('account_client_settings','character_client_settings','character_game_settings','account_hotkey_settings','account_quick_chat','account_chat_emoticons','account_recent_emoticons','character_quest_notify','character_npc_bookmarks') ORDER BY name";
+            tables.CommandText = "SELECT name FROM sqlite_schema WHERE type='table' AND name NOT IN ('account_client_settings','character_client_settings','character_game_settings','account_hotkey_settings','character_hotkey_settings','account_quick_chat','account_chat_emoticons','account_recent_emoticons','character_quest_notify','character_npc_bookmarks') ORDER BY name";
             var names = new List<string>();
             using (var reader = tables.ExecuteReader())
                 while (reader.Read()) names.Add(reader.GetString(0));

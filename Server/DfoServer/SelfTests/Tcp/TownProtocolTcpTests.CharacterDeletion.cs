@@ -16,6 +16,7 @@ internal static partial class TownProtocolTcpTests
             peer.Create("删除中"); middle = peer.Id;
             peer.Create("删除末"); highest = peer.Id;
             Roster(peer.Roster, (0, "删除首"), (1, "删除中"), (2, "删除末"));
+            fixture.Sql($"INSERT INTO character_hotkey_settings VALUES({first},'{account}',0,X'4930310937370A'),({middle},'{account}',0,X'4930310935350A')");
             string before = Persisted();
             foreach (var invalid in new[] { ((ushort)1, "Wrong"), ((ushort)31, "Missing") })
             {
@@ -31,6 +32,9 @@ internal static partial class TownProtocolTcpTests
             That(fixture.Query("SELECT id,slot FROM characters WHERE account=$p0 ORDER BY slot", account) is var rows &&
                 rows.Length == 2 && Convert.ToUInt16(rows[0][0]) == first && Convert.ToUInt16(rows[1][0]) == highest &&
                 Convert.ToUInt16(rows[1][1]) == 2, "中间行删除不改剩余角色真实身份和高槽");
+            That(fixture.Query("SELECT character_id,hex(hotkeys) FROM character_hotkey_settings WHERE account=$p0 ORDER BY character_id", account)
+                is [[long remaining, "4930310937370A"]] && remaining == first,
+                "删角同步清理被删角色键位，保留同账号其他角色原文");
             // ACK6消费者随后确认选角上下文，冒险团回放使用未选角色的owner0。
             peer.Send(645);
             peer.Expect(1, 645, [1, 0]);
@@ -55,6 +59,8 @@ internal static partial class TownProtocolTcpTests
             Roster(peer.Expect(0, 2).Body, (2, "删除末"));
             peer.Create("删除中");
             That(peer.Id > highest && peer.Id != middle, "删除后同连接立即重建原姓名，角色身份不复用");
+            That(fixture.Query("SELECT count(*) FROM character_hotkey_settings WHERE character_id=$p0", peer.Id) is [[0L]],
+                "重建原姓名和复用槽位不继承被删角色键位");
             Roster(peer.Roster, (0, "删除中"), (2, "删除末"));
             peer.Select(1);
             That(peer.Id == highest, "立即建角填空槽后名册行1仍映射原高槽角色");

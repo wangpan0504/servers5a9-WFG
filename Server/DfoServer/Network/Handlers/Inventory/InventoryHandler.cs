@@ -44,11 +44,12 @@ internal sealed partial class InventoryHandler(InventoryService inventory, Inven
         // ACK19已转移普通穿戴槽；宠物26–29仍保留专属槽位同步。
         var acknowledgedSlots = result.Plan?.ChangedSlots
             .Where(slot => slot.List == InventoryListType.Equipment && slot.Index is not (>= 26 and <= 29)).ToHashSet();
-        // 同容器整件由 ACK19 的 029D0650 搬走已有对象。Avatar/勋章/护石与 Main/Pet 一样，
-        // 不能再清槽后用 14/1681 装成新物品（020C5630 会把 +996 设成黄框）。
+        // 同容器整件由 ACK19 的 029D0650 搬走已有对象。两仓、Avatar/勋章/护石与 Main/Pet 一样，
+        // 不能再清槽后用14/1681装成新获得：14会重复获得文字，具备effect资格的容器还会重置黄框。
         InventoryListType? silentMoveList = request.Source.List == request.Destination.List &&
             request.Source.List is InventoryListType.Main or InventoryListType.Pet or InventoryListType.Avatar
-                or InventoryListType.GuildMedal or InventoryListType.Talisman ? request.Source.List : null;
+                or InventoryListType.GuildMedal or InventoryListType.Talisman
+                or InventoryListType.PersonalCargo or InventoryListType.AccountCargo ? request.Source.List : null;
         bool suppressMainNotice = request.Source.List == InventoryListType.Main &&
             request.Destination is { List: InventoryListType.Equipment, Index: >= 12 and <= 25 } ||
             request.Destination.List == InventoryListType.Main &&

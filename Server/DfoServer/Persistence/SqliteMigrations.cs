@@ -387,8 +387,17 @@ internal static class SqliteMigrations
             "CHECK(source_uid>0)", "CHECK(source_uid>=0)")),
         new(206, "回归账本与已发布本地205兼容", UpgradeReturningAdventurer206),
         new(207, "账号冒险团四组名称与图标", SocialSchema.UpgradeGroups),
-        new(208, "角色疲劳蓄电池充能与祝福", FatigueBatterySchema.Upgrade),
+        new(208, "角色独立键位", UpgradeCharacterHotkeys),
+        new(209, "角色键位与本地蓄电池208兼容", UpgradeFatigueBattery209),
     ];
+
+    static void UpgradeFatigueBattery209(SqliteConnection db, SqliteTransaction tx)
+    {
+        // 上游208已有角色键位，不再次回填后来新建的角色；本地208只有电池时才补齐键位。
+        if (!KnownTable(db, tx, "character_hotkey_settings", CharacterHotkeySettingsSchema))
+            UpgradeCharacterHotkeys(db, tx);
+        FatigueBatterySchema.Upgrade(db, tx);
+    }
 
     static void UpgradeReturningAdventurer206(SqliteConnection db, SqliteTransaction tx)
     {
@@ -1386,6 +1395,27 @@ internal static class SqliteMigrations
           PRIMARY KEY(character_id,quest_id),
           FOREIGN KEY(character_id,operation_id) REFERENCES character_quest_effect_receipts(character_id,operation_id));
         """;
+
+    internal const string CharacterHotkeySettingsSchema = """
+        CREATE TABLE character_hotkey_settings(
+          character_id INTEGER NOT NULL,account TEXT NOT NULL,profile INTEGER NOT NULL CHECK(profile IN (0,1)),
+          hotkeys BLOB NOT NULL CHECK(typeof(hotkeys)='blob' AND length(hotkeys) BETWEEN 1 AND 1399),
+          PRIMARY KEY(character_id,profile),FOREIGN KEY(character_id,account) REFERENCES characters(id,account));
+        """;
+
+    static void UpgradeCharacterHotkeys(SqliteConnection db, SqliteTransaction tx)
+    {
+        Execute(db, tx, CharacterHotkeySettingsSchema.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal));
+        if (!KnownTable(db, tx, "character_hotkey_settings", CharacterHotkeySettingsSchema))
+            throw new InvalidDataException("角色键位迁移拒绝未知结构");
+        // 只为迁移时已有角色保留原配置。后续新建角色不再从账号表回退或复制。
+        Execute(db, tx, """
+            INSERT INTO character_hotkey_settings(character_id,account,profile,hotkeys)
+            SELECT r.id,r.account,h.profile,h.hotkeys FROM characters r
+            JOIN account_hotkey_settings h ON h.account=r.account AND h.profile=CASE WHEN r.job=10 THEN 1 ELSE 0 END
+            WHERE NOT EXISTS(SELECT 1 FROM character_hotkey_settings c WHERE c.character_id=r.id AND c.profile=h.profile)
+            """);
+    }
 
     internal const string HotkeySettingsSchema = """
         CREATE TABLE account_hotkey_settings(
@@ -2665,6 +2695,7 @@ internal static class SqliteMigrations
                 throw new InvalidDataException("社交表的约束或外键不是已确认结构: " + table);
         }
         foreach (var (table,expected) in new[] { (SocialSchema.GroupsTable,SocialSchema.GroupsSql),
+            ("character_hotkey_settings",CharacterHotkeySettingsSchema),
             ("character_quest_completion_receipts",QuestCompletionSchemaV180),
             ("character_epic_wishes",EpicWishSchema.Definition),
             ("account_battle_pass_deluxe_orders",BattlePassDeluxeSchema.Definition),
@@ -2871,6 +2902,7 @@ internal static class SqliteMigrations
         "SELECT blacklist_count FROM characters LIMIT 0",
         "SELECT charac_no,selected,cube_type FROM cube_premium LIMIT 0",
         "SELECT account,profile,hotkeys FROM account_hotkey_settings LIMIT 0",
+        "SELECT character_id,account,profile,hotkeys FROM character_hotkey_settings LIMIT 0",
         "SELECT account,bank,quick_chat FROM account_quick_chat LIMIT 0",
         "SELECT account,emoticon_id,macro FROM account_chat_emoticons LIMIT 0",
         "SELECT account,claim_day FROM account_pcroom_claims LIMIT 0",

@@ -118,15 +118,21 @@ internal static class CargoTcpTests
             var personal = peer.Expect(0, 14).Body;
             That(personal[0] == 2 && U16(personal, 3) == 7 && U32(personal, 5) == weaponId && personal.Length == 126,
                 "personal deposit uses complete 123-byte entry");
+            int personalSwapNotices = VerifyCargoSwap(peer, 2, personal[3..]);
             SortPersonal(peer, weaponId);
             peer.Send(20, Convert.FromHexString("06000000100218142000"));
             peer.Expect(1, 20, [1, 4, 0, 0, 0, 8, 2, 16, 0]); peer.Barrier();
             That(fixture.Query("SELECT item_core FROM character_inventory_items WHERE item_uid=$p0", weaponUid) is [[var sortedCore]] && Equals(sortedCore, weaponCore),
                 "个人仓库真实整理与重复整理保持完整物品核心及UID");
             Transfer(peer, 2, 0, weaponId, 1, 12, 7, 7, 1);
-            That(peer.Expect(0, 14).Body[0] == 2 && peer.Expect(0, 14).Body[0] == 12, "cross cargo move clears personal and updates account");
+            That(peer.Expect(0, 14).Body[0] == 2, "cross cargo move clears personal");
+            var account = peer.Expect(0, 14).Body;
+            That(account[0] == 12, "cross cargo move updates account");
             That(fixture.Query("SELECT character_id,item_core FROM character_inventory_items WHERE item_uid=$p0", weaponUid) is [[DBNull, var saved]] &&
                 Equals(saved, weaponCore), "account storage changes owner while preserving complete core and UID");
+            int accountSwapNotices = VerifyCargoSwap(peer, 12, account[3..]);
+            That(personalSwapNotices == 0 && accountSwapNotices == 0,
+                $"两仓整件互换仅由ACK19搬移已有物品，不补14/1681获得通知：个人{personalSwapNotices}，账号{accountSwapNotices}");
             peer.Send(20, Build(w => { w.Write(8); w.Write(new byte[] { 8, 20, 16, 12, 24, 0, 32, 0 }); }));
             peer.Expect(1, 20, [1, 4, 0, 0, 0, 8, 12, 16, 0]);
             var sorted = peer.Expect(0, 13).Body;
@@ -356,6 +362,115 @@ internal static class CargoTcpTests
         await fixture.StopAsync();
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0,
             "warehouse transactions preserve database integrity");
+
+        int VerifyCargoSwap(TcpPeer peer, byte list, byte[] weaponEntry)
+        {
+            Transfer(peer, 0, 121, 3299, 6, list, 1, 0, 6);
+            var main = peer.Expect(0, 14).Body;
+            var material = peer.Expect(0, 14).Body;
+            That(main[0] == 0 && material[0] == list,
+                "互换前真实存入材料，跨容器原通知保持");
+            peer.Barrier();
+            var originalSlots = fixture.Query("SELECT slot_index,item_uid FROM character_inventory_slots WHERE list_type=$p0 AND slot_index IN (1,7) ORDER BY slot_index", list);
+            That(originalSlots is [[1L, long], [7L, long originalWeaponUid]] && originalWeaponUid == weaponUid,
+                "两仓互换使用真实材料和完整武器实例，不伪造客户端槽位");
+            string Assets() => fixture.Snapshot("SELECT item_uid,character_id,account,item_core FROM character_inventory_items ORDER BY item_uid") +
+                fixture.Snapshot("SELECT gold FROM characters ORDER BY id") + fixture.Snapshot("SELECT capacity,gold FROM account_cargo") +
+                fixture.Snapshot("SELECT * FROM account_wallets");
+            string assets = Assets();
+            int notices = 0;
+            // 两个仓库都实际往返后统一断言，失败信息保留双方重复通知数量。
+            foreach (var (source, target) in new[] { ((short)7, (short)1), ((short)1, (short)7) })
+            {
+                Transfer(peer, list, source, weaponId, 1, list, target, 3299, 1);
+                peer.Barrier(packet => { if (packet.Kind == 0 && packet.Opcode is 14 or 1681) notices++; });
+                var positions = fixture.Query("SELECT slot_index,item_uid FROM character_inventory_slots WHERE list_type=$p0 AND slot_index IN (1,7) ORDER BY slot_index", list);
+                That(positions.Length == 2 && Equals(positions[0][1], originalSlots[target == 1 ? 1 : 0][1]) &&
+                    Equals(positions[1][1], originalSlots[target == 1 ? 0 : 1][1]) && Assets() == assets,
+                    "仓内手动互换精确交换两侧UID位置，完整核心、归属、数量和钱包保持");
+            }
+            foreach (var (source, target) in new[] { ((short)7, (short)6), ((short)6, (short)7) })
+            {
+                Transfer(peer, list, source, weaponId, 1, list, target, 0, 1);
+                peer.Barrier(packet => That(packet.Kind != 0 || packet.Opcode is not (13 or 14 or 1681),
+                    "仓内整件移空格仅ACK，不重建或播报获得"));
+                That(fixture.Query("SELECT slot_index FROM character_inventory_slots WHERE item_uid=$p0", weaponUid) is [[long slot]] &&
+                    slot == target && Assets() == assets, "仓内移空格保留唯一UID、完整核心、归属及数量资产");
+            }
+            string State() => fixture.Snapshot() + Assets() +
+                fixture.Snapshot("SELECT * FROM character_inventory_slots ORDER BY character_id,list_type,slot_index") +
+                fixture.Snapshot("SELECT * FROM inventory_audit_log ORDER BY audit_id") + fixture.Snapshot("SELECT * FROM cargo_audit_log") +
+                fixture.Snapshot("SELECT * FROM account_cargo");
+            string before = State();
+            Transfer(peer, list, 1, 3299, 0, list, 1, 3299, 0);
+            peer.Barrier(packet => That(packet.Kind != 0 || packet.Opcode is not (13 or 14 or 1681), "仓内同格零变化只有ACK"));
+            That(State() == before, "仓内同格零变化不写库或推进revision");
+            peer.Send(19, Build(w =>
+            {
+                w.Write(list); w.Write((short)1); w.Write(3298); w.Write(1);
+                w.Write(list); w.Write((short)3); w.Write(0); w.Write(0); w.Write(-1); w.Write((ushort)0);
+            }));
+            peer.Expect(1, 19, [0, 23, 0, list, list]);
+            peer.Barrier(packet => That(packet.Kind != 0 || packet.Opcode is not (13 or 14 or 1681), "错误源模板拒绝后不发布物品"));
+            That(State() == before, "仓内过时源模板拒绝，不改变数据库或数量资产");
+            peer.Send(713, [list, 7, 0]);
+            peer.Expect(1, 713, [1, list, 7, 0]);
+            peer.Barrier();
+            // 普通123B条目offset95为排序锁；独立基准只更新刚设置的锁位。
+            var lockedWeaponEntry = (byte[])weaponEntry.Clone();
+            lockedWeaponEntry[95] = 1;
+            var lockedWeapon = fixture.Snapshot("SELECT item_core FROM character_inventory_items WHERE item_uid=$p0", weaponUid);
+            long materialUid = (long)originalSlots[0][1];
+            Transfer(peer, list, 1, 3299, 2, list, 3, 0, 2);
+            FullCounts(4, 2);
+            var splitUid = fixture.Query("SELECT item_uid FROM character_inventory_slots WHERE list_type=$p0 AND slot_index=3", list)[0][0];
+            That(!Equals(splitUid, materialUid), "仓内拆堆仅新分堆取得新UID");
+            Transfer(peer, list, 3, 3299, 1, list, 1, 3299, 1);
+            FullCounts(5, 1);
+            That(Equals(fixture.Query("SELECT item_uid FROM character_inventory_slots WHERE list_type=$p0 AND slot_index=3", list)[0][0], splitUid),
+                "部分合堆保留源UID");
+            Transfer(peer, list, 3, 3299, 0, list, 1, 3299, 1);
+            var empty = peer.Expect(0, 14).Body;
+            That(empty.Length == 126 && empty[0] == list && U16(empty, 1) == 1 && U16(empty, 3) == 3 && U32(empty, 5) == uint.MaxValue,
+                "合堆耗尽仅清仓库源槽，不以正数差量补获目标");
+            FullCounts(6, 0);
+            That(fixture.Query("SELECT count(*) FROM character_inventory_items WHERE item_uid=$p0", splitUid) is [[0L]],
+                "耗尽合堆回收分堆UID，不保留孤儿核心");
+            peer.Send(714, [list, 7, 0]);
+            peer.Expect(1, 714, [1, list, 7, 0]);
+            peer.Barrier();
+            That(Assets() == assets, "仓内拆合与锁恢复后完整核心、归属、总数量及钱包回到原值");
+            Transfer(peer, list, 1, 3299, 6, 0, 121, 3299, 6);
+            That(U32(peer.Expect(0, 14).Body, 9) == 600 && U32(peer.Expect(0, 14).Body, 5) == uint.MaxValue,
+                "互换回原位后材料正常取回并清仓库源，不改变原后续夹具余额");
+
+            void FullCounts(uint first, uint third)
+            {
+                var full = peer.Expect(0, 13).Body;
+                Cargo(full, list, 8, list == 12 ? 750u : 0, (ushort)(third == 0 ? 2 : 3));
+                int offset = list == 12 ? 9 : 5;
+                var entries = new List<(short Slot, uint Count)> { (1, first) };
+                if (third != 0) entries.Add((3, third));
+                foreach (var (slot, count) in entries)
+                {
+                    var expected = material[3..];
+                    System.Buffers.Binary.BinaryPrimitives.WriteInt16LittleEndian(expected, slot);
+                    System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(expected.AsSpan(6), count);
+                    Bytes(full.AsSpan(offset, 123), expected, "仓内数量重载保留材料完整123字节，仅改变槽位与数量");
+                    offset += 123;
+                }
+                Bytes(full.AsSpan(offset, 123), lockedWeaponEntry, "仓库全量完整保留未移动武器的全部123字节及排序锁");
+                peer.Expect(1, 713, [1, list, 7, 0]);
+                peer.Barrier(packet => That(packet.Kind != 0 || packet.Opcode is not (13 or 14 or 1681),
+                    "数量全量后不补获得通知，未移动武器的排序锁已恢复"));
+                That(fixture.Query("SELECT item_uid FROM character_inventory_slots WHERE list_type=$p0 AND slot_index=1", list) is [[long uid]] && uid == materialUid &&
+                    fixture.Query("SELECT SUM(json_extract(item_core,'$.Value')) FROM character_inventory_items WHERE json_extract(item_core,'$.ItemId')=3299") is [[600L]] &&
+                    fixture.Snapshot("SELECT item_core FROM character_inventory_items WHERE item_uid=$p0", weaponUid) == lockedWeapon,
+                    "拆合堆保留目标UID、材料总量和未移动武器完整带锁核心");
+            }
+            peer.Barrier();
+            return notices;
+        }
     }
 
     static void SortPersonal(TcpPeer peer, int weaponId)

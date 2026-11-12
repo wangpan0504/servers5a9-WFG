@@ -45,20 +45,46 @@ internal static class DungeonEntryCostTests
 
     static void DaybreakPass()
     {
+        DaybreakPass(490011739);
+        DaybreakPass(490013045);
+        var now = DateTimeOffset.Parse("2026-11-12T00:00:00Z");
+        var pieces = new EpicPieceCatalog("[piece list]\n1 2\n[/piece list]");
+        var required = new DungeonRequiredItem(10161610, 20, 1);
+        var fatiguePass = new InventoryItem(71, new(InventoryListType.Main, 122), new(490011739, ItemKind.Material, 1));
+        var attendancePass = new InventoryItem(72, new(InventoryListType.Main, 121), new(490013045, ItemKind.Material, 1));
+        That(DaybreakEntryCost.Select(530, required, new([attendancePass, fatiguePass]), pieces, now) ==
+            new DungeonRequiredItem(490011739, 1, 1), "两券并存时保留原疲劳商店券优先的兼容选择，不按新券槽位抢先");
+        foreach (var unavailable in new[]
+        {
+            fatiguePass with { Core = fatiguePass.Core with { EquipmentLockId = 1 } },
+            fatiguePass with { Core = fatiguePass.Core with { ExpireTime = (int)now.ToUnixTimeSeconds() } },
+            fatiguePass with { Position = new(InventoryListType.PersonalCargo, 0) },
+        })
+            That(DaybreakEntryCost.Select(530, required, new([unavailable, attendancePass]), pieces, now) ==
+                new DungeonRequiredItem(490013045, 1, 1), "旧券不可支付时选择有效签到券的实际ID，不回退芽或消费旧券");
+    }
+
+    static void DaybreakPass(int passItemId)
+    {
         var now = DateTimeOffset.Parse("2026-11-09T00:00:00Z");
         var pieces = new EpicPieceCatalog("[piece list]\n1 2\n[/piece list]");
         var required = new DungeonRequiredItem(10161610, 20, 1);
-        var pass = new InventoryItem(71, new(InventoryListType.Main, 121), new(490011739, ItemKind.Material, 2));
+        var pass = new InventoryItem(71, new(InventoryListType.Main, 121), new(passItemId, ItemKind.Material, 2));
         var buds = new InventoryItem(72, new(InventoryListType.Main, 122), new(10161610, ItemKind.Material, 20));
         var mixed = new InventorySnapshot([pass, buds]);
         var selected = DaybreakEntryCost.Select(530, required, mixed, pieces, now)!;
         var payment = InventoryMaterialConsumptionService.Plan(mixed, [new(selected.ItemId, selected.Count)], pieces, now);
-        That(selected == new DungeonRequiredItem(490011739, 1, 1) && payment.Plan is { } plan &&
+        That(selected == new DungeonRequiredItem(passItemId, 1, 1) && payment.Plan is { } plan &&
             plan.After.Items.SequenceEqual([pass with { Core = pass.Core with { Value = 1 } }, buds]) &&
             plan.ChangedSlots.SequenceEqual([pass.Position]) && mixed.Items.SequenceEqual([pass, buds]),
             "黎明券优先于材料，规划只扣一张原UID券，保留芽及原始快照");
         That(DaybreakEntryCost.Select(530, required, new([pass]), pieces, now) == selected,
             "只有有效通行证时仍能选择抵料费用");
+        That(DaybreakEntryCost.Select(530, required,
+                new([pass with { Core = pass.Core with { ExpireTime = (int)now.ToUnixTimeSeconds() + 1 } }]), pieces, now) == selected &&
+            DaybreakEntryCost.Select(530, required,
+                new([pass with { Position = new(InventoryListType.AccountCommon, 0) }]), pieces, now) == selected,
+            "到期前一秒及账号公共背包中的券仍沿统一材料规划可用");
         That(!InventoryMaterialConsumptionService.Plan(new([buds]), [new(selected.ItemId, selected.Count)], pieces, now).Accepted &&
             !InventoryMaterialConsumptionService.Plan(new([pass with { Core = pass.Core with { ExpireTime = (int)now.ToUnixTimeSeconds() } }, buds]),
                 [new(selected.ItemId, selected.Count)], pieces, now).Accepted,
@@ -68,9 +94,16 @@ internal static class DungeonEntryCostTests
             pass with { Core = pass.Core with { EquipmentLockId = 1 } },
             pass with { Core = pass.Core with { ExpireTime = (int)now.ToUnixTimeSeconds() } },
             pass with { Position = new(InventoryListType.PersonalCargo, 0) },
+            pass with { Position = new(InventoryListType.AccountCargo, 0) },
         })
+        {
             That(DaybreakEntryCost.Select(530, required, new([unavailable, buds]), pieces, now) == required,
                 "锁定、恰好到期或仓库券不抵料，仍回退普通材料");
+            var rejected = DaybreakEntryCost.Select(530, required, new([unavailable]), pieces, now)!;
+            That(rejected == required &&
+                !InventoryMaterialConsumptionService.Plan(new([unavailable]), [new(rejected.ItemId, rejected.Count)], pieces, now).Accepted,
+                "不可支付券且无芽时原材料费用仍拒绝，不由持券直接放行");
+        }
         That(DaybreakEntryCost.Select(530, required, new([buds]), pieces, now) == required &&
             DaybreakEntryCost.Select(531, required, mixed, pieces, now) == required &&
             DaybreakEntryCost.Select(530, required with { Flag = 0 }, mixed, pieces, now)?.Flag == 0 &&
@@ -171,7 +204,18 @@ internal static class DungeonEntryCostTests
         That(dungeons.Get(530).RequiredItem == new DungeonRequiredItem(10161610, 20, 1) &&
             items.Items.Get(490011739).Kind == ItemKind.Material,
             "黎明真实资源仍为20诞生之芽消耗型费用，疲劳商店券保持材料类型");
-        DaybreakEntryTransaction(towns, characters, skills, growth, quests, dungeons, rooms, items, DungeonIncountCatalog.Load(pvf));
+        var attendancePass = new InventoryItem(73, new(InventoryListType.Main, 121),
+            new(490013045, items.Items.Get(490013045).Kind, 2));
+        var attendanceBuds = new InventoryItem(74, new(InventoryListType.Main, 122), new(10161610, ItemKind.Material, 20));
+        var attendanceCost = DaybreakEntryCost.Select(530, dungeons.Get(530).RequiredItem,
+            new([attendancePass, attendanceBuds]), items.EpicPieces, DateTimeOffset.Parse("2026-11-12T00:00:00Z"));
+        That(attendanceCost == new DungeonRequiredItem(490013045, 1, 1),
+            $"日签到490013045有效券与20芽并存时应优先选择一张券，实际{attendanceCost?.ItemId}×{attendanceCost?.Count}");
+        That(items.Items.Get(490013045).Kind == ItemKind.Material, "日签到黎明通行证保持当前资源的材料类型");
+        DaybreakPass();
+        var daybreakIncounts = DungeonIncountCatalog.Load(pvf);
+        foreach (int passItemId in new[] { 490011739, 490013045 })
+            DaybreakEntryTransaction(towns, characters, skills, growth, quests, dungeons, rooms, items, daybreakIncounts, passItemId);
         ImmortalCorridor(towns, characters, skills, growth, quests, dungeons, rooms);
 
         var passIds = items.Items.CosmoPasses();
@@ -435,14 +479,15 @@ internal static class DungeonEntryCostTests
 
     static void DaybreakEntryTransaction(TownCatalog towns, CharacterCatalog characters, SkillLearningCatalog skills,
         CharacterGrowthCatalog growth, QuestCatalog quests, DungeonCatalog dungeons, DungeonRoomCatalog rooms,
-        ItemResources items, DungeonIncountCatalog incounts)
+        ItemResources items, DungeonIncountCatalog incounts, int passItemId)
     {
         var (done, position) = Selection(towns, 530);
         done.UnionWith([6030, 6080, 6082, 10112]);
         using var fixture = new QuestSceneTests.Fixture(towns, characters, skills, growth, quests, false, 95,
-            [.. done], position: position, items: [(490011739, 2), (10161610, 20)], fatigueRemaining: 16, incounts: incounts);
+            [.. done], position: position, items: [(passItemId, 2), (10161610, 20)], fatigueRemaining: 16, incounts: incounts);
         That(fixture.Session.BeginDungeonSelection() is not null, "黎明抵料事务从真实选图入口准备");
         var before = fixture.Read();
+        var originalPass = before.Inventory.Items.Single(item => item.Core.ItemId == passItemId);
         long IncountRows() => Convert.ToInt64(fixture.Query("SELECT count(*) FROM character_dungeon_incount"));
         long beforeRows = IncountRows();
         fixture.Sql("CREATE TRIGGER daybreak_entry_fail AFTER UPDATE ON character_fatigue WHEN NEW.remaining<OLD.remaining AND NEW.used>OLD.used BEGIN SELECT RAISE(ABORT,'daybreak entry rollback'); END");
@@ -457,7 +502,12 @@ internal static class DungeonEntryCostTests
         var after = fixture.Read();
         var counts = fixture.Repository.LoadDungeonIncounts(fixture.Owner, before.Id);
         That(receipt is { EntryFatigueCharged: 8, ChannelConsumedSlots.Length: 1, EntryItemConsumedSlots.IsEmpty: true } &&
-            ItemCount(after, 490011739) == 1 && ItemCount(after, 10161610) == 20 && after.Fatigue?.Remaining == 8 &&
+            ItemCount(after, passItemId) == 1 && ItemCount(after, 10161610) == 20 && after.Fatigue?.Remaining == 8 &&
+            after.Inventory.Items.Single(item => item.Uid == originalPass.Uid) ==
+                (originalPass with { Core = originalPass.Core with { Value = 1 } }) &&
+            after.Inventory.Items.Where(item => item.Uid != originalPass.Uid).SequenceEqual(
+                before.Inventory.Items.Where(item => item.Uid != originalPass.Uid)) &&
+            receipt.ChannelConsumedSlots.SequenceEqual([originalPass.Position]) &&
             after.DungeonState!.LastAttempt == before.DungeonState!.LastAttempt + 1 &&
             after.DungeonState.NextObjectKey > before.DungeonState.NextObjectKey &&
             counts is [{ Dungeon: 530, Usage: { DailyUsed: 1, WeeklyUsed: 1 } }],
