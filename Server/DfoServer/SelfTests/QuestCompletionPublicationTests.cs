@@ -246,8 +246,8 @@ internal static partial class QuestCompletionPublicationTests
         var computer = new CharacterStatComputer(characters);
         var resources = new QuestCompletionRepositoryTests.Resources(pvf, items);
         await RunProgressAsync(towns,characters,resources);
-        foreach (var identity in new (byte Job, byte Grow, int Weapon)[] { (15, 0, 116000005), (14, 0, 108000198), (0, 0x21, 101010438) })
-            await ClassClearAndAwardAsync(identity.Job, identity.Grow, identity.Weapon);
+        foreach (var identity in new (byte Job, byte Grow)[] { (15, 0), (14, 0), (0, 0x21) })
+            await ClassClearAndAwardAsync(identity.Job, identity.Grow);
         await StorageFailureAsync(false);
         await StorageFailureAsync(true);
         foreach (int packet in new[] { 1, 2, 3, 4, 5, 6 })
@@ -272,7 +272,7 @@ internal static partial class QuestCompletionPublicationTests
             return commands;
         }
 
-        async Task ClassClearAndAwardAsync(byte job, byte growType, int weapon)
+        async Task ClassClearAndAwardAsync(byte job, byte growType)
         {
             using var fixture = new QuestCompletionRepositoryTests.Fixture(towns, characters, resources, job: job, growType: growType);
             var selected = fixture.Session.Selected!;
@@ -293,11 +293,12 @@ internal static partial class QuestCompletionPublicationTests
             Check(await commands.DispatchAsync(context, FinishPacket()) == CommandResult.Handled,
                 "全职业/转职完成请求沿真实Handler提交全部任务奖励");
             var committed = fixture.Read();
-            ValidateSuccess(stream.Frames, committed, selected, weapon, computer.Compute(committed));
+            ValidateSuccess(stream.Frames, committed, selected, computer.Compute(committed));
             Check(fixture.Count() == 1 && committed.CompletedQuests.Contains(3145) && committed.ActiveMainQuests.Length == 0 &&
-                committed.Inventory.Items.Any(item => item.Core.ItemId == weapon) &&
+                committed.Inventory.Items.Any(item => item.Core is { ItemId: 10005531, Value: 1 }) &&
+                committed.Inventory.Items.Any(item => item.Core is { ItemId: 8050536, Value: 1 }) &&
                 committed.Learning.Experience == selected.Learning.Experience + 1780 && committed.Revision == selected.Revision + 1,
-                "实际职业武器、七项奖励、成长、清槽与完成位只提交一次");
+                "实际职业分支的两个礼盒、七项奖励、成长、清槽与完成位只提交一次");
             long revision = committed.Revision;
             int itemCount = committed.Inventory.Items.Length;
             stream.Frames.Clear();
@@ -479,8 +480,7 @@ internal static partial class QuestCompletionPublicationTests
         GameConnectionSender sender, CancellationTokenSource stop) =>
         new(new(88, IPAddress.Loopback, stream, stop), fixture.Owner, fixture.Session, sender);
     static void Check(bool value, string name) => TestCheck.That(value, name);
-    static void ValidateSuccess(IReadOnlyList<byte[]> frames, Character committed, Character before, int weapon = 101010438,
-        CharacterStats? expectedStats = null)
+    static void ValidateSuccess(IReadOnlyList<byte[]> frames, Character committed, Character before, CharacterStats? expectedStats = null)
     {
         Check(frames.Count == 6 && frames.Select(frame => BinaryPrimitives.ReadUInt16LittleEndian(frame.AsSpan(1)))
             .SequenceEqual(new ushort[] { 34, 14, 37, 2, 21, 356 }) && frames[0][0] == 1 && frames.Skip(1).All(frame => frame[0] == 0),
@@ -492,9 +492,10 @@ internal static partial class QuestCompletionPublicationTests
         using var ack = new BinaryReader(new MemoryStream(frames[0], 16, frames[0].Length - 16));
         Check(frames[0].Length == 159 && ack.ReadByte() == 1 && ack.ReadUInt16() == 3145 && ack.ReadByte() == 3 &&
             ack.ReadUInt32() == 1780 && ack.ReadByte() == 0 && ack.ReadByte() == 7, "真实Handler发送精确143B已提交EXP/模式头");
-        int[] ids = [10165055, weapon, 10403, 12403, 14403, 16403, 18403];
-        foreach (int id in ids)
+        int[] ids = [10165055, 10005531, 8050536, 12403, 14403, 16403, 18403];
+        for (int index = 0; index < ids.Length; index++)
         {
+            int id = ids[index];
             ushort slot = ack.ReadUInt16();
             uint template = ack.ReadUInt32();
             uint value = ack.ReadUInt32();
@@ -505,7 +506,7 @@ internal static partial class QuestCompletionPublicationTests
             byte remainingUses = ack.ReadByte();
             var actual = committed.Inventory.Find(new(InventoryListType.Main, checked((short)slot)))!;
             Check(template == id && actual.Uid > 0 && actual.Core.ItemId == id &&
-                value == (uint)(actual.Core.IsStackable ? 1 : actual.Core.Value) && amplifyType == actual.Core.AmplifyType &&
+                value == (uint)(index < 3 ? 1 : 999999998) && actual.Core.Value == value && amplifyType == actual.Core.AmplifyType &&
                 amplifyValue == actual.Core.AmplifyValue && expires == unchecked((uint)actual.Core.ExpireTime) &&
                 sortLock == actual.Core.SortLockFlag && remainingUses == actual.Core.RemainUseCount,
                 "ACK34每项实际UID目的槽/增量/Core原序 " + id);
