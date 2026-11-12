@@ -100,7 +100,7 @@ internal static class AdventureCoreTcpTests
     static void Information(byte[] body, ushort actor, string name, ushort count)
     {
         That(U16(body, 0) == actor && U32(body, 14) == 7440 && U32(body, 18) == 1 && BinaryPrimitives.ReadUInt64LittleEndian(body.AsSpan(26)) == 0 &&
-            U16(body, 86) == count && U32(body, 18 + 7432) == 0, "完整信息保留7440B、角色数量、初始进度及零胶囊次数");
+            U16(body, 86) == count && U32(body, 18 + 7432) == 0, "完整信息保留7440B、角色数量、初始进度及零胶囊领取经验");
         int nameSize = checked((int)U32(body, 18 + 7440));
         That(body.Length == 22 + 7440 + nameSize && DecodeName(body, 22 + 7440, nameSize) == name,
             "名称按原生长度及CP936回放");

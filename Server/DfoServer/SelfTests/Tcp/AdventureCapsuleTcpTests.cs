@@ -35,8 +35,10 @@ internal static class AdventureCapsuleTcpTests
         {
             peer.Select(1);
             That(U64(peer.AdventureInfo, 18 + 7424) == catalog.CapsuleCapacity &&
-                U32(peer.AdventureInfo, 18 + 7432) == catalog.Capsule.MaximumGauges,
-                "同账号换角色读取全部十颗共享胶囊，不从角色旧字段读取");
+                U64(peer.AdventureInfo, 18 + 7424) / catalog.Capsule.GaugeExperience == catalog.Capsule.MaximumGauges &&
+                U32(peer.AdventureInfo, 18 + 7432) == catalog.Capsule.GrantedExperience &&
+                U32(peer.AdventureRefresh, 6 + 32) == catalog.Capsule.GrantedExperience,
+                "同账号换角色读取全部十颗共享胶囊，两包确认窗预览均为单颗真实经验");
             peer.Send(1499, []); peer.Expect(1, 1499, [1]);
             var experience = peer.Expect(0, 37).Body;
             That(U64(experience, 1) == initial + catalog.Capsule.GrantedExperience, "1499成功后37回放实际绝对XP");
@@ -48,8 +50,10 @@ internal static class AdventureCapsuleTcpTests
                 {
                     var refresh = peer.Expect(0, 1349); finished = true;
                     That(U64(packet.Body, 18 + 7424) == catalog.CapsuleCapacity - catalog.Capsule.GaugeExperience &&
-                        U32(packet.Body, 18 + 7432) == catalog.Capsule.MaximumGauges - 1,
-                        "首次领取后账号仍保留九颗胶囊");
+                        U64(packet.Body, 18 + 7424) / catalog.Capsule.GaugeExperience == catalog.Capsule.MaximumGauges - 1 &&
+                        U32(packet.Body, 18 + 7432) == catalog.Capsule.GrantedExperience &&
+                        U32(refresh.Body, 6 + 32) == catalog.Capsule.GrantedExperience,
+                        "首次领取后账号仍保留九颗胶囊，两包仍预览下一颗真实经验");
                     // 客户端0102F910把1349 RAW+16原样写管理器+0x190，01034220在1343里用经验表按level+1算同一字段，
                     // 提取后紧跟的1349必须回放同一个分母，否则页面的「下一级所需经验」被覆盖成0。
                     That(U64(refresh.Body, 6 + 16) == catalog.Experience[checked((int)U32(packet.Body, 18)) + 1],
@@ -71,10 +75,11 @@ internal static class AdventureCapsuleTcpTests
                     {
                         var refresh = peer.Expect(0, 1349);
                         ulong remaining = catalog.CapsuleCapacity - claimed * catalog.Capsule.GaugeExperience;
+                        uint preview = remaining == 0 ? 0 : catalog.Capsule.GrantedExperience;
                         That(U64(packet.Body, 18 + 7424) == remaining && U64(refresh.Body, 6 + 24) == remaining &&
-                            U32(packet.Body, 18 + 7432) == catalog.Capsule.MaximumGauges - claimed &&
-                            U32(refresh.Body, 6 + 32) == catalog.Capsule.MaximumGauges - claimed,
-                            "1343与1349逐颗递减一致，不在第一颗后清空或显示十分之一颗数");
+                            remaining / catalog.Capsule.GaugeExperience == catalog.Capsule.MaximumGauges - claimed &&
+                            U32(packet.Body, 18 + 7432) == preview && U32(refresh.Body, 6 + 32) == preview,
+                            "1343与1349计量逐颗递减，单次预览与真实奖励一致，最后一颗领完归零");
                         refreshed = true; break;
                     }
                     That(packet.Kind == 0 && packet.Opcode is 2 or 19 or 21 or 356, "连续胶囊保持原有投影顺序");
@@ -92,7 +97,8 @@ internal static class AdventureCapsuleTcpTests
             peer.Select(1);
             That(fixture.Query("SELECT experience FROM characters WHERE name='CapTcp'") is [[long xp]] &&
                 xp == (long)(initial + catalog.Capsule.MaximumGauges * (ulong)catalog.Capsule.GrantedExperience) &&
-                U64(peer.AdventureInfo, 18 + 7424) == 0, "跨进程恢复实际角色经验和扣除后的账号胶囊");
+                U64(peer.AdventureInfo, 18 + 7424) == 0 && U32(peer.AdventureInfo, 18 + 7432) == 0 &&
+                U32(peer.AdventureRefresh, 6 + 32) == 0, "跨进程恢复实际角色经验和扣除后的账号胶囊，空囊预览为零");
         }
         Console.WriteLine($"PASS {Count - checks} 账号胶囊领取、资格拒绝、XP包序和冷启动TCP断言");
         void Execute(string sql)

@@ -132,6 +132,18 @@ internal static class AdventureCoreTests
             info[18 + AdventurePackets.ContentCountsOffset + 4] == 0 &&
             info[18 + AdventurePackets.ContentCountsOffset + 5] == 0,
             "1343完整7440B、账号数量、连续登录、七项内容熟练度u32、收藏分类按整类集齐下发（type:u8@0、count:u8@1、complete:u8@2）及u64经验");
+        // 确认窗直接将该DWORD作为经验显示并加入预计等级计算；合成资源每次领取50经验，不能填颗数或总奖励。
+        foreach (var (progress, preview) in new (ulong, uint)[] { (0, 0), (99, 0), (100, 50), (150, 50), (200, 50) })
+        {
+            var capsule = snapshot with { State = snapshot.State with { CapsuleExperience = progress } };
+            byte[] capsuleInfo = AdventurePackets.Information(42, capsule, catalog, representatives, 2);
+            byte[] capsuleRefresh = AdventurePackets.Refresh(42, capsule.State, catalog);
+            That(BinaryPrimitives.ReadUInt32LittleEndian(capsuleInfo.AsSpan(18 + 7432)) == preview &&
+                BinaryPrimitives.ReadUInt32LittleEndian(capsuleRefresh.AsSpan(6 + 32)) == preview &&
+                BinaryPrimitives.ReadUInt64LittleEndian(capsuleInfo.AsSpan(18 + 7424)) == progress &&
+                BinaryPrimitives.ReadUInt64LittleEndian(capsuleRefresh.AsSpan(6 + 24)) == progress,
+                "1343与1349分别保留账号计量并投影单次领取经验，空囊和不足整颗为0、多颗仍只预览一颗");
+        }
         var sameBranch = snapshot with { Members = members.Add(new AdventureMember(4, 3, "HeroC", 0, 33, 95, 5, 0)) };
         That(sameBranch.Collections(catalog)[0] is { Count: 1, Complete: true },
             "收藏分类计数按不同转职去重，同一分支的多个角色只计一次，整类集齐时complete=1");
