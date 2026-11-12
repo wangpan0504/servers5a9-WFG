@@ -92,17 +92,20 @@ internal static class BoosterTests
         That(itemResources.Boosters.Get(490004995) is { Available: true } auraGift &&
             auraGift.Pools.Single().Rewards.Single() is { ItemId: 113590008, Count: 1 },
             "转职光环装扮礼盒读取真实单行装扮奖池，不再落成未知附件");
-        var package = BoosterCatalog.Parse("[stackable type]\n`[usable cera package]` 0\n[/stackable type]\n[package data]\n1106 2 1112 1\n[/package data]");
+        // stackable type为标量字段；合成合法礼包沿用实际PVF格式，不附带块结束标签。
+        var package = BoosterCatalog.Parse("[stackable type]\n`[usable cera package]` 0\n[package data]\n1106 2 1112 1\n[/package data]");
         That(package.Available && package.PackageRewards.SequenceEqual(new BoosterReward[] { new(1106, 1, 2), new(1112, 1, 1) }),
             "fixed CERA packages expose every PVF package reward without dropping rows");
-        var legacyPackage = BoosterCatalog.Parse("[stackable type]\n`[cera package]` 0\n[/stackable type]\n[package data]\n1106 2 1112 1\n[/package data]");
+        That(!BoosterCatalog.Parse("[stackable type]\n`[usable cera package]` 0\n[/stackable type]\n[package data]\n1106 2 1112 1\n[/package data]").Available,
+            "标量类型声明错误附带闭合标签仍拒绝，不将畸形声明当成完整礼包");
+        var legacyPackage = BoosterCatalog.Parse("[stackable type]\n`[cera package]` 0\n[package data]\n1106 2 1112 1\n[/package data]");
         That(legacyPackage.Available && legacyPackage.PackageRewards.SequenceEqual(package.PackageRewards),
             "legacy CERA package roots use the same fixed package reward parser");
-        var legacySelection = BoosterCatalog.Parse("[stackable type]\n`[cera package]` 0\n[/stackable type]\n[package data]\n1106 1\n[/package data]\n" +
+        var legacySelection = BoosterCatalog.Parse("[stackable type]\n`[cera package]` 0\n[package data]\n1106 1\n[/package data]\n" +
             "[package data selection]\n1112 1\n[/package data selection]");
         That(legacySelection.Available && legacySelection.PackageSelections is [{ Rewards: [{ ItemId: 1112, Count: 1 }] }],
             "legacy CERA package selection blocks are parsed as one required 518 choice group");
-        var usableSelection = BoosterCatalog.Parse("[stackable type]\n`[usable cera package]` 0\n[/stackable type]\n[package data]\n1106 1\n[/package data]\n" +
+        var usableSelection = BoosterCatalog.Parse("[stackable type]\n`[usable cera package]` 0\n[package data]\n1106 1\n[/package data]\n" +
             "[package data selection]\n1112 1\n[/package data selection]");
         That(usableSelection.Available && usableSelection.PackageSelections.Length == 1,
             "usable CERA package selection blocks share the same required choice parser");
