@@ -25,7 +25,7 @@ internal static class DefaultActivityTcpTests
             Path.Combine(root, "default-activities"), gm: true, resources: resources, clock: clock, sharedResourcePath: true, useDefaultActivities: true, monsterMockBattle: false);
         // 本专项保留战令缺省状态，其余奖励活动显式关闭，避免无关日补给改变协议样本。
         var unrelated = new DfoServer.Game.Events.ServerEventService(new ServerEventRepository(fixture.Database), clock);
-        foreach (ushort id in new ushort[] { 64, 10005, 2257, 228, 2370, 2208 }) unrelated.Override(id, false);
+        foreach (ushort id in new ushort[] { 64, 10005, 2257, 228, 2370, 2208, 2514 }) unrelated.Override(id, false);
         var repository = new CharacterRepository(fixture.Database);
         using (var owner = new AccountOwners().Acquire("10000", () => { }))
             repository.Create(owner, new NewCharacter("DefEvents", resources.Towns.Room, resources.Towns.InitialReturn)
