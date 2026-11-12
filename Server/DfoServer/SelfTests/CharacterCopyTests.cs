@@ -22,6 +22,7 @@ internal static partial class CharacterCopyTests
         using (var f = new Fixture())
         {
             var source = f.LoadSource();
+            f.Sql($"INSERT INTO character_hotkey_settings VALUES({source.Id},'copy-account',0,X'4930310937370A')");
             f.Sql($"INSERT INTO character_epic_wishes(character_id,account,item_ids) VALUES({source.Id},'copy-account','[5000,0,7000,0,0]')");
             f.Sql("INSERT INTO account_daily_attendance_days VALUES('copy-account',20261104,2);" +
                 $"INSERT INTO account_daily_attendance_claims VALUES('copy-account',0,0,20261104,{source.Id},1,50001,2,1)");
@@ -69,6 +70,11 @@ internal static partial class CharacterCopyTests
                 f.Scalar($"SELECT count(*) FROM character_epic_wishes WHERE character_id={source.Id}") == 1 &&
                 f.ScalarText($"SELECT item_ids FROM character_epic_wishes WHERE character_id={source.Id}") == "[5000,0,7000,0,0]",
                 "角色复制保留同账号五槽祈愿顺序，重写新角色外键且来源行不变");
+            That(f.Scalar($"SELECT count(*) FROM character_hotkey_settings WHERE character_id IN ({source.Id},{copy.Id}) AND account='copy-account' AND profile=0 AND hotkeys=X'4930310937370A'") == 2,
+                "角色复制原样保留键位并重写新角色身份，来源键位保持");
+            f.Sql($"UPDATE character_hotkey_settings SET hotkeys=X'4930310935350A' WHERE character_id={copy.Id}");
+            That(f.ScalarText($"SELECT hex(hotkeys) FROM character_hotkey_settings WHERE character_id={source.Id}") == "4930310937370A",
+                "复制完成后新旧角色的键位修改互不影响");
             That(sourceJson == JsonSerializer.Serialize(f.LoadSource()), "原角色完整领域快照不变");
             That(f.Snapshot("account_daily_attendance_days") == attendanceDays &&
                 f.Snapshot("account_daily_attendance_claims") == attendanceClaims &&
@@ -87,6 +93,7 @@ internal static partial class CharacterCopyTests
         }
         using (var f = new Fixture())
         {
+            f.Sql($"INSERT INTO character_hotkey_settings VALUES({f.Source.Id},'copy-account',0,X'4930310937370A')");
             f.Copy("Occupied");
             Reject(() => f.Copy("Occupied"), "同名拒绝");
             Reject(() => f.Copy("bad name"), "非法名称拒绝");
@@ -95,8 +102,10 @@ internal static partial class CharacterCopyTests
             That(f.Repository.ListRoster(f.Owner).Length == 2, "拒绝不创建半成品角色");
             f.Sql("CREATE TRIGGER copy_fail BEFORE INSERT ON character_skills WHEN NEW.character_id<>" + f.Source.Id + " BEGIN SELECT RAISE(FAIL,'test late copy failure'); END;");
             var before = f.CountRows("character_inventory_items");
+            string hotkeysBefore = f.Snapshot("character_hotkey_settings");
             Reject(() => f.Copy("LateFail"), "晚阶段失败回滚");
             That(f.CountRows("character_inventory_items") == before && f.Repository.ListRoster(f.Owner).Length == 2, "晚失败回滚角色物品和关联行");
+            That(f.Snapshot("character_hotkey_settings") == hotkeysBefore, "后续技能复制失败同时回滚先前复制的键位行");
             f.Sql("DROP TRIGGER copy_fail; CREATE TABLE character_unknown_state(character_id INTEGER, value TEXT);");
             Reject(() => f.Copy("Unknown"), "未知角色关联不猜着复制");
         }

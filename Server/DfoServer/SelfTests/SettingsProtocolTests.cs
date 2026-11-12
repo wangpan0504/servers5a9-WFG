@@ -121,7 +121,7 @@ internal static partial class SettingsProtocolTests
             "保留用户明确取消绑定的合法键值，不擅自补默认移动键");
         var saved = new ClientSettingsSnapshot([.. new byte[204]], default, Hotkeys: parsed);
         That(ClientSettingsRules.Project(saved).Hotkeys == parsed && !new ClientSettingsSnapshot(default, default, Hotkeys: parsed).IsDefault,
-            "角色主区协调不丢失独立账号键位，也不生成未保存主区");
+            "角色主区协调不丢失独立角色键位，也不生成未保存主区");
         Reject<InvalidDataException>(() => SettingsPackets.Hotkeys(2, parsed), "未知配置不能回放到另一原生键位bank");
     }
 
@@ -252,10 +252,10 @@ internal static partial class SettingsProtocolTests
         ImmutableArray<byte> main;
         readonly Dictionary<ushort, ImmutableArray<byte>> characters = [];
         readonly Dictionary<ushort, ImmutableArray<byte>> roleMain = [];
-        ImmutableArray<byte> hotkeys;
+        readonly Dictionary<ushort, ImmutableArray<byte>> hotkeys = [];
         ImmutableArray<byte> quickChat0, quickChat1;
         public ClientSettingsSnapshot Load(AccountOwners.Lease owner, ushort id) =>
-            new(main, characters.GetValueOrDefault(id), roleMain.GetValueOrDefault(id), hotkeys, quickChat0, quickChat1);
+            new(main, characters.GetValueOrDefault(id), roleMain.GetValueOrDefault(id), hotkeys.GetValueOrDefault(id), quickChat0, quickChat1);
         public bool SaveQuickChat(AccountOwners.Lease owner, byte bank, ImmutableArray<byte> text)
         {
             if (bank == 0) quickChat0 = text; else quickChat1 = text;
@@ -269,7 +269,7 @@ internal static partial class SettingsProtocolTests
             return true;
         }
         public bool SaveCharacterOptions(AccountOwners.Lease owner, ushort id, ImmutableArray<byte> payload) { characters[id] = payload; return true; }
-        public bool SaveHotkeys(AccountOwners.Lease owner, byte profile, ImmutableArray<byte> text) { hotkeys = text; return true; }
+        public bool SaveHotkeys(AccountOwners.Lease owner, ushort characterId, byte profile, ImmutableArray<byte> text) { hotkeys[characterId] = text; return true; }
     }
 
     static void RoleScopedValues()

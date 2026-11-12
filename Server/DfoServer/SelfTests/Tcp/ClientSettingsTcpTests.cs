@@ -254,7 +254,7 @@ internal static partial class ClientSettingsTcpTests
         {
             SelectHotkeys(peer, 0, 0, CommonKeys);
             ReturnSelection(peer);
-            SelectHotkeys(peer, 1, 0, CommonKeys);
+            SelectHotkeys(peer, 1, 0, CreatorKeys);
             ReturnSelection(peer);
             SelectHotkeys(peer, 2, 1, CreatorKeys);
             Exit(peer);
@@ -338,33 +338,42 @@ internal static partial class ClientSettingsTcpTests
         using (var peer = Open(fixture, HotkeyAccount))
         {
             peer.Create("KeyNormal");
+            ushort first = peer.Id;
             peer.Create("KeyMage", 3);
+            ushort second = peer.Id;
             peer.Create("KeyCreator", 10);
             peer.Select();
             string assets = Assets(fixture, timings);
             Save(peer, 198, CommonKeys);
             peer.Barrier();
-            That(fixture.Query("SELECT profile,hex(hotkeys) FROM account_hotkey_settings WHERE account=$p0", HotkeyAccount)
-                is [[0L, string text]] && text == Convert.ToHexString(CommonKeys) && Assets(fixture, timings) == assets,
-                "198真实分派静默保存账号键位，不回推454或改变角色资产");
+            That(fixture.Query("SELECT character_id,profile,hex(hotkeys) FROM character_hotkey_settings WHERE account=$p0", HotkeyAccount)
+                is [[long id, 0L, string text]] && id == first && text == Convert.ToHexString(CommonKeys) && Assets(fixture, timings) == assets,
+                "198真实分派静默保存当前角色键位，不回推454或改变角色资产");
             Save(peer, 198, CommonKeys);
             peer.Barrier();
             ReturnSelection(peer);
-            SelectHotkeys(peer, 1, 0, CommonKeys);
-            ReturnSelection(peer);
-            SelectHotkeys(peer, 2, 1, "NONE"u8.ToArray());
-            That(fixture.Query("SELECT profile,hex(hotkeys) FROM account_hotkey_settings WHERE account=$p0", HotkeyAccount)
-                is [[0L, string normal]] && normal == Convert.ToHexString(CommonKeys), "首次缔造初始化不写默认行或覆盖普通职业存档");
-            ReturnSelection(peer);
-            SelectHotkeys(peer, 1, 0, CommonKeys);
-            ReturnSelection(peer);
-            SelectHotkeys(peer, 2, 1, "NONE"u8.ToArray());
+            SelectHotkeys(peer, 1, 0, "NONE"u8.ToArray());
             Save(peer, 198, CreatorKeys);
             peer.Barrier();
-            That(fixture.Query("SELECT count(*) FROM account_hotkey_settings WHERE account=$p0", HotkeyAccount) is [[2L]],
-                "同账号普通职业与缔造者各存一份完整键位");
             ReturnSelection(peer);
-            SelectHotkeys(peer, 1, 0, CommonKeys);
+            SelectHotkeys(peer, 0, 0, CommonKeys);
+            ReturnSelection(peer);
+            // a已保存后创建新b：首次回放必须缺省，保存后不能污染已有a/c。
+            peer.Create("KeyNew");
+            SelectHotkeys(peer, 3, 0, "NONE"u8.ToArray());
+            Save(peer, 198, CommonKeys);
+            peer.Barrier();
+            ReturnSelection(peer);
+            SelectHotkeys(peer, 2, 1, "NONE"u8.ToArray());
+            That(fixture.Query("SELECT hex(hotkeys) FROM character_hotkey_settings WHERE character_id=$p0", second)
+                is [[string saved]] && saved == Convert.ToHexString(CreatorKeys), "普通角色各存自身原文，缔造初始化不覆盖它们");
+            Save(peer, 198, CreatorKeys);
+            peer.Barrier();
+            That(fixture.Query("SELECT count(*) FROM character_hotkey_settings WHERE account=$p0", HotkeyAccount) is [[4L]] &&
+                fixture.Query("SELECT count(*) FROM account_hotkey_settings WHERE account=$p0", HotkeyAccount) is [[0L]],
+                "同账号四个角色各有独立配置，旧账号表不再写入");
+            ReturnSelection(peer);
+            SelectHotkeys(peer, 1, 0, CreatorKeys);
             ReturnSelection(peer);
             SelectHotkeys(peer, 2, 1, CreatorKeys);
             Exit(peer);
@@ -373,20 +382,20 @@ internal static partial class ClientSettingsTcpTests
         {
             peer.Create("OtherKeys");
             peer.Select();
-            That(peer.ClientSettings is [{ Opcode: 390 }, { Opcode: 454 }], "其他账号仅初始化自身角色选项与原生默认键位，不接收已保存账号键位");
+            That(peer.ClientSettings is [{ Opcode: 390 }, { Opcode: 454 }], "其他账号仅初始化自身角色选项与原生默认键位，不接收已保存角色键位");
             Exit(peer);
         }
         using (var peer = Open(fixture, HotkeyAccount))
         {
             SelectHotkeys(peer, 0, 0, CommonKeys);
-            string old = fixture.Snapshot("SELECT * FROM account_hotkey_settings ORDER BY account,profile"), assets = Assets(fixture, timings);
-            fixture.Sql("CREATE TRIGGER hotkey_tcp_fail BEFORE UPDATE ON account_hotkey_settings BEGIN SELECT RAISE(ABORT,'hotkey failure'); END");
+            string old = fixture.Snapshot("SELECT * FROM character_hotkey_settings ORDER BY character_id,profile"), assets = Assets(fixture, timings);
+            fixture.Sql("CREATE TRIGGER hotkey_tcp_fail BEFORE UPDATE ON character_hotkey_settings BEGIN SELECT RAISE(ABORT,'hotkey failure'); END");
             try
             {
                 Save(peer, 198, CreatorKeys);
                 peer.Closed();
-                That(fixture.Snapshot("SELECT * FROM account_hotkey_settings ORDER BY account,profile") == old && Assets(fixture, timings) == assets,
-                    "198 SQL失败无占位成功，保留原键位和角色资产");
+                That(fixture.Snapshot("SELECT * FROM character_hotkey_settings ORDER BY character_id,profile") == old && Assets(fixture, timings) == assets,
+                    "198 SQL失败无占位成功，保留全部角色键位和资产");
             }
             finally { fixture.Sql("DROP TRIGGER hotkey_tcp_fail"); }
         }
@@ -395,8 +404,8 @@ internal static partial class ClientSettingsTcpTests
             SelectHotkeys(peer, 0, 0, CommonKeys);
             peer.Send(198, [.. Blob(CommonKeys), 0]);
             peer.Closed();
-            That(fixture.Query("SELECT hex(hotkeys) FROM account_hotkey_settings WHERE account=$p0 AND profile=0", HotkeyAccount)
-                is [[string text]] && text == Convert.ToHexString(CommonKeys), "不接受参考端额外尾部，畸形请求不覆盖键位");
+            That(fixture.Query("SELECT hex(h.hotkeys) FROM character_hotkey_settings h JOIN characters c ON c.id=h.character_id WHERE h.account=$p0 AND c.slot=0 AND h.profile=0", HotkeyAccount)
+                is [[string text]] && text == Convert.ToHexString(CommonKeys), "不接受参考端额外尾部，畸形请求不覆盖当前角色键位");
         }
     }
 

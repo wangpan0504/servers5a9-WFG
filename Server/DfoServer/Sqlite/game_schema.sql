@@ -1266,6 +1266,10 @@ CREATE TABLE adventure_ledger_meta(
   key TEXT NOT NULL PRIMARY KEY,value TEXT NOT NULL
 );
 
+CREATE TABLE character_hotkey_settings(
+  character_id INTEGER NOT NULL,account TEXT NOT NULL,profile INTEGER NOT NULL CHECK(profile IN (0,1)),
+  hotkeys BLOB NOT NULL CHECK(typeof(hotkeys)='blob' AND length(hotkeys) BETWEEN 1 AND 1399),
+  PRIMARY KEY(character_id,profile),FOREIGN KEY(character_id,account) REFERENCES characters(id,account));
 CREATE TABLE account_hotkey_settings(
   account TEXT NOT NULL REFERENCES accounts(account_id),profile INTEGER NOT NULL CHECK(profile IN (0,1)),
   hotkeys BLOB NOT NULL CHECK(typeof(hotkeys)='blob' AND length(hotkeys) BETWEEN 1 AND 1399),

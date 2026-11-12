@@ -53,7 +53,7 @@ internal sealed class ClientSettingsRepository(string path) : IClientSettingsSto
             LEFT JOIN account_client_settings a ON a.account=r.account
             LEFT JOIN character_client_settings c ON c.character_id=r.id AND c.account=r.account
             LEFT JOIN character_game_settings g ON g.character_id=r.id AND g.account=r.account
-            LEFT JOIN account_hotkey_settings h ON h.account=r.account AND h.profile=CASE WHEN r.job=10 THEN 1 ELSE 0 END
+            LEFT JOIN character_hotkey_settings h ON h.character_id=r.id AND h.account=r.account AND h.profile=CASE WHEN r.job=10 THEN 1 ELSE 0 END
             LEFT JOIN account_quick_chat q0 ON q0.account=r.account AND q0.bank=0
             LEFT JOIN account_quick_chat q1 ON q1.account=r.account AND q1.bank=1
             LEFT JOIN account_recent_emoticons e ON e.account=r.account
@@ -149,18 +149,23 @@ internal sealed class ClientSettingsRepository(string path) : IClientSettingsSto
         return true;
     });
 
-    public bool SaveHotkeys(AccountOwners.Lease owner, byte profile, ImmutableArray<byte> text) => owner.Execute(() =>
+    public bool SaveHotkeys(AccountOwners.Lease owner, ushort characterId, byte profile, ImmutableArray<byte> text) => owner.Execute(() =>
     {
         using var db = database.Open();
         using (var read = db.BeginRead())
         using (var query = db.CreateCommand())
         {
             query.Transaction = read;
-            query.CommandText = "SELECT h.hotkeys FROM accounts a LEFT JOIN account_hotkey_settings h ON h.account=a.account_id AND h.profile=$profile WHERE a.account_id=$account";
+            query.CommandText = """
+                SELECT h.hotkeys FROM characters r
+                LEFT JOIN character_hotkey_settings h ON h.character_id=r.id AND h.account=r.account AND h.profile=$profile
+                WHERE r.id=$id AND r.account=$account AND $profile=CASE WHEN r.job=10 THEN 1 ELSE 0 END
+                """;
+            query.Parameters.AddWithValue("$id", characterId);
             query.Parameters.AddWithValue("$profile", profile);
             query.Parameters.AddWithValue("$account", owner.Account);
             using var reader = query.ExecuteReader();
-            if (!reader.Read()) throw new InvalidDataException("键位账号不存在");
+            if (!reader.Read()) throw new InvalidDataException("键位角色不属于当前账号或职业配置不匹配");
             if (!reader.IsDBNull(0) && text.AsSpan().SequenceEqual((byte[])reader.GetValue(0))) return false;
         }
         using var write = db.BeginWrite("ClientSettingsRepository.SaveHotkeys");
@@ -168,13 +173,14 @@ internal sealed class ClientSettingsRepository(string path) : IClientSettingsSto
         using var command = db.CreateCommand();
         command.Transaction = tx;
         command.CommandText = """
-            INSERT INTO account_hotkey_settings(account,profile,hotkeys) VALUES($account,$profile,$text)
-            ON CONFLICT(account,profile) DO UPDATE SET hotkeys=excluded.hotkeys
+            INSERT INTO character_hotkey_settings(character_id,account,profile,hotkeys) VALUES($id,$account,$profile,$text)
+            ON CONFLICT(character_id,profile) DO UPDATE SET hotkeys=excluded.hotkeys
             """;
+        command.Parameters.AddWithValue("$id", characterId);
         command.Parameters.AddWithValue("$account", owner.Account);
         command.Parameters.AddWithValue("$profile", profile);
         command.Parameters.Add("$text", SqliteType.Blob).Value = text.ToArray();
-        if (command.ExecuteNonQuery() != 1) throw new InvalidDataException("账号键位未提交");
+        if (command.ExecuteNonQuery() != 1) throw new InvalidDataException("角色键位未提交");
         tx.Commit();
         return true;
     });

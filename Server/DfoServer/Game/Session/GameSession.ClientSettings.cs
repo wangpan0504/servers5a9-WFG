@@ -21,7 +21,7 @@ internal sealed partial class GameSession
     public bool SaveHotkeys(ClientSettingsService settings, ImmutableArray<byte> text) => owner.Execute(() =>
     {
         var character = Selected ?? throw new InvalidDataException("保存键位时没有选中角色");
-        return settings.SaveHotkeys(owner, HotkeySettingsRules.Profile(character.Job), text);
+        return settings.SaveHotkeys(owner, character.Id, HotkeySettingsRules.Profile(character.Job), text);
     });
 
     public bool SaveQuickChat(ClientSettingsService settings, byte bank, ImmutableArray<byte> text) => owner.Execute(() =>
