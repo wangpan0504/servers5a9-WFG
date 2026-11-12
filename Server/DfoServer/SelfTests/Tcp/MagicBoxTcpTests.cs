@@ -84,14 +84,14 @@ internal static class MagicBoxTcpTests
             That(restored.Inventory.Find(new(InventoryListType.Main, 70)) is { Core.Count: 989 } &&
                 restored.Inventory.AccountWallet.SeriaLuck == 1, "重新选角后持久化十连源数量及幸运值保持一致");
         }
-        DungeonBox(fixture, resources, repository);
+        DungeonBox(fixture, resources, repository, restoreExpertContract);
         await fixture.StopAsync();
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0,
             "随机盒真实TCP后的存档完整性");
         await RunPotAsync(source, root, resources);
     }
 
-    static void DungeonBox(TcpTestFixture fixture, TcpTestResources resources, CharacterRepository repository)
+    static void DungeonBox(TcpTestFixture fixture, TcpTestResources resources, CharacterRepository repository, bool expertContract)
     {
         var places = resources.ItemResources.MagicBoxes.UsePlaces(2682272);
         That(places.Allows(new(StackableUsePlace.Dungeon)), "真实赛丽亚幸运盒地点允许正式副本");
@@ -109,7 +109,7 @@ internal static class MagicBoxTcpTests
                     new(InventoryListType.Main, 70), InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(2682272), 2))) }
             });
         using var peer = Open(fixture);
-        peer.Select(created.Slot);
+        peer.Select(created.Slot, expertContract: expertContract);
         FormalDungeonTcpTests.EntryTown(peer);
         FormalDungeonTcpTests.Enter(peer);
         string before = fixture.Snapshot("SELECT * FROM character_inventory_items ORDER BY item_uid");

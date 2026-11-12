@@ -109,8 +109,8 @@ internal sealed class AdventureCatalog
             CapsuleCapacity > long.MaxValue) throw new InvalidDataException("冒险团胶囊配置非法");
     }
 
-    // 资源中 [capsule max exp] 就是账号共享计量条的总容量；[capsule need minimum exp] 是每颗胶囊消耗的那一格。
-    public ulong CapsuleCapacity => Capsule.GaugeExperience;
+    // 原生0102F250以[capsule max exp]除账号计量得到完整颗数；max count才是可储存颗数上限。
+    public ulong CapsuleCapacity => checked(Capsule.GaugeExperience * Capsule.MaximumGauges);
     public AdventureBenefit Benefit(int level) => Benefits.GetValueOrDefault(level) ?? throw new InvalidDataException("冒险团等级缺少属性声明");
     // 外传角色的CHR首成长为0，而收藏/远征资源以分支1声明；仅转换本领域资源索引，不改Actor或技能树。
     public static byte ProfessionGrow(byte job, byte grow) => job is 9 or 10 && (grow & 15) == 0 ? (byte)1 : (byte)(grow & 15);

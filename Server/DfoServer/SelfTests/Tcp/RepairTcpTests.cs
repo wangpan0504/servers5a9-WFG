@@ -123,10 +123,12 @@ internal static class RepairTcpTests
             peer.Barrier();
             That(Snapshot() == before, "加载阶段不能紧急修理或扣金币");
             FormalDungeonTcpTests.Load(peer);
+            // 正常首房加载已经提交疲劳扣点；拒绝仓库修理须对比加载完成后的严格快照。
+            before = Snapshot();
             Send(peer, 2, 0, true);
             peer.Expect(1, 23, [0, 19, 0]);
             peer.Barrier();
-            That(Snapshot() == before, "商店修理放行不开放战斗中的仓库服务");
+            That(Snapshot() == before, "商店修理放行不开放战斗中的仓库服务；前=" + before + ";后=" + Snapshot());
             Send(peer, 0, 9, true);
             Ack(peer, 760, 0, 9);
             var delta = peer.Expect(0, 14).Body;

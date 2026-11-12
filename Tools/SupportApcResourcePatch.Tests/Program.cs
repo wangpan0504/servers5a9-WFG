@@ -1,6 +1,18 @@
 using System.Text.Json;
 using PvfLib;
 
+if (args is ["--balanced-tiers", var balancedPvf, var balancedEvidence, var balancedOutput])
+{
+    SupportBalancedTierTests.Run(balancedPvf, balancedEvidence, balancedOutput);
+    return;
+}
+
+if (args is ["--damage", var damagePvf, var damageOutput])
+{
+    SupportDamageTests.Run(damagePvf, damageOutput);
+    return;
+}
+
 if (args is ["--opening", var openingPvf, var openingOutput])
 {
     SupportOpeningTests.Run(openingPvf, openingOutput);

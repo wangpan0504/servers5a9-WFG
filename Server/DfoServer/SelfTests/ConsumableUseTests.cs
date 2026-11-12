@@ -345,6 +345,15 @@ internal static partial class ConsumableUseTests
                 potion.CoolTime == duration && potion.EffectMaintenance == 7 && potion.CooltimeMaintenance == 7 &&
                 ReferenceEquals(effect, resources.RecoveryConsumables.EnhancementPotions[id]),
                 "升级药剂消费目录复用同一个已核效果实例，期限与保留位取各自正式STK：" + id);
+        var amplifySource = new InventoryItem(1, new(InventoryListType.Main, 65),
+            InventoryRewardGrantService.Create(resources.Items.Get(10004688), 2));
+        Character amplifyUser = new(1, 0, "Amplify", 0, new(1, 0, 10, 10), null)
+            { Level = 95, Inventory = new([amplifySource]) };
+        var amplifyUse = mentalUse.Plan(amplifyUser, new(amplifySource.Position, 0, 10004688, 0), 0);
+        That(amplifyUse.Accepted && amplifyUse.Plan!.After.Items.Length == 1 &&
+            amplifyUse.Plan.After.Find(amplifySource.Position) is { Core.Count: 1 } used && used.Uid == amplifySource.Uid &&
+            amplifyUse.Plan.After.AccountWallet == amplifyUser.Inventory.AccountWallet,
+            "实际增幅秘笈无商店材料仍可使用，只扣原UID一瓶且不改账号钱包");
         RunStaminaResources(resources);
         foreach (int orphan in new[] { 490001355,490001358,490001356,490001359 })
             That(!resources.RecoveryConsumables.TryGet(orphan, out _),

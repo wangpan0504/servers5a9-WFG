@@ -52,6 +52,9 @@ internal static class BoosterDeadlineTcpTests
             writer?.Commit();
             peer.Expect(1, 160, [0, 19, 0]);
             var notices = PartyDungeonTcpTests.Drain(peer);
+            foreach (var notice in notices.Where(row => row.Opcode is 832 or 833)) peer.ValidateServiceDayNotice(notice);
+            That(notices.Count(row => row.Opcode == 832) == 1 && notices.Count(row => row.Opcode == 833) == 1,
+                "失败ACK后的日切额度各发送一次，包体与当前角色真实用量一致");
             var daily = notices.Where(row => row is { Kind: 0, Opcode: 541 })
                 .SelectMany(row => DailyBoosterProjectionTests.Decode(row.Body)).ToDictionary(row => row.Key, row => row.Value);
             That(daily.Count == resources.ItemResources.Boosters.DailyRetainedTemplateIds.Count && daily[490704515] == 0 &&
@@ -59,8 +62,8 @@ internal static class BoosterDeadlineTcpTests
             That(notices.Any(row => row is { Kind: 0, Opcode: 550, Body.Length: 6 }) &&
                 notices.Any(row => row is { Kind: 0, Opcode: 1536, Body.Length: 5 }) &&
                 notices.Where(row => row.Opcode == 550).All(row => row.Body.Length == 6 && U32(row.Body) > 0) &&
-                notices.All(row => row.Kind == 0 && row.Opcode is 21 or 356 or 541 or 550 or 574 or 1343 or 1349 or 1536),
-                "失败ACK之后的在线日切通知保留完整副本次数和强袭信息");
+                notices.All(row => row.Kind == 0 && row.Opcode is 21 or 356 or 541 or 550 or 574 or 832 or 833 or 1343 or 1349 or 1536),
+                "失败ACK之后的在线日切通知保留完整副本次数和强袭信息；实际=" + string.Join(",", notices.Select(row => $"{row.Kind}/{row.Opcode}/{row.Body.Length}")));
             That(State() == before && fixture.Query("SELECT revision FROM characters") is [[long currentRevision]] && currentRevision == revision + 1 &&
                 fixture.Query("SELECT json_extract(state_json,'$.RefillDay') FROM character_server_item_usage") is [[long currentDay]] && currentDay == day + 1,
                 "跨截止失败ACK19，源、奖励和礼盒账本不变；仅新服务日水印更新revision，writer等待=" + waitForWriter);

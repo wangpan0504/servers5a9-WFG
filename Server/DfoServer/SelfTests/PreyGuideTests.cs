@@ -346,6 +346,11 @@ internal static class PreyGuideTests
             That(Enumerable.Range(1, 16).Count(slot => battle.View.Symbols[$"[area_{slot}_dgn_type]"] == 5) == 3 &&
                 Enumerable.Range(1, 16).Count(slot => battle.View.Symbols[$"[area_{slot}_dgn_type]"] == 4) == 2,
                 "战略地图具有真实防御及圣地区域类型");
+            That(Enumerable.Range(1, 20).All(slot => battle.View.Symbols[$"[area_{slot}]"] is var id &&
+                (id == 0 ? battle.View.Symbols[$"[area_{slot}_dgn_type]"] == 7 :
+                    script.Phases[0].Dungeons.Any(row => row.Id == id &&
+                        !row.Declarations.Any(field => field.Tag == "[single type]" && field.Values[0].Number != branch)))),
+                "引导战略图只发布当前single分支，全部空格使用原生隐藏类型7，不画团队普通据点");
             That(battle.Join(actor, [new("ship", [new(0, 0, [new(1, 1)], [])], new(0, 0, 0, 0, 0, 0)),
                 new("ship", [new(0, 0, [new(1, 1)], [])], new(0, 1, 0, 0, 0, 0))]), "船体用例登记原角色");
             Expire(new(9000, 0));
@@ -360,7 +365,8 @@ internal static class PreyGuideTests
             Expire(new(1, 1000));
             That(battle.View.Symbols["[slenikon hp]"] == 9983, "正在防御的Run不按漏守重复扣船体");
             battle.ReleaseDungeon(actor, identity.InstanceId);
-            That(battle.View.Symbols["[slenikon hp]"] == 7983 && battle.View.Symbols["[area_2]"] == 0,
+            That(battle.View.Symbols["[slenikon hp]"] == 7983 && battle.View.Symbols["[area_2]"] == 0 &&
+                battle.View.Symbols["[area_2_dgn_type]"] == 7,
                 "放弃防御只损失资源2000点并移除区域");
             while (battle.View.Symbols["[slenikon hp]"] > 2000) Expire(new(9001, 0));
             Expire(new(1, 1000));

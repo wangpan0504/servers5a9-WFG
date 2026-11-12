@@ -46,7 +46,7 @@ internal sealed partial class CharacterRepository
                     FiendWarEligible: CharacterRosterEntry.IsFiendWarEligible(reader.GetInt64(6) != 0, reader.GetInt64(7) != 0),
                     AntonEligible: reader.GetInt64(8) != 0,
                     LukeEligible: reader.GetInt64(9) != 0,
-                    PreyEligible: CharacterRosterEntry.IsPreyEligible(reader.GetInt64(10) != 0, level), IsPvpPrivate: reader.GetInt64(11)!=0, BeastEligible: reader.GetInt64(15)!=0)
+                    PreyEligible: CharacterRosterEntry.IsPreyEligible(reader.GetInt64(10) != 0, level), IsPvpPrivate: reader.GetInt64(11)!=0, BeastEligible: BeastChannel.Eligible(level, reader.GetInt64(15)!=0))
                     { CloneTitleItemId = checked((uint)reader.GetInt64(12)), WeaponSkin = checked((int)reader.GetInt64(13)),
                         RenamePending = reader.GetInt64(14) != 0 });
             }

@@ -60,6 +60,9 @@ internal static class BoosterSelectionTests
             "等价空重复保留两个原块及其它奖励分类，块间空白不改变token");
         That(BoosterCatalog.Parse(Text("", "", "[booster category num]\n1 2\n")).Available,
             "单维分类可保留等价空重复");
+        That(BoosterCatalog.Parse(Text(empty, empty, type: "[stackable type]\n`[booster]` 0\n" +
+            "[stackable type]\n`[booster selection]` 0\n")).Available,
+            "合法根级类型覆盖与等价重复分类共同保留，最终类型决定入口");
         var repeatedRewards = BoosterCatalog.Parse(Text(reward, reward));
         That(repeatedRewards.Available && repeatedRewards.Selection!.Categories.Length == 3 &&
             repeatedRewards.Selection.Categories.All(category => category.Rewards.Length == 1),
@@ -82,7 +85,7 @@ internal static class BoosterSelectionTests
             Text(empty, empty, dimensions: "[booster category num]\n2 2 0\n"),
             Text(empty, empty, dimensions: "[booster category num]\n3 2 2 2\n"),
             Text(empty, empty, dimensions: "[booster category num]\n2 2 x\n"),
-            Text(empty, empty, type: "[stackable type]\n`[booster selection]` 0\n[stackable type]\n`[booster selection]` 0\n"),
+            Text(empty, empty, type: "[stackable type]\n`[booster selection]` x\n[stackable type]\n`[booster selection]` 0\n"),
             Text(empty, empty, extra: "[booster select category]\n1 1\n[unknown]\n[/booster select category]"),
             Text(empty, empty).Replace("1 0\n[etc]", "2 0\n[etc]")
         })

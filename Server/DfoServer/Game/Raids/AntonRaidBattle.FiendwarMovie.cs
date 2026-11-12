@@ -54,9 +54,11 @@ internal sealed partial class AntonRaidBattle
         }
     }
 
-    internal bool FiendwarMovieCardsReady(AntonRaidBattleView view)
+    internal bool FiendwarMovieCardsReady(AntonRaidBattleView view, RaidActor? actor = null)
     {
         lock (gate) return HasFiendwarMovieBarrierLocked() && ReferenceEquals(current, view) &&
-            view.State == AntonRaidBattleState.Reward && !view.ClockFaulted && !view.PhaseExpired && LukeMovieBarrierReadyLocked();
+            view.State == AntonRaidBattleState.Reward && !view.ClockFaulted && !view.PhaseExpired &&
+            (actor is null ? LukeMovieBarrierReadyLocked() : actor.IsCurrent && members.ContainsKey(actor) &&
+                (fiendwarMovieElapsed || lukeMovieCompleted.Contains((view.Phase, actor.Character))));
     }
 }

@@ -26,7 +26,8 @@ internal static class ExperienceConsumableTcpTests
                   ("CapsuleMap", 16, ExperienceConsumableTests.PercentItem), ("OldBook", 1, 1034),
                   ("MillionBook", 60, 1231), ("TenMilBook", 60, 1232), ("CappedBook", 94, 1232),
                   ("TownCapsule", 60, 10005340), ("GuideTown", 14, 1034), ("GuideMap", 14, 1034),
-                  ("EmoteLevel", 19, ExperienceConsumableTests.PercentItem) })
+                  ("EmoteLevel", 19, ExperienceConsumableTests.PercentItem),
+                  ("Return85", 85, 490013860), ("Return90", 90, 490013860), ("Return84", 84, 490013860) })
             {
                 var inventory = candidate.Inventory.Items.Add(new(0, new(InventoryListType.Main, 65),
                     new(item, GameWorld.Items.ItemKind.Consumable, 2)));
@@ -158,6 +159,28 @@ internal static class ExperienceConsumableTcpTests
             if (expected is not null && resources.ChatEmoticons.Eligible(19).Length != resources.ChatEmoticons.Eligible(20).Length)
                 Bytes(packets.Single(packet => packet is { Kind: 0, Opcode: 411 }).Body, expected,
                     "升级跨过PVF等级门槛后刷新账号聊天表情配置");
+        }
+        foreach (int index in new[] { 11, 12, 13 })
+        {
+            using var peer = Open(fixture);
+            var before = created[index];
+            peer.Select(before.Slot);
+            if (before.Level == 84)
+            {
+                string snapshot = fixture.Snapshot();
+                peer.Send(30, [65, 0]); peer.Expect(1, 30, [0, 19, 0]); peer.Barrier();
+                That(fixture.Snapshot() == snapshot, "回归胶囊低于85级经真实CMD30拒绝且不吞药");
+                continue;
+            }
+            Use(peer, before, growth.GetLevelExperienceSpan(before.Level) / 10, checked((byte)(before.Level + 1)));
+            using var readOwner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { });
+            var saved = repository.LoadCharacter(readOwner, before.Slot);
+            That(saved.Inventory.Find(new(InventoryListType.Main, 65))!.Core.Count == 1 &&
+                saved.Learning.Experience == before.Learning.Experience + growth.GetLevelExperienceSpan(before.Level) / 10,
+                "回归胶囊85和90边界真实ACK后持久化一次10%经验及单件消耗");
+            string snapshotAfter = fixture.Snapshot();
+            peer.Send(30, [65, 0]); peer.Expect(1, 30, [0, 19, 0]); peer.Barrier();
+            That(fixture.Snapshot() == snapshotAfter, "回归胶囊冷却内或升过90级的再次请求拒绝且资产保持");
         }
         await fixture.StopAsync(); await fixture.StartAsync();
         using (var peer = Open(fixture))

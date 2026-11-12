@@ -780,6 +780,7 @@ internal static partial class SessionPlanningTests
                 INSERT INTO character_skill_combos VALUES({{id}},0,5,X'');
                 INSERT INTO character_client_settings VALUES({{id}},'planning',zeroblob(512));
                 INSERT INTO character_game_settings VALUES({{id}},'planning',zeroblob(204));
+                INSERT INTO character_hotkey_settings VALUES({{id}},'planning',0,X'4930310937370A');
                 INSERT INTO character_quest_notify VALUES({{id}},'planning',X'02000000000000000000000000000000');
                 INSERT INTO character_npc_bookmarks VALUES({{id}},'planning',X'11000000');
                 INSERT INTO character_privilege_service VALUES({{id}},1000,2000000000,1,1,739916,5,739916,1);
@@ -789,6 +790,7 @@ internal static partial class SessionPlanningTests
                 INSERT INTO character_fatigue VALUES({{id}},'planning',0,156,0,156,0,0);
                 INSERT INTO character_fatigue_acceleration VALUES({{id}},'planning',1);
                 INSERT INTO character_fatigue_reset_days VALUES({{id}},739916);
+                INSERT INTO character_fatigue_battery VALUES({{id}},123,53);
                 INSERT INTO character_pcroom_claims VALUES({{id}},'planning',20261031);
                 INSERT INTO character_teleport_cooldowns(character_id,account,potion_until,aura_until) VALUES({{id}},'planning',2000000000000,2000000420000);
                 INSERT INTO character_exp_bonus VALUES({{id}},'planning',2000007200,1000);

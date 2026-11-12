@@ -156,7 +156,7 @@ internal static class AdventurePeriod
 
     public static AdventureState Apply(AdventureState state, AdventureCatalog catalog, DateTimeOffset now)
     {
-        // 旧版总容量按每格×颗数放大十倍；载入时截回真实容量，避免升级后校验拒绝登录。
+        // 超出原生每颗计量×最大颗数的外部存量截回容量；合法多颗及未蓄满的尾数保持不变。
         if (state.CapsuleExperience > catalog.CapsuleCapacity)
             state = state with { CapsuleExperience = catalog.CapsuleCapacity };
         // 旧版或外部写入可能把结晶堆到商店上限之上；载入时截回上限，写入路径仍由 Validate 守住。

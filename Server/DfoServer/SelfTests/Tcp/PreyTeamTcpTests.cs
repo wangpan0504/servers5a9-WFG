@@ -170,7 +170,7 @@ internal static partial class PreyTeamTcpTests
             That(peers.Select((peer, index) => startedRoster[peer.Id].Position == positions[index] &&
                 startedRoster[peer.Id].Squad == positions[index] / 10).All(value => value),
                 "开团保留创建者默认及团长明确分配的标记，不自动建立实际小队");
-            That(started.All(rows => rows.Any(row => row is { Kind: 0, Opcode: 1595, Body: [1, 0, 0, 0] }) &&
+            That(started.All(rows => rows.All(row => row is not { Kind: 0, Opcode: 1595, Body: [1, 0, 0, 0] }) &&
                 rows.Any(row => row is { Kind: 0, Opcode: 587, Body: [1, 0] }) &&
                 rows.Any(row => row is { Kind: 0, Opcode: 597, Body.Length: 5 } && row.Body[0] == 0 && U32(row.Body, 1) is > 0 and <= 15) &&
                 rows.Count(row => row is { Kind: 0, Opcode: 594, Body.Length: 0 }) == 1 &&
@@ -218,8 +218,23 @@ internal static partial class PreyTeamTcpTests
             {
                 var peer = peers[index];
                 That(ReadDisplayedState(peer, key) == 1, "每名成员独立登船前的真实1361记录仍为state1");
-                prepared[index].AddRange(Travel(fixture, peer, new(59, 3, 1164, 176), request: BoardingRequest));
-                That(ReadDisplayedState(peer, key) == 2, "本人原36及24完成后真实1361记录才转state2");
+                prepared[index].AddRange(Travel(fixture, peer, new(59, 3, 1164, 176), request: BoardingRequest,
+                    preparationPending: !fallback));
+                That(ReadDisplayedState(peer, key) == (fallback ? 2 : 1),
+                    "本人登船保留剩余准备期，资源期限已到才转state2");
+            }
+            if (!fallback)
+            {
+                foreach (var rows in prepared)
+                    That(rows.All(row => row is not { Kind: 0, Opcode: 587, Body: [2, 0] }),
+                        "登船到达不提前发送作战开始，仍保留资源15秒中的十秒圣地准备");
+                int waited = checked((int)((clock.GetTimestamp() - startStamp) / clock.TimestampFrequency));
+                if (waited < delay) clock.Advance(delay - waited);
+                for (int index = 0; index < peers.Count; index++)
+                {
+                    prepared[index].AddRange(Read(peers[index], "preparation deadline reached"));
+                    That(ReadDisplayedState(peers[index], key) == 2, "准备期限到达且已登船后进入state2");
+                }
             }
             leader.Send(666);
             var boardedReplay = peers.Select(peer => Read(peer, "boarded start replay")).ToArray();
@@ -382,7 +397,7 @@ internal static partial class PreyTeamTcpTests
     }
 
     static List<WirePacket> Travel(TcpTestFixture fixture, TcpPeer peer, Location target, bool bottom = false,
-        byte[]? request = null, byte boardingPhase = 0)
+        byte[]? request = null, byte boardingPhase = 0, bool preparationPending = false)
     {
         var from = Position(fixture, peer);
         string back = fixture.Snapshot("SELECT return_town,return_area,return_x,return_y,return_direction FROM characters WHERE id=$p0", peer.Id);
@@ -408,8 +423,8 @@ internal static partial class PreyTeamTcpTests
         {
             int arrival = travelled.FindIndex(row => row is { Kind: 0, Opcode: 24 });
             int started = travelled.FindIndex(row => row is { Kind: 0, Opcode: 587, Body: [2, var phase] } && phase == boardingPhase);
-            That(arrival >= 0 && started > arrival && travelled.All(row => row.Opcode != 594),
-                "原36登船先完成本人24，再发布首个state2，不重播594");
+            That(arrival >= 0 && (preparationPending ? started < 0 : started > arrival) && travelled.All(row => row.Opcode != 594),
+                "原36登船先完成本人24，准备期不提前发布state2，已开战则在24后补发且不重播594");
         }
         if (target is { Town: 59, Area: >= 3 and <= 5 })
             That(travelled.Any(row => row is { Kind: 1, Opcode: 1361 } && row.Body[1] == 2 &&

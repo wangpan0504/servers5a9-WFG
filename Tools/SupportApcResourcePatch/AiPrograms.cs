@@ -41,8 +41,8 @@ internal static class AiPrograms
                 if (revised) { Small(16); Small(31); } else { Small(31); Small(16); }
                 break;
             case 19973:
-                // 偏爱先选定当前玩家，诅咒紧随其后；二者齐备后才进入治疗与战斗技能。
-                Buff(330, firstOnly: true); Buff(335);
+                // 核心诅咒先覆盖当前玩家；偏爱选人或动画尚未完成不能无限抢占主BUFF。
+                Buff(335); Buff(330, firstOnly: true);
                 Heal(367, 70); Heal(339, 50);
                 Revive(345); Buff(337, battle: true); Buff(332, battle: true);
                 if (keys.ContainsKey(341)) Heal(341, 35);

@@ -430,6 +430,12 @@ internal static partial class RaidCombatProjection
         if (battle.Kind != RaidKind.Prey || view.Instance != battle.Instance) return;
         context.Sender.Post(0, (ushort)NotiPacketType.RAID_SET_SYMBOL,
             RaidCombatPackets.Symbols(battle.SymbolSnapshot(view)), "prey_symbol_snapshot", guard);
+        // 015BCB50/op1启动原生音效与五秒红色警报；只消费真实碰撞/破甲事件，快照重发不重播。
+        var warning = (view.Instance, view.PreyWarningEvent);
+        if (battle.PreyWarningCurrent(view))
+            context.Sender.Post(0, (ushort)NotiPacketType.PREY_RAID, RaidCombatPackets.PreyStatus(1), "prey_ship_warning",
+                () => guard() && battle.PreyWarningCurrent(view) && context.PreyWarningDisplay != warning,
+                () => context.PreyWarningDisplay = warning);
         foreach (var row in battle.DungeonSnapshot(view))
         {
             if (!context.Owner.Execute(() => guard() && DungeonChanged(context, view.Instance, row.Id, row.State))) continue;
@@ -442,11 +448,11 @@ internal static partial class RaidCombatProjection
                     "prey_dungeon_cleared", () => guard() && DungeonChanged(context, view.Instance, row.Id, row.State),
                     () => RecordAntonDungeon(context, view.Instance, row.Id, row.State));
         }
-        foreach (var timer in view.Timers.Keys.Where(timer => timer.Kind is 1 or 2))
+        foreach (var timer in view.Timers.Keys.Where(timer => timer.Kind is 1 or 2 or 10001 or 10002))
             context.Sender.PostPrepared(0, (ushort)NotiPacketType.RAID_SET_TIMER, 13,
                 () => battle.PreyTimerSeconds(view, timer) is { } seconds
                     // 01DD06B0频道50忽略中列，以now+末列保存截止点；补发只写当前剩余值。
-                    ? RaidCombatPackets.LukePositiveTimer(checked((sbyte)timer.Kind), timer.DungeonId, 0, seconds) : null,
+                    ? RaidCombatPackets.LukePositiveTimer(checked((sbyte)(timer.Kind % 10000)), timer.DungeonId, 0, seconds) : null,
                 "prey_rule_timer", guard);
         for (byte group = 0; group < 3; group++)
         {

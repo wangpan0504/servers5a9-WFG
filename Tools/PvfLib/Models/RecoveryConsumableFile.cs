@@ -43,6 +43,10 @@ public sealed record RecoveryConsumableFile(int TemplateId, string ScriptPath, S
                 // 图标标记属于显示元数据，可有多条完整声明，不构成使用字段冲突。
                 duplicate.Key is "icon mark" && duplicate.All(section => section is
                     { Children.Length: 0, Values: [{ Type: 6 }, { Type: 0, Value: >= 0 }] }) ||
+                // 商店价格不是使用消耗；多段完整正整数材料对不与恢复效果冲突。
+                duplicate.Key is "need material" && duplicate.All(section => section.IsBlock &&
+                    section.Children.IsEmpty && section.Values.Length > 0 && section.Values.Length % 2 == 0 &&
+                    section.Values.All(token => token is { Type: 0, Value: > 0 })) ||
                 duplicate.Key is "impossible contents" && duplicate.All(section => section.IsBlock &&
                     section.Children.IsEmpty && section.Values.All(token => token.Type == 6)) ||
                 CompleteIntegerScalars(duplicate) && AllowsRepeatedScalar(duplicate.Key, duplicate)))

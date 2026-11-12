@@ -83,7 +83,7 @@ internal static class TemplateDelta
             Set(source, aic, "vision", ScriptToken.Int(1200));
             Set(source, aic, "warlike", ScriptToken.Int(0));
             Set(source, aic, "think term", ScriptToken.Int(definition.Id == 9986 ? 200 : 100));
-            Set(source, aic, "attack damage rate", ScriptToken.Float(0.10f));
+            Set(source, aic, "attack damage rate", ScriptToken.Float(1.0f));
             Drop(source, aic, "USE FSM AI");
             Drop(source, aic, "team status rate");
             Drop(source, aic, "speech on situation");

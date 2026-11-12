@@ -44,6 +44,6 @@ internal sealed record CharacterRosterEntry(ushort Id, ushort Slot, string Name,
         FiendWarEligible: IsFiendWarEligible(character.CompletedQuests.Contains(FiendWarEntryQuest), character.Guild is not null),
         AntonEligible: character.CompletedQuests.Contains(AntonEntryQuest),
         LukeEligible: character.CompletedQuests.Contains(LukeEntryQuest),
-        PreyEligible: IsPreyEligible(character.CompletedQuests.Contains(PreyEntryQuest), character.Level), IsPvpPrivate: character.IsPvpPrivate, BeastEligible: character.CompletedQuests.Contains(BeastChannel.EntryQuest))
+        PreyEligible: IsPreyEligible(character.CompletedQuests.Contains(PreyEntryQuest), character.Level), IsPvpPrivate: character.IsPvpPrivate, BeastEligible: BeastChannel.Eligible(character.Level, character.CompletedQuests.Contains(BeastChannel.EntryQuest)))
         { CloneTitleItemId = character.CloneTitleItemId, WeaponSkin = character.Inventory.Skins.Selected };
 }

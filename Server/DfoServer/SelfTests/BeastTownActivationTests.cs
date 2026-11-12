@@ -28,9 +28,10 @@ internal static class BeastTownActivationTests
         TestCheck.That((row with { BeastEligible = true }).ForBeastChannel(true).BeastEligible &&
             !row.ForBeastChannel(true).BeastEligible &&
             (row with { BeastEligible = true }).ForBeastChannel(false).BeastEligible &&
-            (row with { BeastEligible = true, Level = 89 }).ForBeastChannel(true).BeastEligible &&
+            !(row with { BeastEligible = true, Level = 89 }).ForBeastChannel(true).BeastEligible &&
+            (row with { BeastEligible = true, Level = 90 }).ForBeastChannel(true).BeastEligible &&
             (row with { BeastEligible = true, IsPvpPrivate = true }).ForBeastChannel(true).BeastEligible,
-            "名册频道资格仅由5927完成态决定");
+            "名册频道资格要求至少90级及5927完成态，其余既有标记不影响该资格位");
         TestCheck.That(BeastChannel.EntryEvents(true, [282]).SequenceEqual(new ushort[]{282,333}) &&
             BeastChannel.EntryEvents(false, [282]).SequenceEqual(new ushort[]{282,333}) &&
             BeastChannel.EntryEvents(true, [333]).SequenceEqual(new ushort[]{333}), "魔兽开放事件始终保留，不丢失既有事件且无重复");

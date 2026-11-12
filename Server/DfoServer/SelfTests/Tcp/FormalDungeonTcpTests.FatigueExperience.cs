@@ -16,7 +16,8 @@ internal static partial class FormalDungeonTcpTests
     public static Task RunFatigueAccelerationExperienceAsync(ServerOptions options, string root, TcpTestResources resources) =>
         RunFatigueAccelerationExperienceAsync(options, root, resources, false);
 
-    public static async Task RunFatigueAccelerationExperienceAsync(ServerOptions options, string root, TcpTestResources resources, bool endlessAdventure)
+    public static async Task RunFatigueAccelerationExperienceAsync(ServerOptions options, string root, TcpTestResources resources, bool endlessAdventure,
+        bool battery = false)
     {
         FatigueAccelerationTests.RunCore();
         ExperienceBonusTests.RunCore();
@@ -28,14 +29,16 @@ internal static partial class FormalDungeonTcpTests
         var growth = SelfTestCatalogs.Growth(resources.Archive, resources.Learning);
         var candidate = CharacterCreation.Prepare("BurnStory", resources.Characters.Get(9), resources.Towns.Room,
             resources.Towns.InitialReturn, resources.Learning.Get);
+        byte initialLevel = battery ? (byte)10 : (byte)4;
         Character character;
         using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
             character = repository.Create(owner, candidate with
             {
-                Level = 4, AcceptedStoryLevel = 1, CompletedQuests = [3145, 4873, 3157],
-                InitialLearning = SkillPointLedger.Synchronize(9, 0, 4,
-                    candidate.InitialLearning with { Experience = growth.GetLevelStartExperience(4) }, resources.Learning)
+                Level = initialLevel, AcceptedStoryLevel = 1, CompletedQuests = [3145, 4873, 3157],
+                InitialLearning = SkillPointLedger.Synchronize(9, 0, initialLevel,
+                    candidate.InitialLearning with { Experience = growth.GetLevelStartExperience(initialLevel) }, resources.Learning)
             });
+        if (battery) fixture.Sql("INSERT INTO character_fatigue_battery VALUES($p0,0,235)", character.Id);
         That(character.Inventory.Items.All(item => resources.ItemResources.Items.Get(item.Core.ItemId).ExperiencePercent == 0 &&
             item.Core.Kind != DfoServer.GameWorld.Items.ItemKind.Avatar), "剧情燃烧夹具保留原初装且没有装备或时装经验加成");
         var pcRoom = new PcRoomCatalog(resources.Archive);
@@ -81,13 +84,14 @@ internal static partial class FormalDungeonTcpTests
         var named = DungeonKillExperienceCatalog.GetNamedMonsters(dungeon);
         ulong experience = character.Learning.Experience;
         uint monsterBurning = 0;
+        uint monsterBattery = 0;
         int killed = 0, permits = 0;
         for (int room = 0; room < route.Length; room++)
         {
             That(U32(map, 14) == route[room].Id, "3146房间沿真实资源顺序进入");
             Load(peer, pcRoom: true, fatigue: false);
             var fatigue = peer.Expect(0, 36).Body;
-            That(fatigue.Length == 10 && U16(fatigue, 0) == 0 && U16(fatigue, 6) == U16(fatigue, 2),
+            That(fatigue.Length == 10 && U16(fatigue, 0) == 0 && U16(fatigue, 6) == (battery ? 235 : 0),
                 "正常剧情加载后同步原五WORD疲劳，无限模式仍显示满额");
             if (room == 0)
             {
@@ -107,10 +111,13 @@ internal static partial class FormalDungeonTcpTests
                 peer.Send(39, report);
                 var packets = PartyDungeonTcpTests.Drain(peer);
                 var notice = packets.Single(packet => packet is { Kind: 0, Opcode: 37 }).Body;
-                experience += checked(basis * 2);
+                uint batteryBonus = battery ? checked((uint)((ulong)basis * 30 / 100)) : 0;
+                experience += checked(basis * 2 + batteryBonus);
+                monsterBattery = checked(monsterBattery + batteryBonus);
                 monsterBurning = checked(monsterBurning + basis);
                 permits += packets.Count(packet => packet is { Kind: 0, Opcode: 31 });
-                That(U64(notice, 1) == experience && U32(notice, 42) == basis && U32(notice, 34) == 0 && U32(notice, 87) == 0 &&
+                That(U64(notice, 1) == experience && U32(notice, 42) == basis && U32(notice, 25) == batteryBonus &&
+                    U32(notice, 34) == 0 && U32(notice, 87) == 0 &&
                     Experience(fixture, character.Id) == experience,
                     "剧情每次击杀实际到账基础加独立100%燃烧，37原生系统提示燃烧分项等于本怪基础经验");
                 if (killed++ == 0)
@@ -128,6 +135,7 @@ internal static partial class FormalDungeonTcpTests
             }
         }
         That(killed > 0 && monsterBurning > 0 && permits == 1, "真实剧情击杀产生非零燃烧和唯一客户端结算许可");
+        if (battery) That(monsterBattery > 0, "真实电池资格产生非零30%杀怪经验");
         var clear = SelfTestCatalogs.ClearExperience(resources.Archive).Calculate(dungeon, 0, 99);
         int adventureLevel = Convert.ToInt32(fixture.Query("SELECT level FROM account_adventures WHERE account=$p0",
             fixture.Options.DevelopmentAccount)[0][0]);
@@ -163,7 +171,7 @@ internal static partial class FormalDungeonTcpTests
         That(U64(clearNotice, 1) == experience && U32(clearNotice, 42) == clear.BaseExperience && U32(clearNotice, 46) == pcRoomBonus &&
             U32(cards, 0) == clear.BaseExperience && U32(cards, 41) == adventure && U32(cards, 29) == pcRoomBonus &&
             U32(cards, 53) == clear.BaseExperience && U32(cards, 77) == monsterBurning &&
-            U32(cards, 85) == 0 && U32(cards, 93) == 0 && Experience(fixture, character.Id) == experience,
+            U32(cards, 81) == monsterBattery && U32(cards, 85) == 0 && U32(cards, 93) == 0 && Experience(fixture, character.Id) == experience,
             "真实46冒险团单列41槽且只发一次，网吧20%与燃烧100%只取原基础，35与37分项和SQL到账一致");
         peer.Send(46, result);
         var repeated = PartyDungeonTcpTests.Drain(peer);

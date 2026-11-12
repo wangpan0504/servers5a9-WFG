@@ -7,6 +7,48 @@ namespace DfoServer;
 
 internal static partial class ClientSettingsStoreTests
 {
+    static void BatteryAndHotkey208Upgrade()
+    {
+        foreach (bool localBattery in new[] { true, false })
+        {
+            using var f = new Fixture();
+            ImmutableArray<byte> legacy = [.. "I01\t77\n"u8.ToArray()];
+            ImmutableArray<byte> saved = [.. "I01\t55\n"u8.ToArray()];
+            f.Execute($"INSERT INTO account_hotkey_settings VALUES('settings-a',0,X'{Convert.ToHexString(legacy.AsSpan())}')");
+            f.Service.SaveHotkeys(f.Owner, f.First.Id, 0, saved);
+            if (localBattery)
+                f.Execute($"DROP TABLE character_hotkey_settings; " +
+                    $"INSERT INTO character_fatigue VALUES({f.First.Id},'settings-a',0,156,0,156,0,0); " +
+                    $"INSERT INTO character_fatigue_battery VALUES({f.First.Id},17,31)");
+            else
+                f.Execute("DROP TABLE character_fatigue_battery");
+            f.Execute("PRAGMA user_version=208");
+            string assets = f.Assets();
+            var migrated = new ClientSettingsRepository(f.Path);
+            Check(f.Query("PRAGMA user_version") is 209L && f.Assets() == assets,
+                "两种208来源均原子升至209，完整角色资产与既有电池值保持");
+            if (localBattery)
+                Check(Same(migrated.Load(f.Owner, f.First.Id).Hotkeys, legacy) &&
+                    Same(migrated.Load(f.Owner, f.Second.Id).Hotkeys, legacy) &&
+                    f.Query($"SELECT charging*1000+buff FROM character_fatigue_battery WHERE character_id={f.First.Id}") is 17031L,
+                    "本地电池208补齐缺失键位并保留17充能和31祝福");
+            else
+                Check(Same(migrated.Load(f.Owner, f.First.Id).Hotkeys, saved) &&
+                    migrated.Load(f.Owner, f.Second.Id).Hotkeys.IsDefault &&
+                    f.Query("SELECT count(*) FROM character_fatigue_battery") is 0L,
+                    "上游键位208追加空电池，不覆盖已存键位或给后建角色回填旧账号配置");
+            f.Integrity();
+        }
+        using var broken = new Fixture();
+        broken.Execute("DROP TABLE character_hotkey_settings; DROP TABLE character_fatigue_battery; " +
+            "CREATE TABLE character_fatigue_battery(collision INTEGER); PRAGMA user_version=208");
+        Reject<InvalidDataException>(() => new ClientSettingsRepository(broken.Path), "209拒绝未知电池结构");
+        Check(broken.Query("PRAGMA user_version") is 208L &&
+            broken.Query("SELECT count(*) FROM sqlite_schema WHERE name='character_hotkey_settings'") is 0L &&
+            broken.Query("SELECT count(*) FROM pragma_table_info('character_fatigue_battery') WHERE name='collision'") is 1L,
+            "209后段失败回滚前段补表和版本，保留未知原表");
+    }
+
     static void CharacterHotkeyDeletionRollback()
     {
         using var f = new Fixture();
@@ -38,7 +80,8 @@ internal static partial class ClientSettingsStoreTests
         var migrated = new ClientSettingsRepository(f.Path);
         Check(f.Query("PRAGMA user_version") is long version && version == SqliteMigrations.CurrentVersion &&
             f.Query("SELECT sql FROM sqlite_schema WHERE name='character_hotkey_settings'") is string upgradedSchema &&
-            freshSchema == upgradedSchema && f.Assets() == assets && Legacy() == original,
+            freshSchema.ReplaceLineEndings("\n") == upgradedSchema.ReplaceLineEndings("\n") &&
+            f.Assets() == assets && Legacy() == original,
             "v207升级角色键位与新建库结构同构，旧账号原文及其他资产保持");
         Check(Same(migrated.Load(f.Owner, f.First.Id).Hotkeys, common) && Same(migrated.Load(f.Owner, f.Second.Id).Hotkeys, common) &&
             Same(migrated.Load(f.Owner, creator.Id).Hotkeys, creatorKeys) && migrated.Load(f.OtherOwner, f.Other.Id).Hotkeys.IsDefault &&
