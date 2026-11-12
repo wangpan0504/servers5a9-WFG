@@ -106,6 +106,15 @@ internal static partial class DevelopmentGm
                 return ExecuteEquipmentSlots(repository, owners, find(request.Account), request);
             if (request.Action == DevelopmentAction.Appearance)
                 return DescribeAppearance(repository, owners, find(request.Account), request);
+            if (request.Action == DevelopmentAction.FatigueBatteryFill)
+            {
+                var session = find(request.Account);
+                var result = session is not null ? session.FillFatigueBatteries()
+                    : WithLease(owners, request.Account, lease => repository.FillFatigueBatteries(lease));
+                refreshFatigue?.Invoke(request.Account);
+                return Ok(new { account = request.Account, characters = result.Characters.Length, changed = result.Changed,
+                    message = "已填满该账号全部角色的疲劳蓄电池，之后正常消耗。" });
+            }
             if (request.Action == DevelopmentAction.DungeonLimitReset)
             {
                 var session = find(request.Account);
