@@ -19,14 +19,21 @@ internal static class DungeonQuestContinuationRules
         reason = "no-accepted-successor";
         int predecessor = checked((int)entry.RouteQuestId);
         var completed = QuestEligibility.Completed(character);
-        if (quests.TryGet(predecessor,out var source) && source.MainQuest is > 0 && completed.Contains(source.MainQuest.Value))
-            predecessor = source.MainQuest.Value;
-        if (!completed.Contains(predecessor)) return null;
-        bool epic = quests.TryGet(predecessor,out var predecessorQuest) && predecessorQuest.Grade == "[epic]";
-        var successors = character.ActiveMainQuests.Where(active => quests.TryGet(active.QuestId,out var quest) &&
-            (!epic || quest.Grade == "[epic]" && quest.MainQuest is not > 0) &&
-            quest.Definition is { } definition && definition.PrerequisiteGroups.Any(group => group.Contains(predecessor)) &&
-            QuestCoverage.HasOrdinaryDeclarations(quest)).ToArray();
+        ActiveMainQuest[] successors;
+        quests.TryGet(predecessor,out var source);
+        var parent = source?.MainQuest is > 0 && quests.TryGet(source.MainQuest.Value,out var owner) ? owner : source;
+        if (parent is not null && !completed.Contains(parent.Id) && QuestRelationProgress.SequentialParent(parent,quests))
+            successors = SequentialSuccessors(character,entry,parent,quests,completed);
+        else
+        {
+            if (source?.MainQuest is > 0 && completed.Contains(source.MainQuest.Value)) predecessor = source.MainQuest.Value;
+            if (!completed.Contains(predecessor)) return null;
+            bool epic = quests.TryGet(predecessor,out var predecessorQuest) && predecessorQuest.Grade == "[epic]";
+            successors = character.ActiveMainQuests.Where(active => quests.TryGet(active.QuestId,out var quest) &&
+                (!epic || quest.Grade == "[epic]" && quest.MainQuest is not > 0) &&
+                quest.Definition is { } definition && definition.PrerequisiteGroups.Any(group => group.Contains(predecessor)) &&
+                QuestCoverage.HasOrdinaryDeclarations(quest)).ToArray();
+        }
         if (successors.Length == 0) return null;
         reason = "successor-ambiguous";
         if (successors.Length != 1) return null;
@@ -60,5 +67,26 @@ internal static class DungeonQuestContinuationRules
         }
         reason = routes.Count == 0 ? "successor-route-unavailable" : "successor-route-ambiguous";
         return null;
+    }
+
+    // 顺序父任务在末子交付前仍活动，父内续图沿实际完成的子序列和本次Run接取身份查找。
+    static ActiveMainQuest[] SequentialSuccessors(Character character, DungeonEntryPlan entry, StoryQuest parent,
+        QuestCatalog quests, IReadOnlySet<int> completed)
+    {
+        var parents = character.ActiveMainQuests.Where(row => row.QuestId == parent.Id).ToArray();
+        var bound = entry.QuestAcceptances.Where(row => row.QuestId == parent.Id).ToArray();
+        if (parents is not [{ Slot: <= 29, AcceptanceId: var acceptance } active] || acceptance == Guid.Empty ||
+            bound.Length != 1 || bound[0].AcceptanceId != acceptance ||
+            character.ActiveMainQuests.Count(row => row.Slot == active.Slot) != 1 ||
+            character.ActiveMainQuests.Count(row => row.AcceptanceId == acceptance) != 1 ||
+            active.ConditionState != QuestRelationProgress.Initial(parent,quests,completed)) return [];
+        var prefix = parent.IntData.TakeWhile(completed.Contains).ToArray();
+        if (!prefix.Any(id => entry.QuestAcceptances.Any(row => row.QuestId == id && row.AcceptanceId != Guid.Empty))) return [];
+        var children = character.ActiveMainQuests.Where(row => parent.IntData.Contains(row.QuestId)).ToArray();
+        if (children is not [{ Slot: <= 29, AcceptanceId: var childAcceptance } child] || childAcceptance == Guid.Empty ||
+            child.QuestId != parent.IntData.FirstOrDefault(id => !completed.Contains(id)) ||
+            character.ActiveMainQuests.Count(row => row.Slot == child.Slot) != 1 ||
+            character.ActiveMainQuests.Count(row => row.AcceptanceId == childAcceptance) != 1) return [];
+        return [child];
     }
 }
