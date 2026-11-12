@@ -37,7 +37,9 @@ internal sealed partial class GameSession
                 raidRegistry?.FindCurrent(this, SelectionEpoch) is { Type: 2, Guide: true, Started: null },
                 raidCombat is { Actor.IsCurrent: true, Battle.Kind: Game.Raids.RaidKind.Fiendwar },
                 HasPreyTeamTownAccess || HasPreyPreparationBoardingAccess &&
-                    request is { Town: 59, Area: 3, PreviousTown: 59, PreviousArea: 2, Movement: 5, PathKind: 0, TargetNpc: 0 })
+                    request is { Town: 59, Area: 3, PreviousTown: 59, PreviousArea: 2, Movement: 5, PathKind: 0, TargetNpc: 0 },
+                raidRegistry?.FindCurrent(this, SelectionEpoch)?.Type,
+                raidRegistry?.FindCurrent(this, SelectionEpoch)?.Guide ?? false)
             : TownTravelPlan.Reject("not-ready")));
         return receipt is not null;
     }
