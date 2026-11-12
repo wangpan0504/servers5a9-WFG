@@ -156,6 +156,12 @@ internal static partial class GmWebServer
             if (b.Confirm != true) return Bad("需要二次确认");
             return Run(http, data, "weekly-entry-reset", b.Account, "*", $"account {b.Account} weekly-entry-reset", null);
         });
+        app.MapPost("/api/fatigue-battery-fill", (HttpContext http, KickBody b) =>
+        {
+            if (b.Confirm != true || string.IsNullOrEmpty(b.Account) || !Token.IsMatch(b.Account))
+                return Bad("需要有效账号与确认");
+            return Run(http, data, "fatigue-battery-fill", b.Account, "*", $"account {b.Account} fatigue-battery-fill", null);
+        });
         app.MapPost("/api/dungeon-limit-reset", (HttpContext http, KickBody b) =>
         {
             if (b.Confirm != true || string.IsNullOrEmpty(b.Account) || !Token.IsMatch(b.Account))

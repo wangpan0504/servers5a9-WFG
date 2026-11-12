@@ -15,6 +15,7 @@ internal static class FatigueDailyResetTcpTests
 {
     public static async Task RunAsync(ServerOptions options, string root, TcpTestResources resources)
     {
+        await GmFatigueBatteryTcpTests.RunAsync(options, Path.Combine(root, "gm-fill"), resources);
         FatigueBatteryTests.RunResources(resources);
         await FormalDungeonTcpTests.RunFatigueAccelerationExperienceAsync(options, Path.Combine(root, "battery"), resources, false, true);
         ServerItemCycleTests.RunResource(resources.Archive);

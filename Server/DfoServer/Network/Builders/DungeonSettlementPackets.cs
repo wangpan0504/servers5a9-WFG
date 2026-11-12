@@ -162,6 +162,8 @@ internal static class DungeonSettlementPackets
             BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(159 + index * 8), entries[index].Experience);
         }
         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(194 + shift), monsterExperience);
+        // 02394CC8读取尾部后，02394CDB再次写通关C6，覆盖前面的41槽；两处必须来自同一实际冒险团分量。
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(206 + shift), reward.AdventureExperience);
         // 评分quartet第4槽（147）在实机探针中投影到“领主”行；精英/超级精英行走151/155的对象明细。
         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(147), monsterBossExperience);
         return body;

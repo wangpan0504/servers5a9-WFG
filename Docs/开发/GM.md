@@ -380,3 +380,7 @@ GM通过`GET /api/events/catalog`读取服务端`ServerEventDefinition.Registere
 ## 冒险团等级与名字
 
 `account <账号> adventure status`返回`scope=account-adventure`、账号、持久名字、等级、真实maximumLevel、experience、revision和text。`adventure level <1至资源上限> <revision>`及`adventure name <原生名称> <revision>`为账号级修改；账号必须离线，先读取版本后提交。修改等级将本级经验归零并同步精确账本，不发结晶/胶囊；改名复验原生格式与重名。不改玩家角色等级或其他账号，成功下次登录生效。返回实际提交后的同一完整状态，拒绝与回滚不能回通用成功。
+
+## 一键填满账号疲劳蓄电池
+
+`account <账号> fatigue-battery-fill` 按资源等级上限一次填满该账号全部角色的可用电量，包含未选中与满级角色。所有角色在同一账号租约和写事务中提交，失败整批回滚；已满重复执行不增加版本。普通疲劳、充能池、日戳和其他账号保留。在线当前角色同步安装提交电量与revision，随后发送真实NOTI36；存在待提交业务时拒绝。后续按原规则扣电，等级经验奖励资格保持原规则。HTTP使用`POST /api/fatigue-battery-fill`，显式账号且`confirm=true`，启动器角色页提供一键按钮。
