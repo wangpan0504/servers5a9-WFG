@@ -588,7 +588,9 @@ internal sealed partial class TcpPeer : IDisposable
             Enumerable.Range(0, 8).Any(slot => U32(DevilService0, 9 + slot * 9) > 0) == (PremiumServices[58] > 0),
             "魔王八项期限独立投影，58概览与至少一项有效服务一致，黄金牌次数不超过10");
     }
-    public void Barrier(Action<WirePacket>? validateNotification = null)
+    public void Barrier(Action<WirePacket>? validateNotification = null,
+        [System.Runtime.CompilerServices.CallerLineNumber] int callerLine = 0,
+        [System.Runtime.CompilerServices.CallerFilePath] string callerFile = "")
     {
         SendBarrier();
         var packet = Read();
@@ -610,7 +612,8 @@ internal sealed partial class TcpPeer : IDisposable
             ReadDungeonEnterCounts(packet);
             packet = Read();
         }
-        TestCheck.That(packet.Kind == 1 && packet.Opcode == 1347, "屏障仅允许已校验虚弱与两祭坛次数通知，不跳过其他包");
+        TestCheck.That(packet.Kind == 1 && packet.Opcode == 1347,
+            $"屏障仅允许已校验虚弱与两祭坛次数通知，不跳过其他包；实际kind={packet.Kind} opcode={packet.Opcode} bytes={packet.Body.Length}，调用={Path.GetFileName(callerFile)}:{callerLine}");
         TestCheck.Bytes(packet.Body, [1], "body (1,1347)");
         lastBarrierCompleted = UnixTime;
     }
