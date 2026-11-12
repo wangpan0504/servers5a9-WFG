@@ -63,6 +63,8 @@ internal static class InventorySortService
             {
                 ItemKind.Equipment when condition is 1 or 2 or 3 => condition,
                 ItemKind.Consumable when condition is 3 or 4 => condition,
+                // 主背包材料页“按类型”发6；旧3仍兼容，仓库和副职业不套用新编号。
+                ItemKind.Material when list == InventoryListType.Main && condition == 6 => (byte)3,
                 ItemKind.Material or ItemKind.Profession when condition == 3 => condition,
                 _ => (byte)0
             };
