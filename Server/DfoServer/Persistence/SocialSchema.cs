@@ -2,6 +2,13 @@ namespace DfoServer.Persistence;
 
 internal static class SocialSchema
 {
+    internal const string PresenceTable = "account_social_presence";
+    internal const string PresenceSql = """
+        CREATE TABLE account_social_presence(
+          account TEXT PRIMARY KEY REFERENCES accounts(account_id) ON DELETE CASCADE,
+          last_seen_unix INTEGER NOT NULL CHECK(last_seen_unix>=0)
+        ) STRICT;
+        """;
     internal const string GroupsTable = "account_social_groups";
     internal const string GroupsSql = """
         CREATE TABLE account_social_groups(

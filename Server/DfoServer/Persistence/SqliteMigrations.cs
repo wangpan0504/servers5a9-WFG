@@ -389,6 +389,8 @@ internal static class SqliteMigrations
         new(207, "账号冒险团四组名称与图标", SocialSchema.UpgradeGroups),
         new(208, "角色独立键位", UpgradeCharacterHotkeys),
         new(209, "角色键位与本地蓄电池208兼容", UpgradeFatigueBattery209),
+        new(210, "冒险团好友最近在线时刻", static (db, tx) => Execute(db, tx,
+            SocialSchema.PresenceSql.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal))),
     ];
 
     static void UpgradeFatigueBattery209(SqliteConnection db, SqliteTransaction tx)
@@ -2693,6 +2695,15 @@ internal static class SqliteMigrations
             query.Parameters.AddWithValue("$table", table);
             if (query.ExecuteScalar() is not string actual || NormalizeTable(actual, table) != NormalizeTable(expected, table))
                 throw new InvalidDataException("社交表的约束或外键不是已确认结构: " + table);
+        }
+        using (var query = db.CreateCommand())
+        {
+            query.Transaction = tx;
+            query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name=$table";
+            query.Parameters.AddWithValue("$table", SocialSchema.PresenceTable);
+            if (query.ExecuteScalar() is not string actual ||
+                NormalizeTable(actual, SocialSchema.PresenceTable) != NormalizeTable(SocialSchema.PresenceSql, SocialSchema.PresenceTable))
+                throw new InvalidDataException("冒险团好友在线历史表的约束或外键不是已确认结构");
         }
         foreach (var (table,expected) in new[] { (SocialSchema.GroupsTable,SocialSchema.GroupsSql),
             ("character_hotkey_settings",CharacterHotkeySettingsSchema),

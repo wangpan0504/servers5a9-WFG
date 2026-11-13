@@ -1428,6 +1428,11 @@ CREATE TABLE character_social_links(
           PRIMARY KEY(source_account,target_account),CHECK(source_account<>target_account)
         ) STRICT;
 
+CREATE TABLE account_social_presence(
+  account TEXT PRIMARY KEY REFERENCES accounts(account_id) ON DELETE CASCADE,
+  last_seen_unix INTEGER NOT NULL CHECK(last_seen_unix>=0)
+) STRICT;
+
 CREATE TABLE character_epic_production(
     character_id INTEGER PRIMARY KEY REFERENCES characters(id) ON DELETE CASCADE,
     weapon_id INTEGER NOT NULL CHECK(weapon_id>=0),
