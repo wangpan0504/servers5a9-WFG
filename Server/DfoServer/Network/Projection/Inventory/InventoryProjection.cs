@@ -180,8 +180,8 @@ internal sealed partial class InventoryProjection(CharacterStatComputer stats, T
         bool rebuildMoveList = silentMoveList.HasValue && changedSlots.Where(slot => slot.List == silentMoveList)
             .Select(plan.BeforeIndex.Find).Any(item => item is { Core.IsStackable: true } &&
                 receipt.Index.FindUid(item.Uid)?.Core.Count != item.Core.Count);
-        bool quickEquipmentMoved = silentMoveList == InventoryListType.Main && changedSlots.Any(slot =>
-            QuickSlotEquipmentRules.IsQuickSlot(slot) &&
+        bool quickEquipmentMoved = plan.Reason == "move_item" && changedSlots.Any(slot =>
+            slot.List == InventoryListType.Main && QuickSlotEquipmentRules.IsQuickSlot(slot) &&
             (plan.BeforeIndex.Find(slot)?.Core.Kind == ItemKind.Equipment ||
              receipt.Index.Find(slot)?.Core.Kind == ItemKind.Equipment));
         bool creatureDetailsChanged = silentMoveList != InventoryListType.Pet &&
@@ -217,7 +217,7 @@ internal sealed partial class InventoryProjection(CharacterStatComputer stats, T
             await context.Notify(NotiPacketType.ITEM_LIST, CargoPackets.Full(current.Inventory, InventoryListType.PersonalCargo), "personal_cargo_sorted", CanSend);
         else foreach (var list in slots.Select(slot => slot.List).Where(list => !mainExpansionChanged || list != InventoryListType.Main).Distinct().Order())
         {
-            if (list == silentMoveList)
+            if (list == silentMoveList || quickEquipmentMoved && list == InventoryListType.Main)
             {
                 // 普通整件移动沿用ACK19；快捷栏装备还须发布已提交列表，避免本地移格后没有可见图标。
                 // 用13重载保留已有物品语义；离开快捷栏的空格先清除，防止全量遗漏空格而残留旧纹章。
@@ -240,11 +240,10 @@ internal sealed partial class InventoryProjection(CharacterStatComputer stats, T
                 await context.Notify(NotiPacketType.TITLE_BOOK_LIST, TitlePackets.Book(current.Inventory, (byte)list - 18), "title_book_committed", CanSend);
                 continue;
             }
-            // 整理，以及 Main/Avatar/Pet 穿脱替换：这些格子里已是玩家自己的物品。
-            // NOTI14/1681 走 029CFDD0(...,1,1)，且 1681 不置 062CF69C，020C5630 会把每格标成新物品。
-            // NOTI13 在 023BDDF0 置位该标志，新建条目改为 (...,1,0)，黄框不再出现。
-            // 029CEA20 只对 0/1/7/12/38/46 做这个标记；个人仓库已在上面走 NOTI13，账号公共栏不在资格内。
-            if (QuietExistingReload(plan.Reason, list, suppressMoveNoticeList, result.WholeListRefresh))
+            // 整理保留全量；穿脱与预设只同步变化槽，避免为单件换装重建整个背包和所有锁。
+            // 配套客户端在NOTI1681原生消费期间保持静默标志，不再依赖NOTI13全量压制新物品黄框。
+            if ((result.WholeListRefresh || plan.Reason == "sort_item") && list is InventoryListType.Main or InventoryListType.Avatar or InventoryListType.Pet or
+                InventoryListType.AccountCargo or InventoryListType.GuildMedal or InventoryListType.Talisman)
             {
                 // 上架先清耗尽源槽，再重载本次变化容器：NOTI13不保证移除省略的旧槽，
                 // NOTI14重发既有物品则会把全部图标标成新获得。拆堆余量由后续静默全量安装。
@@ -264,7 +263,8 @@ internal sealed partial class InventoryProjection(CharacterStatComputer stats, T
                 continue;
             }
             bool suppressNotice = plan.Reason == "sort_item" || suppressMainNotice && list == InventoryListType.Main ||
-                list == suppressMoveNoticeList || plan.Reason == "avatar_preset_select" && list == InventoryListType.Equipment;
+                list == suppressMoveNoticeList || plan.Reason == "avatar_preset_select" &&
+                    list is InventoryListType.Equipment or InventoryListType.Avatar;
             // 包裹回填仍先清槽再载入，保留图标effect而不播报获得。
             // CMD19已安装的穿戴对象不能再清空；统一按容器保护，不用部位白名单遗漏宠物等槽。
             // 同模板堆叠对象的NOTI14分支不重写卡片等级，等级变化必须重建对象后再载入完整核心。
@@ -352,12 +352,13 @@ internal sealed partial class InventoryProjection(CharacterStatComputer stats, T
             });
         }
         // 全量重载会重建未变化的图标，锁通知必须覆盖同一批容器中的全部实例。
-        bool reloadLocks = reloadPersonalCargo || rebuildMoveList || quietReloaded.Count != 0 || mainExpansionChanged ||
+        bool reloadLocks = reloadPersonalCargo || rebuildMoveList || quickEquipmentMoved || quietReloaded.Count != 0 || mainExpansionChanged ||
             plan.Before.AvatarExpansion != current.Inventory.AvatarExpansion || plan.Reason is "magic_box_open" or "rune_box_open";
         var lockSlots = reloadLocks ? changedSlots.Concat(current.Inventory.Items.Where(item =>
             plan.Reason == "magic_box_open" && item.Position.List is (InventoryListType.Main or InventoryListType.PersonalCargo or
                 InventoryListType.AccountCargo or InventoryListType.Avatar or InventoryListType.Pet or InventoryListType.GuildMedal or InventoryListType.Talisman or InventoryListType.AccountCommon) ||
             rebuildMoveList && item.Position.List == silentMoveList ||
+            quickEquipmentMoved && item.Position.List == InventoryListType.Main ||
             quietReloaded.Contains(item.Position.List) ||
             (mainExpansionChanged || plan.Reason == "rune_box_open") && item.Position.List == InventoryListType.Main ||
             plan.Before.AvatarExpansion != current.Inventory.AvatarExpansion && item.Position.List == InventoryListType.Avatar ||
@@ -415,12 +416,6 @@ internal sealed partial class InventoryProjection(CharacterStatComputer stats, T
             await QuestProjection.ProgressAsync(context,previous,current,CanSend,"inventory_quest_conditions");
         await SkillSwitchInventoryProjection.RefreshInventoryAsync(context, receipt, plan.Before);
 
-        static bool QuietExistingReload(string reason, InventoryListType list, InventoryListType? suppressMoveNoticeList,
-            bool wholeListRefresh) =>
-            (wholeListRefresh || reason == "sort_item" || list == suppressMoveNoticeList ||
-                reason == "avatar_preset_select" && list == InventoryListType.Avatar) &&
-            list is InventoryListType.Main or InventoryListType.Avatar or InventoryListType.Pet or
-                InventoryListType.AccountCargo or InventoryListType.GuildMedal or InventoryListType.Talisman;
         byte[] QuietList(GameConnectionContext connection, InventorySnapshot inventory, InventoryListType list) => list switch
         {
             InventoryListType.Main => InventoryPackets.Full(inventory),
