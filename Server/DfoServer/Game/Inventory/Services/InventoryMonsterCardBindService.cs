@@ -38,7 +38,7 @@ internal sealed class InventoryMonsterCardBindService(ItemCatalog items, Monster
             !ItemSlotBoundService.Allows(before, synthesizer.Position, synthesizerTemplate.Kind))
             return Reject("synthesizer-template", out rejection);
         bool sphere = MonsterCardBindCatalog.IsSphere(bindType);
-        if (!sphere && request.CardSlots.Length != 2 || sphere && request.CardSlots.Length is < 2 or > 5)
+        if (request.CardSlots.Length is < 2 or > 5)
             return Reject("invalid-count", out rejection);
 
         var cards = new List<InventoryItem>(request.CardSlots.Length);
@@ -78,6 +78,8 @@ internal sealed class InventoryMonsterCardBindService(ItemCatalog items, Monster
         try
         {
             var inputPool = compounds.Pool(bindType, inputRarity);
+            if (!sphere && request.CardSlots.Length > inputPool.MaximumCardCount)
+                return Reject("invalid-count", out rejection);
             outputRarity = OutputRarity(bindType, request.CardSlots.Length, inputRarity, inputPool.Coefficient);
             rarityUpgraded = outputRarity != inputRarity;
             pool = outputRarity == inputRarity ? inputPool : compounds.Pool(bindType, outputRarity);
@@ -141,7 +143,7 @@ internal sealed class InventoryMonsterCardBindService(ItemCatalog items, Monster
         }
         if (inputRarity >= 3)
             return inputRarity;
-        int chance = MonsterCardBindCatalog.UpgradeChance(coefficient);
+        int chance = MonsterCardBindCatalog.UpgradeChance(coefficient, count);
         if (chance <= 0)
             return inputRarity;
         long roll = draw(MonsterCardBindCatalog.UpgradeRollRange);
