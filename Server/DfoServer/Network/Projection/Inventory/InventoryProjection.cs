@@ -262,15 +262,17 @@ internal sealed partial class InventoryProjection(CharacterStatComputer stats, T
                 quietReloaded.Add(list);
                 continue;
             }
-            bool suppressNotice = plan.Reason == "sort_item" || suppressMainNotice && list == InventoryListType.Main ||
+            bool quietRuneTransfer = list == InventoryListType.Talisman && plan.Reason is "equip_rune" or "remove_rune";
+            bool suppressNotice = quietRuneTransfer || plan.Reason == "sort_item" || suppressMainNotice && list == InventoryListType.Main ||
                 list == suppressMoveNoticeList || plan.Reason == "avatar_preset_select" &&
                     list is InventoryListType.Equipment or InventoryListType.Avatar;
             // 包裹回填仍先清槽再载入，保留图标effect而不播报获得。
             // CMD19已安装的穿戴对象不能再清空；统一按容器保护，不用部位白名单遗漏宠物等槽。
             // 同模板堆叠对象的NOTI14分支不重写卡片等级，等级变化必须重建对象后再载入完整核心。
+            // 符文装卸只换静默通知，不额外销毁ACK已联动的孔位；模板替换仍保留原有清槽。
             var reloadSlots = slots.Where(slot => slot.List == list && receipt.Index.Find(slot) is { } now &&
                 !(preserveSkillSwitch && slot.List == InventoryListType.Equipment) &&
-                (suppressNotice ||
+                (suppressNotice && !quietRuneTransfer ||
                     plan.BeforeIndex.Find(slot) is { } old && (old.Core.ItemId != now.Core.ItemId ||
                         old.Core.IsStackable && old.Core.EnchantUpgrade != now.Core.EnchantUpgrade))).ToArray();
             var updateType = suppressNotice ?

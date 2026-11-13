@@ -24,6 +24,12 @@ internal sealed partial class GameSession
         return settings.SaveHotkeys(owner, character.Id, HotkeySettingsRules.Profile(character.Job), text);
     });
 
+    public bool SaveSeenNotice(ClientSettingsService settings, byte id) => owner.Execute(() =>
+    {
+        if (!Ready || Selected is null) throw new InvalidDataException("保存已看提示时没有就绪角色");
+        return settings.SaveSeenNotice(owner, id);
+    });
+
     public bool SaveQuickChat(ClientSettingsService settings, byte bank, ImmutableArray<byte> text) => owner.Execute(() =>
         settings.SaveQuickChat(owner, bank, text));
 

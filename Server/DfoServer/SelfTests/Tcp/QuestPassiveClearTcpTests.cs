@@ -336,6 +336,8 @@ internal static class QuestPassiveClearTcpTests
         Action<TcpPeer, Action<WirePacket>?> drain, DungeonCatalog dungeons, bool early = false, bool escSkip = false)
     {
         string account = early ? "layered-movie-3858-early" : escSkip ? "layered-movie-3858-esc" : "layered-movie-3858";
+        That(resources.Quests.Get(3858).Attributes.SequenceEqual(new[] { "complete quest in dungeon" }),
+            "3858须携带原生副本交付属性，避免客户端在发34前以40033拦截");
         var entrance = MiddleQuestEntryTests.Entrance(resources.Towns,resources.Quests.Get(3858),193);
         Character created;
         using (var owner = new AccountOwners().Acquire(account,() => { }))
@@ -434,13 +436,16 @@ internal static class QuestPassiveClearTcpTests
                 saved = State(); peer.Send(33,[33,0,18,15,0,0]); peer.Expect(1,33,[1,18,15,0,0,0,0]); Drain();
                 That(State() == saved && enabled == 1,"3858重复33不重复保存或发布");
             }
+            if (!early && !escSkip)
+            {
+                That(fixture.Query("SELECT count(*) FROM character_dungeon_settlement_receipts WHERE character_id=$p0",peer.Id) is [[0L]],
+                    "3858正常演出结束后在原副本交付，不依赖46结算");
+                FinishCinematicQuest();
+            }
             peer.Send(46,report); Drain();
             That(fixture.Query("SELECT map_id,quest_id FROM character_dungeon_settlement_receipts WHERE character_id=$p0",peer.Id)
                 is [[70487L,0L]],"3858正式46保留实际末层70487与普通0实例身份");
-            peer.Send(34,[34,0,18,15,255,255,1,0,255,255]);
-            var finished = peer.Expect(1,34).Body; Drain();
-            That(finished.Length >= 4 && finished[0] == 1 && U16(finished,1) == 3858 && finished[3] == 65 &&
-                Scalar().Length == 0,"3858真实Handler以type65交付并清理活动槽，不把物件凭据冒充任务目标");
+            if (early || escSkip) FinishCinematicQuest();
             saved = State();
             peer.Send(46,report); Drain(); peer.Send(39,passive); Drain();
             peer.Send(34,[34,0,18,15,255,255,1,0,255,255]); peer.Expect(1,34,[0,19,0]); Drain();
@@ -460,6 +465,13 @@ internal static class QuestPassiveClearTcpTests
             That(dailyNotices==1 && fixture.Query("SELECT quest_id,condition_state,acceptance_id FROM character_active_main_quests WHERE character_id=$p0 ORDER BY slot",peer.Id) is [[13053L,long oldState,string oldId],[13056L,1686L,string]] && oldState == (long)originalDaily[0][0] && oldId == (string)originalDaily[0][1],
                 "3858奖励升级后仅分配一次真实每日，原剧情任务已经交付");
 
+            void FinishCinematicQuest()
+            {
+                peer.Send(34,[34,0,18,15,255,255,1,0,255,255]);
+                var finished = peer.Expect(1,34).Body; Drain();
+                That(finished.Length >= 4 && finished[0] == 1 && U16(finished,1) == 3858 && finished[3] == 65 &&
+                    Scalar().Length == 0,"3858真实Handler以type65交付并清理活动槽，不把物件凭据冒充任务目标");
+            }
             void Move(DungeonPoint point,byte kind)
             {
                 var request = new byte[100]; request[0] = checked((byte)point.X); request[1] = checked((byte)point.Y); request[10] = kind;

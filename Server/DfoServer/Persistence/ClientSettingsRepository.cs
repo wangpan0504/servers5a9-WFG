@@ -5,7 +5,7 @@ using Microsoft.Data.Sqlite;
 
 namespace DfoServer.Persistence;
 
-internal sealed class ClientSettingsRepository(string path) : IClientSettingsStore
+internal sealed partial class ClientSettingsRepository(string path) : IClientSettingsStore
 {
     readonly SqliteGameDatabase database = new(path);
     public bool? SaveCloneTitle(AccountOwners.Lease owner, ushort characterId, uint itemId, long? expiresAt = null) => owner.Execute<bool?>(() =>
@@ -71,6 +71,16 @@ internal sealed class ClientSettingsRepository(string path) : IClientSettingsSto
                 RecentEmoticons: Read(reader, 6), QuestNotify: Read(reader, 7), NpcBookmarks: Read(reader, 8));
         }
         command.CommandText = "SELECT emoticon_id,macro FROM account_chat_emoticons WHERE account=$account ORDER BY emoticon_id";
+        using (var notices = db.CreateCommand())
+        {
+            notices.Transaction = tx;
+            notices.CommandText = "SELECT notice_id FROM account_seen_notices WHERE account=$account ORDER BY notice_id";
+            notices.Parameters.AddWithValue("$account", owner.Account);
+            using var seen = notices.ExecuteReader();
+            var ids = ImmutableArray.CreateBuilder<byte>();
+            while (seen.Read()) ids.Add(checked((byte)seen.GetInt32(0)));
+            snapshot = snapshot with { SeenNotices = ids.ToImmutable() };
+        }
         using var macros = command.ExecuteReader();
         var entries = ImmutableArray.CreateBuilder<ChatEmoticonMacro>();
         while (macros.Read()) entries.Add(new(checked((ushort)macros.GetInt32(0)), ImmutableArray.Create((byte[])macros.GetValue(1))));

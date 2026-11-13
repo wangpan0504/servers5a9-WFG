@@ -193,6 +193,7 @@ internal static class QuestTownMutationPendingTests
 
     sealed class ReadSettings(ImmutableArray<byte> options) : IClientSettingsStore
     {
+        public bool SaveSeenNotice(AccountOwners.Lease owner, byte id) => throw new NotSupportedException("此设置替身不保存提示");
         public ClientSettingsSnapshot Load(AccountOwners.Lease owner,ushort characterId) => new(options,default);
         public bool SaveGameOptions(AccountOwners.Lease owner,ImmutableArray<byte> payload,ushort? characterId = null,
             ImmutableArray<byte> characterGameOptions = default) => throw new InvalidOperationException("只读设置替身不接受保存");

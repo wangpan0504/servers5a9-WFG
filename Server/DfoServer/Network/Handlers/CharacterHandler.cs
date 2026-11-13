@@ -159,6 +159,7 @@ internal sealed partial class CharacterHandler(CharacterCatalog characters, Town
         resumeTown = context.Session.TownSnapshotResumed;
         // 账号首个角色补给和到期清理先提交，ACK4及首次全量资产只能使用处理后的快照。
         context.Session.AdvanceServerItems(onSelection:true,initializing:true);
+        if (expertJobs is not null) context.Session.InitializeExpertJobExperience(expertJobs);
         if (learning is not null)
         {
             var initialization = context.Session.InitializeLearning(learning, expertJobs);

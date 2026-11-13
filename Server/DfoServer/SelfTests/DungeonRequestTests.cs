@@ -3,6 +3,7 @@ using System.Buffers.Binary;
 using System.Collections;
 using DfoServer.Network.Parsers;
 using DfoServer.Network.Builders;
+using DfoServer.Network.Handlers;
 
 namespace DfoServer;
 
@@ -64,6 +65,11 @@ internal static class DungeonRequestTests
                 rejection.BaseStream.Position == rejection.BaseStream.Length,
                 "已核对的ACK16错误分支完整编码u16提示码和实际成员槽");
         }
+        That(DungeonHandler.SelectionErrorForReason("dungeon-incount-exhausted") == DungeonSelectionError.DungeonLimitOrStorageReward &&
+            DungeonHandler.SelectionErrorForReason("dungeon-account-incount-exhausted", true) == DungeonSelectionError.DungeonLimitOrStorageReward &&
+            DungeonHandler.SelectionErrorForReason("fatigue-exhausted") == DungeonSelectionError.MemberFatigueOrClearCondition &&
+            DungeonHandler.SelectionErrorForReason("entry-item-required:490000001", true) == DungeonSelectionError.GroupMaterials,
+            "进入次数耗尽及已有疲劳/材料拒绝原因映射到已核对的ACK16提示分支");
         Reject<ArgumentOutOfRangeException>(() => DungeonPackets.SelectionRejected(DungeonSelectionError.DailyLimitDialog),
             "仅有客户端显示文本的分支不能自动假定其完整失败包体");
         Reject<ArgumentOutOfRangeException>(() => DungeonPackets.SelectionRejected(DungeonSelectionError.MemberFatigueOrClearCondition, 8),
