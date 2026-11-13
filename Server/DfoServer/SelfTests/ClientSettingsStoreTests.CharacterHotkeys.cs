@@ -25,8 +25,8 @@ internal static partial class ClientSettingsStoreTests
             f.Execute("PRAGMA user_version=208");
             string assets = f.Assets();
             var migrated = new ClientSettingsRepository(f.Path);
-            Check(f.Query("PRAGMA user_version") is 209L && f.Assets() == assets,
-                "两种208来源均原子升至209，完整角色资产与既有电池值保持");
+            Check(f.Query("PRAGMA user_version") is long version && version == SqliteMigrations.CurrentVersion && f.Assets() == assets,
+                "两种208来源均原子升级到当前结构，完整角色资产与既有电池值保持");
             if (localBattery)
                 Check(Same(migrated.Load(f.Owner, f.First.Id).Hotkeys, legacy) &&
                     Same(migrated.Load(f.Owner, f.Second.Id).Hotkeys, legacy) &&

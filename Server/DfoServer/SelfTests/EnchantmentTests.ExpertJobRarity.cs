@@ -120,6 +120,7 @@ internal static partial class EnchantmentTests
         const BindingFlags instance = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
         var scriptType = typeof(ExpertJobScriptCatalog).GetNestedType("JobScript", BindingFlags.NonPublic)!;
         object script = Activator.CreateInstance(scriptType, nonPublic: true)!;
+        scriptType.GetProperty("Thresholds")!.SetValue(script, new[] { 100 });
         scriptType.GetProperty("MonsterCard")!.SetValue(script, new[] { exp ?? new ExpertJobMonsterCardExp(1, 7, 7) });
         var jobs = (IDictionary)Activator.CreateInstance(typeof(Dictionary<,>).MakeGenericType(typeof(byte), scriptType))!;
         jobs.Add((byte)1, script);

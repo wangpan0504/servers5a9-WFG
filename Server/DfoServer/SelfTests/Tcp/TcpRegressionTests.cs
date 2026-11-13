@@ -645,6 +645,8 @@ internal static class TcpRegressionTests
             return Task.CompletedTask;
         }),
         ("database-schema", (_, _, _) => { DatabaseSchemaTests.Run(); return Task.CompletedTask; }),
+        ("notice-storage", (_, _, _) => { ClientSettingsStoreTests.SeenNoticeStorage(); return Task.CompletedTask; }),
+        ("notice", SeenNoticeTcpTests.RunAsync),
         ("settings-storage", (_, _, _) => { ClientSettingsStoreTests.Run(); return Task.CompletedTask; }),
         ("epic-wish-storage", (_, _, _) => { EpicWishTests.RunCore(); return Task.CompletedTask; }),
         ("epic-wish", EpicWishTcpTests.RunAsync),

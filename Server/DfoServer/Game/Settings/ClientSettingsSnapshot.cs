@@ -8,7 +8,8 @@ internal sealed record ClientSettingsSnapshot(ImmutableArray<byte> GameOptions, 
     ImmutableArray<byte> CharacterGameOptions = default, ImmutableArray<byte> Hotkeys = default,
     ImmutableArray<byte> QuickChat0 = default, ImmutableArray<byte> QuickChat1 = default,
     ImmutableArray<ChatEmoticonMacro> ChatEmoticons = default, ImmutableArray<byte> RecentEmoticons = default,
-    ImmutableArray<byte> QuestNotify = default, ImmutableArray<byte> NpcBookmarks = default)
+    ImmutableArray<byte> QuestNotify = default, ImmutableArray<byte> NpcBookmarks = default,
+    ImmutableArray<byte> SeenNotices = default)
 {
     public bool IsDefault => GameOptions.IsDefault && CharacterOptions.IsDefault && CharacterGameOptions.IsDefault && Hotkeys.IsDefault;
 }

@@ -39,7 +39,8 @@ internal static class ExpertJobCraft
         }
         long? deadline = character.Inventory.Items.Where(item => item.ExpireTime > 0 &&
             inventory.Find(item.Position) != item).Select(item => (long?)item.ExpireTime).Min();
-        int success = 0, gained = 0;
+        int success = 0;
+        long gained = 0;
         for (int attempt = 0; attempt < count; attempt++)
         {
             if (next(100) >= successPercent) continue;
@@ -56,8 +57,7 @@ internal static class ExpertJobCraft
             if (!grant.Accepted || grant.Plan is null) { error = grant.Error == 0 ? (ushort)4 : grant.Error; return false; }
             inventory = grant.Plan.After;
         }
-        int experience = character.ExpertJobExperience;
-        if (gained > 0 && experience <= int.MaxValue - gained) experience += gained;
+        int experience = scripts.AddExperience(character.ExpertJobType, character.ExpertJobExperience, gained);
         plan = new(new(character.Inventory, inventory, "expert_job_compound", new(character, deadline)), experience, products, success, count - success);
         return true;
     }
@@ -104,7 +104,8 @@ internal static class ExpertJobCraft
         }
         long? deadline = character.Inventory.Items.Where(item => item.ExpireTime > 0 &&
             inventory.Find(item.Position) != item).Select(item => (long?)item.ExpireTime).Min();
-        int success = 0, gained = 0;
+        int success = 0;
+        long gained = 0;
         int chance = scripts.CardSuccessPercent(level, recipe.Rarity);
         var cardExp = scripts.MonsterCardExp(1, level);
         for (int attempt = 0; attempt < count; attempt++)
@@ -137,8 +138,7 @@ internal static class ExpertJobCraft
             }
             products = [new(recipe.BeadId, success)];
         }
-        int experience = character.ExpertJobExperience;
-        if (gained > 0 && experience <= int.MaxValue - gained) experience += gained;
+        int experience = scripts.AddExperience(1, character.ExpertJobExperience, gained);
         plan = new(new(character.Inventory, inventory, "expert_job_card", new(character, deadline)),
             experience, products, success, count - success);
         return true;
@@ -197,8 +197,7 @@ internal static class ExpertJobCraft
         if (!grant.Accepted || grant.Plan is null) { error = grant.Error == 0 ? (ushort)4 : grant.Error; return false; }
         int gained = expMin;
         if (expMax > expMin) gained += next(expMax - expMin + 1);
-        int experience = character.ExpertJobExperience;
-        if (gained > 0 && experience <= int.MaxValue - gained) experience += gained;
+        int experience = scripts.AddExperience(character.ExpertJobType, character.ExpertJobExperience, gained);
         long? deadline = new[] { extractor.ExpireTime, target.ExpireTime }.Where(value => value > 0).Select(value => (long?)value).Min();
         plan = new(new(character.Inventory, grant.Plan.After, "expert_job_extract", new(character, deadline)), experience,
             rewards.GroupBy(reward => reward.ItemId).Select(group => new ExpertJobProduct(group.Key, group.Sum(reward => reward.Count))).ToArray(), 1, 0);
@@ -239,8 +238,7 @@ internal static class ExpertJobCraft
         var cardExp = scripts.MonsterCardExp(character.ExpertJobType, scripts.Level(character.ExpertJobType, current));
         int gained = cardExp.Min;
         if (cardExp.Max > cardExp.Min) gained += next(cardExp.Max - cardExp.Min + 1);
-        if (gained > 0 && current <= int.MaxValue - gained) current += gained;
-        return current;
+        return scripts.AddExperience(character.ExpertJobType, current, gained);
     }
 
     public static InventoryReward[] DisjointProducts(int machineGrade, ExpertJobDisjointRules rules, ItemTemplate template,

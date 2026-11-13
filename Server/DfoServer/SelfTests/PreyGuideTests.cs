@@ -17,6 +17,7 @@ using DfoServer.Network;
 using DfoServer.Network.Projection;
 using DfoServer.Network.Protocol;
 using System.Net;
+using System.Xml.Linq;
 using Microsoft.Data.Sqlite;
 using static DfoServer.Testing.TestCheck;
 
@@ -129,7 +130,7 @@ internal static class PreyGuideTests
             That(repo.HasQuestDungeonClear(owner, session.Selected!, 291100397, 1), "真实引导生命周期生成6220所需的持久通关历史");
             That(!repo.HasQuestDungeonClear(owner, session.Selected!, 400000046, 1), "引导历史不能冒充普通普雷通关");
             That(!repo.HasQuestDungeonClear(owner, session.Selected!, 291100397, 2), "同一实例不重复累计隐藏任务历史");
-            VerifyShip(definition.Resources!.Script, actor!);
+            VerifyShip(definition.Resources!.Script, actor!, resources);
             var packetOffer = new RaidRewardOffer(1, 0, [new(0x12345678, 3)], [])
             { PreyDisplay = [new(0, 0x12345678, 3, 0, 0, 0)] };
             That(PreyRewardPackets.Reward(0x1234, packetOffer).SequenceEqual(new byte[]
@@ -330,8 +331,19 @@ internal static class PreyGuideTests
         finally { if (owner.IsCurrent) session.End(); }
     }
 
-    static void VerifyShip(RaidScript script, RaidActor actor)
+    static void VerifyShip(RaidScript script, RaidActor actor, TcpTestResources resources)
     {
+        var navigation = XDocument.Parse(resources.Archive.ReadText(
+            "ui/gcontents/190307_preyraid/navigation/mainphase1.xui").TrimEnd('\0'));
+        var holySlots = navigation.Descendants("UIContainer")
+            .Where(row => ((string?)row.Attribute("ID"))?.StartsWith("STR:xuiDgn", StringComparison.Ordinal) == true)
+            .Where(row => XDocument.Parse(resources.Archive.ReadText(((string)row.Attribute("UIPath")!)[4..]).TrimEnd('\0'))
+                .Descendants("IControl").Where(control => (string?)control.Attribute("ID") is "STR:ctrlIncome" or "STR:ctrlOn")
+                .Count(control => control.Elements("CNUIControlAnimationForRDAR")
+                    .Any(animation => (string?)animation.Attribute("ID") == "STR:aniHoly")) == 2)
+            .Select(row => int.Parse(((string)row.Attribute("ID")!)[10..], System.Globalization.CultureInfo.InvariantCulture) + 1)
+            .ToHashSet();
+        That(holySlots.Count > 0, "实际战略图声明可加载入场及待机圣地图案的槽位");
         var branches = new HashSet<int>();
         for (int seed = 0; branches.Count < 2 && seed < 20; seed++)
         {
@@ -346,6 +358,12 @@ internal static class PreyGuideTests
             That(Enumerable.Range(1, 16).Count(slot => battle.View.Symbols[$"[area_{slot}_dgn_type]"] == 5) == 3 &&
                 Enumerable.Range(1, 16).Count(slot => battle.View.Symbols[$"[area_{slot}_dgn_type]"] == 4) == 2,
                 "战略地图具有真实防御及圣地区域类型");
+            That(Enumerable.Range(1, 16).Where(slot => battle.View.Symbols[$"[area_{slot}_dgn_type]"] == 4)
+                .All(holySlots.Contains), "两分支圣地只能分配到实际XUI具备入场及待机aniHoly的区域，不能只有文字无图案");
+            That(Enumerable.Range(1, 16).Count(slot => battle.View.Symbols[$"[area_{slot}]"] != 0) == 7 &&
+                Enumerable.Range(1, 16).Where(slot => battle.View.Symbols[$"[area_{slot}]"] != 0)
+                    .Select(slot => battle.View.Symbols[$"[area_{slot}]"]).Distinct().Count() == 7,
+                "修正圣地槽位后七个真实据点仍各自占用唯一区域，不覆盖防御、庭院或魔塔");
             That(Enumerable.Range(1, 20).All(slot => battle.View.Symbols[$"[area_{slot}]"] is var id &&
                 (id == 0 ? battle.View.Symbols[$"[area_{slot}_dgn_type]"] == 7 :
                     script.Phases[0].Dungeons.Any(row => row.Id == id &&

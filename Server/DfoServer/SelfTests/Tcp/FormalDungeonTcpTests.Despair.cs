@@ -37,7 +37,7 @@ internal static partial class FormalDungeonTcpTests
             var candidate = CharacterCreation.Prepare("Despair466", resources.Characters.Get(0), position, position, resources.Learning.Get);
             created = repo.Create(owner, candidate with
             {
-                Level = 70, AcceptedStoryLevel = 70, CompletedQuests = done,
+                Level = 70, AcceptedStoryLevel = 70, CompletedQuests = [.. done, 6600],
                 InitialLearning = SkillPointLedger.Synchronize(0, 0, 70, candidate.InitialLearning with
                     { Experience = growth.GetLevelStartExperience(70) }, resources.Learning)
             });
@@ -159,7 +159,7 @@ internal static partial class FormalDungeonTcpTests
             fixture.Query("SELECT count(*) FROM dungeon_despair_clear_receipts WHERE character_id=$p0", peer.Id) is [[100L]],
             "完整100层后奖章、九次十层材料、重试票与100条唯一回执一致");
         That(fixture.Query("SELECT count(*) FROM character_title_progress WHERE character_id=$p0 AND quest_id BETWEEN 6600 AND 6648 AND completed_revision>0", peer.Id)
-            is [[49L]], "全部49个楼层称号随原层通关持久完成");
+            is [[48L]], "保留首层旧完成记录，其余48个楼层称号随真实通关完成");
         string progressBeforeRestart = fixture.Snapshot("SELECT * FROM dungeon_despair_progress WHERE character_id=$p0", peer.Id);
         string receiptsBeforeRestart = fixture.Snapshot("SELECT * FROM dungeon_despair_clear_receipts WHERE character_id=$p0", peer.Id);
         string inventoryBeforeRestart = fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items WHERE character_id=$p0 ORDER BY item_uid", peer.Id);

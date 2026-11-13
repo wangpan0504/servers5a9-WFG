@@ -2738,3 +2738,8 @@ CREATE TABLE IF NOT EXISTS character_npc_bookmarks(
             entries BLOB NOT NULL CHECK(typeof(entries)='blob' AND length(entries)<=4096 AND length(entries)%4=0),
             FOREIGN KEY(character_id,account) REFERENCES characters(id,account)
         );
+
+CREATE TABLE account_seen_notices(
+    account TEXT NOT NULL REFERENCES accounts(account_id),
+    notice_id INTEGER NOT NULL CHECK(notice_id BETWEEN 0 AND 127),
+    PRIMARY KEY(account,notice_id));

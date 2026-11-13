@@ -19,6 +19,16 @@ internal sealed partial class GameSession
     public Character? CaptureExpertJobTrade() => owner.Execute(() => CanUseExpertJob() ? Selected : null);
     public Character? CapturePersonalExpertJob() => owner.Execute(() => CanUsePersonalExpertJob() ? Selected : null);
 
+    public bool InitializeExpertJobExperience(ExpertJobScriptCatalog scripts) => owner.Execute(() =>
+    {
+        if (Ready || Phase != SessionPhase.Unselected || pendingRental is not null || HasPendingTownQuestCommit ||
+            Selected is not { ExpertJobType: >= 1 and <= 4 } current) return false;
+        int experience = scripts.ClampExperience(current.ExpertJobType, current.ExpertJobExperience);
+        if (experience == current.ExpertJobExperience) return false;
+        Selected = repository.CommitExpertJobExperience(owner, current, experience);
+        return true;
+    });
+
     public static (InventoryResult Customer, InventoryResult Owner)? CommitExpertJobTrade(
         GameSession customer, GameSession provider, ExpertJobTradePlan plan, Func<bool> eligible)
     {

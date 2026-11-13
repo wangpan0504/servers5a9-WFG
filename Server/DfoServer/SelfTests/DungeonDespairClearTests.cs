@@ -65,6 +65,18 @@ internal static class DungeonDespairClearTests
         That(associated == 49 && !achievements.Trigger(character, new(floor.TitleQuestId, new(1, 0, 0)), DateTimeOffset.UtcNow).Accepted &&
             !achievements.DespairClear(character, run.ClearFact!, tower.Floors[2], DateTimeOffset.UtcNow).Accepted,
             "全部49项有真实称号关联，客户端计数和错误楼层不能代替原实例通关");
+        foreach (var completedCharacter in new[]
+        {
+            character with { CompletedQuests = [.. character.CompletedQuests, floor.TitleQuestId] },
+            character with { TitleProgress = character.TitleProgress.SetItem(floor.TitleQuestId, new(default, character.Revision)) },
+            character with { AccountCompletedQuests = [.. character.AccountCompletedQuests, floor.TitleQuestId] }
+        })
+        {
+            That(achievements.DespairClear(completedCharacter, run.ClearFact!, floor, DateTimeOffset.UtcNow) is
+                { Accepted: true, Plan: null }, "旧任务/称号/账号已完成记录允许真实再通关且不补发奖励");
+            That(!achievements.DespairClear(completedCharacter, run.ClearFact! with { DungeonId = 11009 }, floor,
+                DateTimeOffset.UtcNow).Accepted, "已有称号也不能跳过楼层事实检查");
+        }
         var titlePlan = achievements.DespairClear(character, run.ClearFact!, floor, DateTimeOffset.UtcNow).Plan!;
         // 仅验证事务：123金币是合成测试资产，不表示任何绝望楼层的正式奖励数量。
         var inventory = new InventoryPlan(character.Inventory, titlePlan.Inventory.After with { Gold = character.Inventory.Gold + 123 },

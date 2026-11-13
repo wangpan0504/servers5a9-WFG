@@ -119,6 +119,11 @@ internal static class PreyGuideTcpTests
             started.Last(packet => packet is { Kind: 0, Opcode: 583 });
         var symbols = ReadSymbols(symbolPacket.Body);
         That(!symbols.ContainsKey(102), "普雷初始击杀全员零值不作为583执行事件发送");
+        That(Enumerable.Range(1, 16).Where(slot => symbols[400 + slot] == 4)
+            .All(slot => slot is 1 or 5 or 9 or 13), "实际583圣地位置遵守原生战略图的圣地图案槽位");
+        That(Enumerable.Range(1, 16).Count(slot => symbols[300 + slot] != 0) == 7 &&
+            Enumerable.Range(1, 16).Where(slot => symbols[400 + slot] == 4).Count() == 2,
+            "实际583完整发布七据点及本分支两圣地，槽位修正不丢失副本");
         int branch = symbols[129];
         if (deathPolicy is not null)
         {
