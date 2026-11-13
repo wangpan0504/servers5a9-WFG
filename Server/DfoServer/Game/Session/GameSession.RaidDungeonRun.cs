@@ -135,7 +135,7 @@ internal sealed partial class GameSession
             raidCombat is { Battle.Kind: RaidKind.Prey } raid &&
             entry.InstanceId == raid.Battle.Instance && entry.Phase + 1 == raid.Battle.PhaseCount &&
             raid.Battle.RequiresLukeCompletedPhaseReturn(raid.Actor, entry.InstanceId, entry.Phase) &&
-            raid.Battle.LukeWaitingRoom is { } room)
+            (raid.Battle.PreyGuide ? raid.Battle.PreyGuideWaitingRoom : raid.Battle.LukeWaitingRoom) is { } room)
             return towns.Spawn(new(checked((byte)room.Town), checked((byte)room.Area), 0, 0), completed);
         return dungeon.OrdinaryReturnPosition ?? character.Position;
     }

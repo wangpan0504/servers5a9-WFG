@@ -273,7 +273,8 @@ internal static partial class RaidCombatProjection
                 if (context.Session.Phase == Game.Session.SessionPhase.Town && context.Sender.DungeonSceneWritten) return false;
                 var battle = context.Session.CurrentRaidBattle(actor);
                 if (battle is { Kind: RaidKind.Prey, PreyGuide: true })
-                    return context.Session.Phase == Game.Session.SessionPhase.Town && !context.Sender.DungeonSceneWritten;
+                    return context.Session.Phase == Game.Session.SessionPhase.Town && !context.Sender.DungeonSceneWritten &&
+                        context.LukePhaseExit?.ReturnPending(view.Instance) != true;
                 if (battle is { Kind: RaidKind.Prey, PreyGuide: false })
                     return context.Session.Phase == Game.Session.SessionPhase.Town &&
                         context.LukePhaseExit?.ReturnPending(view.Instance) != true;

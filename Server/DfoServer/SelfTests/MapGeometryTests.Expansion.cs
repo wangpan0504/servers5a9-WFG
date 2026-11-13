@@ -225,6 +225,21 @@ internal static partial class MapGeometryTests
                 Atoms(after).Select(token => (token.Type,Value:token.Type == 6 ? Resolve(token.Value) : token.Value.ToString()))), "动画完整原列表保持后仅追加源784到1008的第五块");
         That(config.Apply(map,output,index => pool[index]).SequenceEqual(output) && raw.Length + 6 == output.Length, "动画与四到五列根共同生效，三比例共同目标且重入幂等");
         That(config.SignatureKind(map) == "DCG3" && !MapGeometrySignature.ComputeAnchors(map,raw,index => pool[index]).SequenceEqual(MapGeometrySignature.ComputeAnchors(map,output,Resolve)), "追加动画进入现有DCG3完整锚点保护");
+        const string townMap = "map/town/metrocenter/metro_time_waiting.map";
+        var townGate = GeometryRule("gate",townMap,"town_gate","[town movable area]",GeometryAtoms([860,235,50,230,-1,-1]),GeometryAtoms([1084,235,50,230,-1,-1]));
+        var townWalk = GeometryRule("walk",townMap,"walk_area","[virtual movable area]",GeometryAtoms([10,240,900,220]),GeometryAtoms([10,240,1124,220]));
+        var beforePair = (JsonArray)before.DeepClone(); beforePair[2]![1] = 664; beforePair[7]![1] = 771;
+        var afterPair = (JsonArray)after.DeepClone(); afterPair[2]![1] = 664; afterPair[7]![1] = 771; afterPair[12]![1] = 995;
+        foreach (var atom in (JsonArray)JsonNode.Parse("[[6,\"floor.ani\"],[6,\"[bottom]\"],[0,888],[0,263],[0,0]]")!) afterPair.Add(atom!.DeepClone());
+        string TownDocument(JsonArray to) => GeometryDocument([townGate,townWalk,GeometryRule("both",townMap,"town_animation5_append","[animation]",beforePair,to)]);
+        var pairConfig = MapGeometryConfig.Parse(TownDocument(afterPair));
+        PvfToken[] pairRaw = [Text(3,"[town movable area]"), ..new[]{860,235,50,230,-1,-1}.Select(n=>new PvfToken(0,n)), Text(3,"[virtual movable area]"), ..new[]{10,240,900,220}.Select(n=>new PvfToken(0,n)), Text(3,"[animation]"), ..Atoms(beforePair), Text(3,"[/animation]")];
+        var pairOutput = pairConfig.Apply(townMap,pairRaw,index => pool[index]);
+        That(pairOutput.Length == pairRaw.Length + 10 && pairConfig.Apply(townMap,pairOutput,index => pool[index]).SequenceEqual(pairOutput), "城镇白线与石块两条追加共同生效且幂等");
+        var wrongPair = (JsonArray)afterPair.DeepClone(); wrongPair[17]![1] = 889;
+        Reject<InvalidDataException>(() => MapGeometryConfig.Parse(TownDocument(wrongPair)), "石块追加必须保持精确664到888合同");
+        Reject<InvalidDataException>(() => MapGeometryConfig.Parse(TownDocument(afterPair).Replace("metro_time_waiting.map","other.map",StringComparison.Ordinal)), "城镇追加只准入已核实地图");
+        Reject<InvalidDataException>(() => MapGeometryConfig.Parse(TownDocument(afterPair).Replace("town_gate","walk_area",StringComparison.Ordinal)), "城镇追加必须绑定出入口与可行走区域");
         Reject<InvalidDataException>(() => MapGeometryConfig.Parse(GeometryDocument([pass,Animation(before,after)],aliases)), "动画追加缺少同图四到五列根拒绝");
         var threeTiles = GeometryRule("tiles",map,"dungeon_tiles3","[tile]",GeometryStrings("dummy.til","dummy.til","dummy.til"),
             GeometryStrings("dummy.til","dummy.til","displaycompat/terminal.til","displaycompat/terminal.til","displaycompat/terminal.til"));
@@ -240,7 +255,7 @@ internal static partial class MapGeometryTests
         var noSourceAfter = (JsonArray)noSource.DeepClone(); foreach (var atom in after.Skip(before.Count)) noSourceAfter.Add(atom!.DeepClone());
         Reject<InvalidDataException>(() => MapGeometryConfig.Parse(Document(noSource,noSourceAfter)), "追加不能从783或任意其他X猜补第五块");
         var twice = (JsonArray)after.DeepClone(); foreach (var atom in after.Skip(before.Count)) twice.Add(atom!.DeepClone());
-        Reject<InvalidDataException>(() => MapGeometryConfig.Parse(Document(before,twice)), "动画只允许恰一条完整五字段追加");
+        Reject<InvalidDataException>(() => MapGeometryConfig.Parse(Document(before,twice)), "动画不得重复追加同一记录");
         Reject<InvalidDataException>(() => config.Apply(map,raw[..^1],index => pool[index]), "动画追加必须真实闭合");
         Reject<InvalidDataException>(() => config.Apply(map,[..raw,..raw],index => pool[index]), "动画追加必须唯一完整段");
         var changed = raw.ToArray(); changed[^3] = new(0,265);

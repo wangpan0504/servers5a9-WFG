@@ -148,7 +148,14 @@ internal static class AvatarPresetTcpTests
                 writer.Write((byte)1); writer.Write((byte)1); writer.Write((short)0); writer.Write(1);
                 writer.Write((byte)3); writer.Write((short)3);
             }));
-            peer.Expect(0, 13);
+            var manualAvatarDelta = peer.Expect(0, 1681).Body;
+            That(manualAvatarDelta[0] == 1 && U16(manualAvatarDelta, 1) == 1 && U16(manualAvatarDelta, 3) == 0 &&
+                U32(manualAvatarDelta, 5) == uint.MaxValue && manualAvatarDelta.Length == 168,
+                "手动换装只清空变化的装扮槽，不重建整列");
+            var manualAvatarFill = peer.Expect(0, 1681).Body;
+            That(manualAvatarFill[0] == 1 && U16(manualAvatarFill, 1) == 1 && U16(manualAvatarFill, 3) == 0 &&
+                U32(manualAvatarFill, 5) == (uint)legs.Id && manualAvatarFill.Length == 168,
+                "手动互换回填同槽原实例的完整装扮核心与染色");
             // 当前橱窗跟着换装实时回写，服务端必须把新内容补回客户端缓存；否则装扮栏预览停在旧内容。
             var resampled = ParseRecord(peer.Expect(0, Update).Body);
             That(resampled is { Slot: 0, Name: "第二格" } && resampled.Parts.Length == 1 &&
@@ -157,7 +164,7 @@ internal static class AvatarPresetTcpTests
             That(peer.Expect(0, 2).Body[0] == 0 && peer.Expect(0, 2).Body[0] == 1, "手动互换后按Actor再Player刷新外观");
             peer.Barrier();
 
-            // 未变化的末格也有双锁：NOTI13会重建整个容器，不能只给本次换装的槽恢复锁。
+            // 未变化末格保留双锁，局部差量不能重建该格或回放它的锁。
             peer.Send(713, [1, 104, 0]);
             peer.Expect(1, 713, [1, 1, 104, 0]);
             peer.Send(267, [1, 104, 0]);
@@ -167,11 +174,10 @@ internal static class AvatarPresetTcpTests
             string assetsBeforeSelect = Assets();
             peer.Send(Select, [1]);
             var selection = ReadSelection(peer);
-            var avatarList = SilentAvatarList(selection, 105, 0);
-            int avatarEntry = AvatarEntry(avatarList, 0);
-            That(U32(avatarList, avatarEntry + 2) == (uint)legs.Id &&
-                U16(avatarList, avatarEntry + 161) == 11 && U16(avatarList, avatarEntry + 163) == 13,
-                "满包选择预设直接互换，装扮原槽保留换下实例和染色，不制造额外空格");
+            var avatarDelta = AvatarDelta(selection, 0);
+            That(U32(avatarDelta, 5) == (uint)legs.Id &&
+                U16(avatarDelta, 164) == 11 && U16(avatarDelta, 166) == 13,
+                "满包选择预设只差量互换装扮原槽，保留换下实例和染色，不制造额外空格");
             var equipmentPackets = selection.Where(packet => packet.Opcode is 14 or 1681 && packet.Body[0] == 3).ToArray();
             That(equipmentPackets.Length == 2 && equipmentPackets.All(packet => packet.Opcode == 1681),
                 "已有穿戴实例先静默清槽再静默回填，不能走普通NOTI14");
@@ -186,7 +192,7 @@ internal static class AvatarPresetTcpTests
             var appearance = selection.Where(packet => packet.Opcode == 2).ToArray();
             That(appearance.Length == 2 && appearance[0].Body[0] == 0 && appearance[1].Body[0] == 1,
                 "选择预设后按Actor再Player刷新外观");
-            // 整表首字段同步已应用槽与浏览槽，预览按当前穿戴显示，不得越界回槽0。
+            // 首字段同步已应用槽与浏览槽，预览按当前穿戴显示，不得越界回槽0。
             var applied = Parse(selection[^1].Body);
             That(applied is { Capacity: 2, ActiveSlot: 1 } && applied.Rows.Single(row => row.Slot == 0).Name == "第二格" &&
                 applied.Rows.Single(row => row.Slot == 1).Name == "改名",
@@ -198,17 +204,12 @@ internal static class AvatarPresetTcpTests
                 Convert.ToInt64(spareNow) == spareUid,
                 "选择预设按UID换回原实例，不重建同模板外观");
             That(Assets() == assetsBeforeSelect, "预设切换只移动既有实例，全部UID、完整核心与装扮详情不变");
-            int lockedEntry = AvatarEntry(avatarList, 104);
-            That(avatarList[lockedEntry + 95] == 1 && avatarList[lockedEntry + 96] != 0,
-                "全量保留未变化末格的排序锁与装备安全锁核心");
-            int listIndex = selection.FindIndex(packet => packet.Opcode == 13);
-            int sortLockIndex = selection.FindIndex(packet => packet.Kind == 1 && packet.Opcode == 713);
-            int equipmentLockIndex = selection.FindIndex(packet => packet.Kind == 0 && packet.Opcode == 251);
-            That(sortLockIndex > listIndex && equipmentLockIndex > listIndex &&
-                sortLockIndex < selection.Count - 1 && equipmentLockIndex < selection.Count - 1,
-                "NOTI13后、1597前恢复未变化实例的713 ACK与251 NOTI");
-            Bytes(selection[sortLockIndex].Body, [1, 1, 104, 0], "未变化末格恢复排序锁");
-            Bytes(selection[equipmentLockIndex].Body, [1, 0, 1, 104, 0, 1], "未变化末格恢复安全锁");
+            That(!selection.Any(packet => packet.Opcode is 13 or 713 or 714 or 251 or 252),
+                "局部差量不重建整列，也不回放未变化末格的双锁");
+            That(fixture.Query("SELECT json_extract(i.item_core,'$.SortLockFlag'),json_extract(i.item_core,'$.EquipmentLockId') " +
+                    "FROM character_inventory_slots s JOIN character_inventory_items i USING(item_uid) " +
+                    "WHERE s.list_type=1 AND s.slot_index=104") is [[1L, 1L]],
+                "未变化末格双锁仍真实持久化");
             // 用真实请求还原夹具，保留后续手动换装与重连原有的严格包序。
             peer.Send(714, [1, 104, 0]);
             peer.Expect(1, 714, [1, 1, 104, 0]);
@@ -228,7 +229,14 @@ internal static class AvatarPresetTcpTests
                 writer.Write((byte)1); writer.Write((byte)1); writer.Write((short)0); writer.Write(1);
                 writer.Write((byte)3); writer.Write((short)3);
             }));
-            peer.Expect(0, 13);
+            var activeAvatarDelta = peer.Expect(0, 1681).Body;
+            That(activeAvatarDelta[0] == 1 && U16(activeAvatarDelta, 1) == 1 && U16(activeAvatarDelta, 3) == 0 &&
+                activeAvatarDelta.Length == 168 && U32(activeAvatarDelta, 5) == uint.MaxValue,
+                "已选橱窗后的换装只同步变化的装扮槽");
+            var activeAvatarFill = peer.Expect(0, 1681).Body;
+            That(activeAvatarFill[0] == 1 && U16(activeAvatarFill, 1) == 1 && U16(activeAvatarFill, 3) == 0 &&
+                U32(activeAvatarFill, 5) == (uint)legs.Id && activeAvatarFill.Length == 168,
+                "已选橱窗后的换装回填完整装扮差量");
             var resampledActive = ParseRecord(peer.Expect(0, Update).Body);
             That(resampledActive is { Slot: 1, Name: "改名" } && resampledActive.Parts.Length == 1 &&
                 resampledActive.Parts[0] is { Slot: 3, Color1: 11, Color2: 13 },
@@ -308,11 +316,10 @@ internal static class AvatarPresetTcpTests
             string assetsBeforeUnload = Assets();
             peer.Send(Select, [2]);
             var selection = ReadSelection(peer);
-            var avatarList = SilentAvatarList(selection, 106, 7);
-            int unloadedEntry = AvatarEntry(avatarList, 105);
-            That(U32(avatarList, unloadedEntry + 2) == (uint)legs.Id &&
-                U16(avatarList, unloadedEntry + 161) == 11 && U16(avatarList, unloadedEntry + 163) == 13,
-                "空预设将实际穿戴的既有实例连同染色卸到新增空位，不制造奖励");
+            var unloadedAvatarDelta = AvatarDelta(selection, 105);
+            That(U32(unloadedAvatarDelta, 5) == (uint)legs.Id &&
+                U16(unloadedAvatarDelta, 164) == 11 && U16(unloadedAvatarDelta, 166) == 13,
+                "空预设只差量卸下实际穿戴的既有实例及染色，不制造奖励");
             var cleared = selection.Single(packet => packet.Opcode is 14 or 1681 && packet.Body[0] == 3);
             That(cleared.Opcode == 1681 && cleared.Body.Length == 3 + 123 && U16(cleared.Body, 1) == 1 &&
                 U16(cleared.Body, 3) == 3 && U32(cleared.Body, 5) == uint.MaxValue,
@@ -353,23 +360,22 @@ internal static class AvatarPresetTcpTests
         return packets;
     }
 
-    static byte[] SilentAvatarList(List<WirePacket> packets, int count, ushort expansion)
+    static byte[] AvatarDelta(List<WirePacket> packets, ushort slot)
     {
-        var avatarPackets = packets.Where(packet => packet.Opcode is 13 or 14 or 1681 && packet.Body[0] == 1).ToArray();
-        That(avatarPackets.Length == 1 && avatarPackets[0].Opcode == 13,
-            "预设切换的装扮包裹只用NOTI13整表，不能用14或仍置新物品标志的1681替代");
-        That(!packets.Any(packet => packet.Opcode == 14 && packet.Body[0] is 1 or 3),
-            "预设切换不对已有装扮或穿戴发送普通NOTI14获得通知");
-        var body = avatarPackets[0].Body;
-        That(U16(body, 1) == expansion && U16(body, 3) == count && body.Length == 5 + count * 165,
-            "装扮全量保留当前扩展和全部实例，每件含完整123B核心与RAW30/RAW4");
-        That(Enumerable.Range(0, count).All(index => U32(body, 5 + index * 165 + 123) == 30 &&
-            U32(body, 5 + index * 165 + 157) == 4), "每件装扮的孔位与染色RAW长度严格匹配");
+        var packetsForSlot = packets.Where(packet => packet.Opcode == 1681 && packet.Body.Length >= 9 &&
+            packet.Body[0] == 1 && U16(packet.Body, 3) == slot).ToArray();
+        That(packetsForSlot.Length == 2 && packetsForSlot.All(packet => U16(packet.Body, 1) == 1) &&
+            packetsForSlot[0].Body.Length == 168 && U32(packetsForSlot[0].Body, 5) == uint.MaxValue &&
+            packetsForSlot[1].Body.Length == 168 && U32(packetsForSlot[1].Body, 5) != uint.MaxValue,
+            "预设切换仅对变化装扮槽先清空再完整回填165B核心");
+        That(!packets.Any(packet => packet.Opcode is 13 or 14) &&
+            packets.Count(packet => packet.Opcode == 1681 && packet.Body[0] == 1) == 2,
+            "预设切换不重建整列、不发送普通获得通知或无关装扮槽差量");
+        var body = packetsForSlot[1].Body;
+        That(U32(body, 126) == 30 && U32(body, 160) == 4,
+            "装扮差量保留完整核心与RAW30/RAW4尾部");
         return body;
     }
-
-    static int AvatarEntry(byte[] body, ushort slot) => Enumerable.Range(0, U16(body, 3))
-        .Select(index => 5 + index * 165).Single(at => U16(body, at) == slot);
 
     // 0x0639 = slot:u8 + nameLength:u32 + CP936字节（无结尾NUL），与客户端 FUN_03bdf8e0 写入一致。
     static byte[] NameBody(byte slot, string name)
