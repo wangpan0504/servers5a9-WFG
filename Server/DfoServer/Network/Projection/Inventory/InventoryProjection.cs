@@ -174,18 +174,6 @@ internal sealed partial class InventoryProjection(CharacterStatComputer stats, T
         bool seriaLuckChanged = plan.Before.AccountWallet.SeriaLuck != current.Inventory.AccountWallet.SeriaLuck;
         var changedSlots = plan.ChangedSlots.Concat(plan.ChangedCurrencies.Select(ItemSlotBoundService.CurrencySlot).Where(slot => slot.HasValue)
             .Select(slot => new InventorySlot(InventoryListType.Main, slot!.Value))).Distinct().ToArray();
-        if (result.WholeListRefresh)
-        {
-            // 整列重建：在**变化槽**（含要清空的源槽）之外，把该容器当前实际占用的每个槽与 Main 的虚拟货币槽
-            // 也一起发一遍，强制客户端丢弃并重新装载整个容器。这是解除「源槽仍被业务窗口持有」这类残留状态的
-            // 唯一可靠方式（拍卖行上架后背包不可操作就是这一种，见 InventoryResult.WholeListRefresh）。
-            // 与登录全量同一套编码：清空条目为目标 slot + itemId=-1，因此解引用走既有 Delta 语义，不手搓包体。
-            changedSlots = changedSlots
-                .Concat(current.Inventory.Items.Where(item => item.Position.List is InventoryListType.Main or InventoryListType.Avatar or
-                    InventoryListType.Pet or InventoryListType.GuildMedal or InventoryListType.Talisman or InventoryListType.AccountCommon or InventoryListType.PersonalCargo).Select(item => item.Position))
-                .Concat(CurrencyPackets.VirtualSlots.Select(slot => new InventorySlot(InventoryListType.Main, slot)))
-                .Distinct().ToArray();
-        }
         var slots = changedSlots.Where(slot => (preserveSkillSwitch || acknowledgedSlots?.Contains(slot) != true) &&
             slot != new InventorySlot(InventoryListType.Equipment, 30) && !(inPlaceCreature && slot == creatureSlot)).ToArray();
         bool reloadPersonalCargo = plan.Reason == "sort_item" && slots.Any(slot => slot.List == InventoryListType.PersonalCargo);
@@ -256,20 +244,22 @@ internal sealed partial class InventoryProjection(CharacterStatComputer stats, T
             // NOTI14/1681 走 029CFDD0(...,1,1)，且 1681 不置 062CF69C，020C5630 会把每格标成新物品。
             // NOTI13 在 023BDDF0 置位该标志，新建条目改为 (...,1,0)，黄框不再出现。
             // 029CEA20 只对 0/1/7/12/38/46 做这个标记；个人仓库已在上面走 NOTI13，账号公共栏不在资格内。
-            if (QuietExistingReload(plan.Reason, list, suppressMoveNoticeList))
+            if (QuietExistingReload(plan.Reason, list, suppressMoveNoticeList, result.WholeListRefresh))
             {
-                // Main 全量可能留下快捷栏 3–8 的旧对象，耗尽的快捷格仍要先发空 NOTI14。整理不动快捷栏。
-                if (list == InventoryListType.Main && list == suppressMoveNoticeList)
+                // 上架先清耗尽源槽，再重载本次变化容器：NOTI13不保证移除省略的旧槽，
+                // NOTI14重发既有物品则会把全部图标标成新获得。拆堆余量由后续静默全量安装。
+                // 普通穿脱仍只补清 Main 快捷栏3–8，保持既有路径不变。
+                if (result.WholeListRefresh || list == InventoryListType.Main && list == suppressMoveNoticeList)
                 {
-                    var emptiedQuick = slots.Where(slot => slot is { List: InventoryListType.Main, Index: >= 3 and <= 8 } &&
-                        receipt.Index.Find(slot) is null).ToArray();
-                    if (emptiedQuick.Length != 0)
+                    var emptied = slots.Where(slot => slot.List == list && receipt.Index.Find(slot) is null &&
+                        (result.WholeListRefresh ? plan.BeforeIndex.Find(slot) is not null : slot.Index is >= 3 and <= 8)).ToArray();
+                    if (emptied.Length != 0)
                         await context.Notify(NotiPacketType.UPDATE_ITEM_LIST,
-                            InventoryPackets.Delta(current.Inventory, list, emptiedQuick, index: receipt.Index),
-                            "inventory_quick_slot_cleared", CanSend);
+                            InventoryPackets.Delta(current.Inventory, list, emptied, index: receipt.Index),
+                            result.WholeListRefresh ? "inventory_listing_source_cleared" : "inventory_quick_slot_cleared", CanSend);
                 }
                 await context.Notify(NotiPacketType.ITEM_LIST, QuietList(context, current.Inventory, list),
-                    "inventory_quiet_reload", CanSend);
+                    result.WholeListRefresh ? "inventory_whole_list_refresh" : "inventory_quiet_reload", CanSend);
                 quietReloaded.Add(list);
                 continue;
             }
@@ -425,8 +415,9 @@ internal sealed partial class InventoryProjection(CharacterStatComputer stats, T
             await QuestProjection.ProgressAsync(context,previous,current,CanSend,"inventory_quest_conditions");
         await SkillSwitchInventoryProjection.RefreshInventoryAsync(context, receipt, plan.Before);
 
-        static bool QuietExistingReload(string reason, InventoryListType list, InventoryListType? suppressMoveNoticeList) =>
-            (reason == "sort_item" || list == suppressMoveNoticeList ||
+        static bool QuietExistingReload(string reason, InventoryListType list, InventoryListType? suppressMoveNoticeList,
+            bool wholeListRefresh) =>
+            (wholeListRefresh || reason == "sort_item" || list == suppressMoveNoticeList ||
                 reason == "avatar_preset_select" && list == InventoryListType.Avatar) &&
             list is InventoryListType.Main or InventoryListType.Avatar or InventoryListType.Pet or
                 InventoryListType.AccountCargo or InventoryListType.GuildMedal or InventoryListType.Talisman;

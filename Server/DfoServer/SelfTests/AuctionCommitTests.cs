@@ -76,14 +76,16 @@ internal static class AuctionCommitTests
 
             var inventory = new InventorySnapshot([
                 new(0, new(InventoryListType.Main, 27), new ItemCore(SampleTemplate, ItemKind.Equipment, 999_999_998) { Attr = 2, Durability = 45 }),
-                new(0, new(InventoryListType.Main, 121), new ItemCore(StackTemplate, ItemKind.Material, 5))
+                new(0, new(InventoryListType.Main, 121), new ItemCore(StackTemplate, ItemKind.Material, 5) { EnchantUpgrade = 2 }),
+                new(0, new(InventoryListType.Main, 122), new ItemCore(StackTemplate, ItemKind.Material, 1) { SortLockFlag = 1 }),
+                new(0, new(InventoryListType.Talisman, 70), new ItemCore(70001, ItemKind.Rune, 1))
             ]);
             var created = repository.Create(owner, new("Auctioneer", Room, null) { Level = 95, Inventory = inventory with { Gold = 1_000_000 } });
             var session = new GameSession(repository, towns, owner);
             session.Select(created.Slot);
             session.MarkReady();
             var planned = session.Selected!;
-            That(planned.Inventory.Items.Length == 2, "会话已选中角色且背包里有样本道具与一堆材料");
+            That(planned.Inventory.Items.Length == 4, "会话持有挂牌源、未变化的锁定材料和其他容器符文");
 
             // 真实投影 + 真实发送队列：事故就发生在 RefreshAsync 的第一行。
             var stats = new CharacterStatComputer(new CharacterCatalog(new Dictionary<byte, CharacterProfile>()));
@@ -91,7 +93,12 @@ internal static class AuctionCommitTests
             using var stop = new CancellationTokenSource();
             using var stream = new MemoryStream();
             var sent = new List<string>();
-            await using var sender = new GameConnectionSender(owner, stream, stop, 0, (_, _, _, _, action) => sent.Add(action));
+            var frames = new List<(byte Kind, ushort Opcode, byte[] Body, string Action)>();
+            await using var sender = new GameConnectionSender(owner, stream, stop, 0, (kind, opcode, _, body, action) =>
+            {
+                sent.Add(action);
+                frames.Add((kind, opcode, body.ToArray(), action));
+            });
             var context = new GameConnectionContext(new(1, IPAddress.Loopback, stream, stop), owner, session, sender);
 
             // ① 第一件：实机样本（整件装备）。
@@ -126,6 +133,19 @@ internal static class AuctionCommitTests
             That(!threw, "★ 上架成功后整列刷新**不抛异常**（事故的直接原因就是这里抛「背包刷新缺少提交回执」）");
             That(sent.Contains("inventory_whole_list_refresh"), "★ 发布动作是整列重建（不是只发变化槽的差量）");
             That(sent.Count(action => action == "inventory_whole_list_refresh") == 1, "整列刷新只发一条（不重复轰炸客户端）");
+            var clear = frames.Single(frame => frame.Action == "inventory_listing_source_cleared");
+            var reload = frames.Single(frame => frame.Action == "inventory_whole_list_refresh");
+            That(clear.Kind == 0 && clear.Opcode == (ushort)NotiPacketType.UPDATE_ITEM_LIST &&
+                clear.Body.Length == 3 + 123 && clear.Body[0] == (byte)InventoryListType.Main &&
+                BitConverter.ToInt16(clear.Body, 3) == 27 && BitConverter.ToInt32(clear.Body, 5) == -1,
+                "耗尽源槽仅发空条目，不把未变化的物品作为新获得差量重发");
+            That(reload.Kind == 0 && reload.Opcode == (ushort)NotiPacketType.ITEM_LIST &&
+                reload.Body[0] == (byte)InventoryListType.Main && frames.IndexOf(clear) < frames.IndexOf(reload),
+                "先清源槽再用NOTI13静默重载主背包，保留解除上架窗口持有状态的整列刷新");
+            That(frames.Where(frame => frame.Kind == 0 && frame.Opcode is (ushort)NotiPacketType.ITEM_LIST or
+                    (ushort)NotiPacketType.UPDATE_ITEM_LIST).All(frame => frame.Body[0] == (byte)InventoryListType.Main),
+                "其他容器的既有符文不被刷新或标记成新获得");
+            That(sent.Contains("restore_sort_lock"), "静默整列重建后恢复未变化材料的排序锁");
 
             // ② 第二件：同一次会话里再上架一堆材料，只扣本次数量。
             var secondPlan = service.PlanRegister(session.Selected!, AuctionRegisterRequest.Parse(StackBody(121, StackTemplate, 2)), now).Options!;
@@ -134,6 +154,7 @@ internal static class AuctionCommitTests
             That(second.Listing.Character!.Inventory.Find(new(InventoryListType.Main, 121)) is { Core.Value: 3 },
                 "拆堆上架后余量 3 留在原槽（只扣本次数量）");
             sent.Clear();
+            frames.Clear();
             threw = false;
             try
             {
@@ -145,7 +166,14 @@ internal static class AuctionCommitTests
                 Console.WriteLine("第二次整列刷新抛异常：" + error);
             }
             That(!threw && sent.Contains("inventory_whole_list_refresh"), "★ 第二次上架的整列刷新同样发布成功");
-            That(repository.List(owner).Single().Inventory.Items.Length == 1, "两次上架后独立读库只剩 1 件（材料余量）+ 0 件装备");
+            That(repository.List(owner).Single().Inventory.Items.Length == 3, "两次上架后保留材料余量、锁定材料与其他容器符文");
+            That(!sent.Contains("inventory_listing_source_cleared") && frames.Where(frame => frame.Action == "inventory_whole_list_refresh")
+                .All(frame => frame.Opcode == (ushort)NotiPacketType.ITEM_LIST), "拆堆余量由静默全量更新，不制造新获得差量");
+            var upgradedListing = service.SellerListings(session.Selected!.Id, now, includeInactive: false)
+                .Single(row => row.ItemTemplateId == StackTemplate);
+            That(AuctionPackets.ItemCoreFromEntry(upgradedListing.ItemEntry, ItemKind.Material).EnchantUpgrade == 2 &&
+                session.Selected.Inventory.Find(new(InventoryListType.Main, 121))!.Core.EnchantUpgrade == 2,
+                "拆堆挂牌副本与原槽余量均保留升级等级");
 
             // ③ 上架之后背包仍可继续操作：常规背包写用例必须能接受当前会话快照。
             //    金币基准取**提交后的真实值**（两次上架各扣了 10,000 保证金）：这里断言的是「常规写入
@@ -192,6 +220,13 @@ internal static class AuctionCommitTests
                 "★ 取消上架后的背包刷新不抛异常，且以常规差量发布（「提交后的刷新不是失败点」）");
             That(repository.List(owner).Single().Inventory.Items.Any(item => item.Core.ItemId == SampleTemplate),
                 "道具回到了背包（独立读库确认）");
+            var reconnected = new GameSession(new CharacterRepository(path), towns, owner);
+            reconnected.Select(created.Slot);
+            reconnected.MarkReady();
+            That(reconnected.Selected!.Inventory.Find(new(InventoryListType.Main, 121)) is { Core.Value: 3, Core.EnchantUpgrade: 2 } &&
+                reconnected.Selected.Inventory.Find(new(InventoryListType.Main, 122)) is { Core.SortLockFlag: 1 } &&
+                reconnected.Selected.Inventory.Find(new(InventoryListType.Talisman, 70)) is { Core.ItemId: 70001 },
+                "重建会话回读持久化拆堆余量、升级、锁及未变化容器；不冒充独立进程恢复");
         }
         finally
         {
