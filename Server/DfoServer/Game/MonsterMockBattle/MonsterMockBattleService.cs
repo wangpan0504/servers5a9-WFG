@@ -47,6 +47,7 @@ internal sealed class MonsterMockBattleService(IMonsterMockBattleStore store, Mo
     public bool ContainsDungeon(uint dungeon) => catalog.Worlds.Values.Any(row => row.DungeonId == dungeon);
 
     public const int CoinItemId = 490013685;
+    public const int RewardMaterialItemId = 490013686;
     public MockBattleAccount Read(AccountOwners.Lease owner, Character character)
     {
         var account = store.ReadMockBattle(owner) ?? MockBattleAccount.Create(Now, character.Name);
@@ -236,7 +237,7 @@ internal sealed class MonsterMockBattleService(IMonsterMockBattleStore store, Mo
             else mailRewards.Add(reward);
         }
         after = after.WithCoins(checked(after.Coins + coins));
-        if (world.Mode == 2 && catalog.PvpParameters[2] > 0) mailRewards.Add(new(490013686, catalog.PvpParameters[2]));
+        if (world.Mode == 2 && catalog.PvpParameters[2] > 0) mailRewards.Add(new(RewardMaterialItemId, catalog.PvpParameters[2]));
         var at = Now;
         MailboxDelivery? mail = mailRewards.Count == 0 ? null : RewardMail(owner, character, mailRewards,
             "monster-mock-battle:" + identity.InstanceId.ToString("N"), "阿拉德谋略战通关奖励。", at);

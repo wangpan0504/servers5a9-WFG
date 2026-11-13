@@ -15,6 +15,7 @@ internal static class MonsterCardBindTcpTests
     {
         Inventory.MonsterCardBindTests.RunResources(resources.ItemResources);
         var selected = Select(resources);
+        var silver = Select(resources, 2682575, 2);
         var items = resources.ItemResources.Items;
         var binderTemplate = items.Get(selected.BinderItemId);
         var cardTemplate = items.Get(selected.CardItemId);
@@ -32,6 +33,7 @@ internal static class MonsterCardBindTcpTests
 
         await using var fixture = new TcpTestFixture(options, Path.Combine(root, "monster-card-bind"), resources: resources);
         var repository = new CharacterRepository(fixture.Database);
+        ushort silverSlot;
         using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
         {
             repository.Create(owner, new("CardBindTcp", resources.Towns.Room, resources.Towns.InitialReturn)
@@ -42,6 +44,20 @@ internal static class MonsterCardBindTcpTests
                 Skills = resources.Characters.Get(0).Skills,
                 Inventory = new([binder, first, second])
             });
+            var silverBinder = items.Get(silver.BinderItemId);
+            var silverCard = items.Get(silver.CardItemId);
+            silverSlot = repository.Create(owner, new("SilverBind", resources.Towns.Room, resources.Towns.InitialReturn)
+            {
+                Job = 0,
+                Level = 95,
+                AcceptedStoryLevel = 1,
+                Skills = resources.Characters.Get(0).Skills,
+                Inventory = new([
+                    InventoryRewardGrantService.CreateItem(silverBinder, new(InventoryListType.Main, binderSlot),
+                        InventoryRewardGrantService.Create(silverBinder, 1)),
+                    InventoryRewardGrantService.CreateItem(silverCard, new(InventoryListType.Main, card0),
+                        InventoryRewardGrantService.Create(silverCard, 4))])
+            }).Slot;
         }
         await fixture.StartAsync();
 
@@ -118,6 +134,39 @@ internal static class MonsterCardBindTcpTests
                 "成功后断线重连恢复同一材料余量、随机奖励与revision，不重复合成");
         }
 
+        string silverCommitted;
+        using (var peer = Open(fixture))
+        {
+            peer.Select(silverSlot);
+            peer.Barrier();
+            string beforeSilver = Snapshot("SilverBind");
+            peer.Send(414, Request(binderSlot, card0, card0, card0, card0));
+            peer.Expect(1, 414, [0, 22, 0]);
+            peer.Barrier();
+            That(Snapshot("SilverBind") == beforeSilver,
+                "白银紫卡四张超过PVF上限，拒绝后材料、revision与连接保持");
+            peer.Send(414, Request(binderSlot, card0, card0, card0));
+            byte[] ack = peer.Expect(1, 414).Body;
+            That(ack.Length == 23 && ack[0] == 1 && U16(ack, 1) == (ushort)binderSlot && ack[3] == 3 &&
+                U16(ack, 4) == (ushort)card0 && U16(ack, 6) == (ushort)card0 && U16(ack, 8) == (ushort)card0 &&
+                ack[10] == 1 && ack[21] == 0 && ack[22] == 0,
+                "白银紫卡三张真实请求成功，ACK保留三次同源删除及一张未升级卡奖励");
+            int rewardId = checked((int)U32(ack, 13));
+            That(items.Get(rewardId).Rarity is 2 or 3, "三紫卡奖励只进入当前紫卡或粉卡奖池，不虚构传说奖励");
+            peer.Barrier();
+            That(Count("SilverBind", silver.BinderItemId) == 0 &&
+                Count("SilverBind", silver.CardItemId) == 1 + (rewardId == silver.CardItemId ? 1 : 0) &&
+                Count("SilverBind", rewardId) == (rewardId == silver.CardItemId ? 2 : 1),
+                "白银三张同一提交精确消耗一个合成器和三张卡片、只发一张奖励");
+            silverCommitted = Snapshot("SilverBind");
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(silverSlot);
+            peer.Barrier();
+            That(Snapshot("SilverBind") == silverCommitted, "白银三张合成结果断线重连保持，不重复扣费或发奖");
+        }
+
         await fixture.StopAsync();
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] &&
             fixture.Query("PRAGMA foreign_key_check").Length == 0,
@@ -137,25 +186,25 @@ internal static class MonsterCardBindTcpTests
             """, name, itemId) is [[long count]] ? count : 0;
     }
 
-    static Selection Select(TcpTestResources resources)
+    static Selection Select(TcpTestResources resources, int binderId = 2600479, int rarity = 0)
     {
         var items = resources.ItemResources.Items;
         ItemTemplate binder;
-        try { binder = items.Get(2600479); }
+        try { binder = items.Get(binderId); }
         catch (InvalidDataException)
         {
-            throw new InvalidDataException("现场缺少粗糙卡片合成器2600479");
+            throw new InvalidDataException($"现场缺少卡片合成器{binderId}");
         }
-        if (binder.MonsterCardBindType != 0)
-            throw new InvalidDataException("现场2600479不是bind type 0");
-        var pool = resources.ItemResources.MonsterCardBinds.Pool(0, 0);
+        if (binder.MonsterCardBindType is not (0 or 2))
+            throw new InvalidDataException($"现场{binderId}不是旧卡片合成器");
+        var pool = resources.ItemResources.MonsterCardBinds.Pool(binder.MonsterCardBindType.Value, rarity);
         int? cardId = null;
         foreach (var reward in pool.Rewards)
         {
             ItemTemplate template;
             try { template = items.Get(reward.ItemId); }
             catch (InvalidDataException) { continue; }
-            if (template.IsMonsterCard && template.Rarity == 0 && template.StackLimit >= 1 &&
+            if (template.IsMonsterCard && template.Rarity == rarity && template.StackLimit >= 4 &&
                 ItemSlotBoundService.List(template.Kind) == InventoryListType.Main)
             {
                 cardId = reward.ItemId;
@@ -163,18 +212,18 @@ internal static class MonsterCardBindTcpTests
             }
         }
         if (cardId is not { } selectedCard)
-            throw new InvalidDataException("现场旧稀有度0奖池找不到可放入Main的怪物卡片");
+            throw new InvalidDataException($"现场旧稀有度{rarity}奖池找不到可放入Main且能堆叠四张的怪物卡片");
         return new(binder.Id, selectedCard);
     }
 
-    static byte[] Request(short synthesizer, short card0, short card1)
+    static byte[] Request(short synthesizer, params short[] cards)
     {
         using var stream = new MemoryStream();
         using var writer = new BinaryWriter(stream);
         writer.Write(synthesizer);
-        writer.Write((byte)2);
-        writer.Write(card0);
-        writer.Write(card1);
+        writer.Write(checked((byte)cards.Length));
+        foreach (short card in cards)
+            writer.Write(card);
         return stream.ToArray();
     }
 

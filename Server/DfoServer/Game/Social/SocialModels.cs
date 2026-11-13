@@ -25,7 +25,8 @@ internal sealed record AccountFriendGroup(byte Icon, string Name)
         return true;
     }
 }
-internal sealed record SocialRow(SocialLink Link, byte Server, ushort Channel, bool Online);
+internal sealed record SocialRow(SocialLink Link, byte Server, ushort Channel, bool Online,
+    long OfflineElapsedSeconds = 0);
 internal sealed record SocialView(SocialRow[] Characters, SocialRow[] Accounts, AccountFriendRequest[] Requests,
     Func<bool> IsCurrent);
 internal sealed record SocialResult(ushort Error, SocialPerson? Person = null)
@@ -48,6 +49,7 @@ internal interface ISocialStore
     SocialLink[] CharacterLinks(ushort owner, bool blocked);
     SocialResult ChangeCharacterLink(SocialActor actor, string name, bool blocked, bool remove, string memo, DateTimeOffset now);
     SocialLink[] AccountFriends(string account);
+    IReadOnlyDictionary<string, long> AccountLastSeenUnix(IEnumerable<string> accounts);
     AccountFriendRequest[] AccountRequests(string account);
     SocialResult RequestAccountFriend(SocialActor actor, string adventure, string message, byte group, string memo, DateTimeOffset now);
     SocialResult ResolveAccountFriend(SocialActor actor, string adventure, bool accept, bool remove, bool cancel, string memo = "", byte group = 0);

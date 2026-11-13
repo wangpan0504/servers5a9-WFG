@@ -152,11 +152,30 @@ internal static class InventoryMoveService
                 destination = null;
             }
         }
-        // 孔位绑定装备槽而不跟随护石实例：带已装符文的护石离开 34/35 会把符文留在原槽错挂到别的护石上。
-        // 因此必须先卸符文再卸护石，两槽互换同样按卸下处理。
-        if (VacatesOccupiedSockets(sourceSlot, destinationSlot) || VacatesOccupiedSockets(destinationSlot, sourceSlot))
-            return InventoryResult.Reject(CannotMoveItem);
+        // 护石直接卸回空背包格时，先在同一工作快照中归还对应孔位的符文，再移动护石；
+        // 其他离开护石装备槽的路径仍拒绝，避免符文留在原槽错挂到另一枚护石。
+        bool directTalismanUnequip = destination is null && source.Core.Kind == ItemKind.Talisman &&
+            sourceSlot.List == InventoryListType.Equipment &&
+            sourceSlot.Index is ItemSlotBoundService.TalismanEquipmentStart or ItemSlotBoundService.TalismanEquipmentEnd &&
+            destinationSlot.List == InventoryListType.Talisman && destinationSlot.Index is >= 0 and < 70;
         var planned = before.Items.ToDictionary(item => item.Position);
+        if (VacatesOccupiedSockets(sourceSlot, destinationSlot) || VacatesOccupiedSockets(destinationSlot, sourceSlot))
+        {
+            if (!directTalismanUnequip || source.Core.EquipmentLockId != 0)
+                return InventoryResult.Reject(CannotMoveItem);
+            var talismanRunes = Enumerable.Range(0, 3)
+                .Select(offset => before.Find(new(InventoryListType.Talisman,
+                    (short)(ItemSlotBoundService.EquippedRuneStart +
+                        (sourceSlot.Index - ItemSlotBoundService.TalismanEquipmentStart) * 3 + offset))))
+                .Where(item => item is not null).Cast<InventoryItem>().ToArray();
+            if (talismanRunes.Any(rune => rune.Core.Kind != ItemKind.Rune || rune.Core.Count != 1))
+                return InventoryResult.Reject(CannotMoveItem);
+            var talismanService = new InventoryTalismanService(catalog);
+            if (!talismanService.ReturnRunes(planned, talismanRunes, before, utcSeconds, out var runeDeadline))
+                return InventoryResult.Reject(CannotMoveItem);
+            if (runeDeadline is not null)
+                qualificationExpiresAt = qualificationExpiresAt is null ? runeDeadline : Math.Min(qualificationExpiresAt.Value, runeDeadline.Value);
+        }
         var moving = PrepareForDestination(source, destinationSlot, destination, catalog);
         if (destination is not null && source.Core.IsStackable && destination.Core.IsStackable && source.Core.ItemId == destination.Core.ItemId)
         {

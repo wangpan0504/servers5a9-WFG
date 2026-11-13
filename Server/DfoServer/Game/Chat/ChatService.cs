@@ -37,7 +37,7 @@ internal interface IChatDirectoryStore
 /// 显示 type 由 <see cref="ChatWire"/> 映射（队伍2、普通/悄悄话3、公会6）；
 /// 正式通知使用真实发言人编号和来源服务器分组，不把接收者编号或请求引用当作发言人。喇叭走
 /// <c>NOTI 0x0076</c> 喇叭页签（发言人 + 正文，type11/13/14由Network侧Builder选定，
-/// 三条串非空与 29/511/16 字节上限也在那里截断）。物品链接 <c>CMD 0x01A8</c> 的正文由
+/// 发言人/正文按29/511字节截断，第三串完整携带合法账号冒险团名，不能截成另一目标）。物品链接 <c>CMD 0x01A8</c> 的正文由
 /// 物品链接原样投递，不做 CP936 往返；文本与 148 字节记录一起进
 /// <see cref="ChatNotice"/>，由 Network 侧决定发 <c>0x172</c>（可点击）还是退化 <c>0x0C</c>。
 /// </para>
@@ -205,7 +205,8 @@ internal sealed class ChatService(IChatDirectoryStore directory, IChatDelivery d
     ChatDispatch Megaphone(ChatOrigin sender, ChatKind kind, string text, byte[]? textBytes = null, byte[]? itemRecords = null)
     {
         var notice = new ChatNotice(kind, sender.CharacterId, sender.ChannelNumber,
-            Megaphone: new MegaphoneText(sender.Name, text) { Channel = sender.Scene.Channel, Actor = sender.CharacterId })
+            Megaphone: new MegaphoneText(sender.Name, text)
+            { Channel = sender.Scene.Channel, Actor = sender.CharacterId, AdventureName = sender.AdventureName })
             { Origin = sender, Guard = sender.IsCurrent, TextBytes = textBytes, ItemRecords = itemRecords };
         int recipients = kind is ChatKind.ServerMegaphone or ChatKind.OfficialMegaphone
             ? Deliver(sender, recipient => recipient.Scene.Channel.ServerIndex == sender.Scene.Channel.ServerIndex, notice)

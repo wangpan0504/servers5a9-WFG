@@ -88,6 +88,23 @@ internal sealed class InventoryTalismanService(ItemCatalog items, Func<int, int>
         return new(true, 0, new(before, after, "talisman_refine", new(character, Deadline(target, material))));
     }
 
+    internal bool ReturnRunes(Dictionary<InventorySlot, InventoryItem> planned,
+        IReadOnlyList<InventoryItem> runes, InventorySnapshot before, long utcSeconds, out long? earliestExpireTime)
+    {
+        earliestExpireTime = null;
+        foreach (var rune in runes)
+        {
+            if (!Usable(rune, ItemKind.Rune, utcSeconds))
+                return false;
+            if (rune.ExpireTime > 0)
+                earliestExpireTime = earliestExpireTime is null ? rune.ExpireTime : Math.Min(earliestExpireTime.Value, rune.ExpireTime);
+            planned.Remove(rune.Position);
+            if (!ReturnRune(planned, rune, before))
+                return false;
+        }
+        return true;
+    }
+
     bool ReturnRune(Dictionary<InventorySlot, InventoryItem> planned, InventoryItem rune, InventorySnapshot before)
     {
         int limit = items.Get(rune.Core.ItemId).StackLimit;
