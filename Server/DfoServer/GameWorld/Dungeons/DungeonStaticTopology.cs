@@ -18,6 +18,24 @@ internal sealed record DungeonStaticTopology(
             return Unsupported(grid.UnsupportedReason!);
         if (maze.MapSpecification is null)
             return Unsupported("未提供显式地图，不能生成静态连接");
+        // 任务回放的原生单格路线使用 Boss 坐标上的普通地图候选；AA 的四个方向位均为零，
+        // 因此发布一个零出口房间。身份必须由 EntryPlan 在匹配任务连接、地图和起终点后冻结，
+        // 不把该边界扩展为普通迷宫或其它专用模式的拓扑豁免。
+        if (maze.QuestReplayRoom is { } replay)
+        {
+            if (replay.QuestId is 0 or >= 30000 || maze.ResourceError is not null || maze.Width != 1 || maze.Height != 1 ||
+                grid.Cells is not [{ Index: 0 }] || !maze.ConnectsQuest(replay.QuestId) ||
+                maze.MapSpecification is not [{ } replayDeclared] || replayDeclared.Kind != "boss" || !ReferenceEquals(replayDeclared,replay.Map) ||
+                replayDeclared.Id < 0 || string.IsNullOrWhiteSpace(replayDeclared.Path) || replayDeclared.Position != new DungeonPoint(0,0) ||
+                !maze.Starts.SequenceEqual([replayDeclared.Position]) || !maze.Bosses.SequenceEqual([replayDeclared.Position]) ||
+                maze.MapAlternatives.Count != 0 || maze.LayeredMaps.Count != 0 || maze.ConditionalMaps.Count != 0 ||
+                maze.DummyStages.Count != 0 || maze.StoryStages.Count != 0 || maze.WarpMaps.Count != 0 ||
+                maze.BossEntrance is not null || maze.HellParty is not null || maze.IsLostLand || maze.IsTrainingRoom ||
+                maze.IsClassExperience || maze.IsGriefTower || maze.IsBossRush || maze.IsDespairTower || maze.IsUltimateAltar ||
+                maze.IsTournament || maze.WeddingCoupleRoom is not null || maze.MockBattleRoom is not null)
+                return Unsupported("任务回放单房资源身份或零出口合同不匹配");
+            return new([new(replayDeclared,0)],[],null);
+        }
         // 活动原DGN在两个格重复同一战场；专用准入核对原清图目标后投影为唯一房间。
         if (maze.MockBattleRoom is { } battlefield && maze.ResourceError is null && maze.Width == 1 && maze.Height == 1 &&
             grid.Cells is [{ Index: 1 }] && maze.MapSpecification is [{ Kind: "boss" } mock] && mock == battlefield &&

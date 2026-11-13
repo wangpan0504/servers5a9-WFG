@@ -1,15 +1,19 @@
 using System.Buffers.Binary;
 using System.Net;
+using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
+using DfoServer.Game.Dungeons;
 using DfoServer.Game.Session;
 using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Dungeons;
+using DfoServer.GameWorld.Towns;
 using DfoServer.Infrastructure;
 using DfoServer.Network;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Handlers;
 using DfoServer.Network.Projection;
 using DfoServer.Network.Protocol;
+using DfoServer.Persistence;
 using PvfLib;
 using static DfoServer.Testing.TestCheck;
 using static DfoServer.QuestCompletionRepositoryTests;
@@ -18,13 +22,15 @@ namespace DfoServer;
 
 internal static class QuestReplayPublicationTests
 {
-    // 成功准备复用单房Prepared夹具；1459真实Handler测拒绝，15/16/37及取消调用真实Handler/仓储。
+    // 真实城镇路线经1459准备及15/16/37发布；原合成Prepared用例保留取消、重放和owner竞争边界。
     public static async Task RunAsync(PvfArchive pvf,CharacterCatalog characters,ItemResources items,
         SkillLearningCatalog? sharedSkills = null)
     {
+        QuestReplayTests.RunResourcePreparation(pvf);
         int checks = Count;
         string root = Path.Combine(Path.GetTempPath(),"S5A9-quest-replay-publication-"+Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
+        bool passed = false;
         try
         {
             using var log = new ServerLog(root);
@@ -32,6 +38,7 @@ internal static class QuestReplayPublicationTests
             var growth = CharacterGrowthCatalog.Load(pvf,sharedSkills ?? global::DfoServer.Testing.SelfTestCatalogs.SkillLearning(pvf));
             var kills = global::DfoServer.Testing.SelfTestCatalogs.KillExperience(pvf);
             var dungeons = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf); var rooms = global::DfoServer.Testing.SelfTestCatalogs.Rooms(pvf);
+            await ResourceLoadingAsync();
             await LoadingAsync();
             await UnauthorizedAsync();
             await CancelAsync();
@@ -40,6 +47,7 @@ internal static class QuestReplayPublicationTests
             await ReselectRejectedEntryAsync();
             await StaleOwnerAsync();
             await CancelContinuationAsync();
+            passed = true;
 
             GameCommandRegistry Registry(QuestCycleContinuationTests.Fixture fixture)
             {
@@ -49,6 +57,75 @@ internal static class QuestReplayPublicationTests
                 new DungeonSelectionHandler(projection,log).Register(commands);
                 new DungeonHandler(log,dungeons,rooms,growth,kills,projection,new CharacterLevelProjection(computer)).Register(commands);
                 commands.Seal(); return commands;
+            }
+
+            async Task ResourceLoadingAsync()
+            {
+                var quests = global::DfoServer.Testing.SelfTestCatalogs.Quests(pvf);
+                var connections = global::DfoServer.Testing.SelfTestCatalogs.QuestConnections(pvf);
+                var repository = new CharacterRepository(Path.Combine(root,"resource-replay.db"),quests);
+                using var owner = new AccountOwners().Acquire("replay-resource",() => { });
+                var point = new Location(38,2,450,240);
+                var map = new TownMap("synthetic-replay-town.map",[new(new(0,0,2000,1000),[],[])],[],false,[]);
+                var area = new TownArea(point.Town,point.Area,1,[],[],[],point,map,[],[]);
+                var towns = new TownCatalog(new() { [(point.Town,point.Area)]=area },point,point,new(0,[],[]),[],new Dictionary<uint,uint[]>());
+                repository.Create(owner,new("ReplayTown",point,point)
+                { Level=95,AcceptedStoryLevel=95,CompletedQuests=[3158],ActiveMainQuests=[new(0,3145,1)],DungeonState=CharacterDungeonState.NewOrdinary });
+                var session = new GameSession(repository,towns,owner,questCatalog:quests);
+                try
+                {
+                    session.Select(0); session.MarkReady();
+                    var before = repository.LoadCharacter(owner,0);
+                    var projection = new TownProjection(towns,computer,null,items.EpicPieces);
+                    var commands = new GameCommandRegistry();
+                    new QuestReplayHandler(connections,dungeons,rooms,log).Register(commands);
+                    new DungeonSelectionHandler(projection,log).Register(commands);
+                    new DungeonHandler(log,dungeons,rooms,growth,kills,projection,new CharacterLevelProjection(computer)).Register(commands);
+                    commands.Seal();
+                    using var stop = new CancellationTokenSource(); using var output = new ControlledOutput();
+                    await using var sender = new GameConnectionSender(owner,output,stop,0,(_,_,_,_,_) => { });
+                    var context = new GameConnectionContext(new(90,IPAddress.Loopback,output,stop),owner,session,sender);
+                    byte[] request = new byte[4]; BinaryPrimitives.WriteUInt32LittleEndian(request,3158);
+                    var dispatch = await commands.DispatchAsync(context,new(1,1459,request));
+                    var afterPreparation = repository.LoadCharacter(owner,0);
+                    Console.WriteLine($"quest_replay_publication QuestId=3158 Dispatch={dispatch} Ready={session.Ready} Phase={session.Phase} " +
+                        $"Rejection={session.LastFormalDungeonRejection ?? "none"} Completed={session.Selected?.CompletedQuests.Contains(3158)} " +
+                        $"Same={Same(before,afterPreparation)} Frames=" +
+                        string.Join(";",output.Frames.Select(frame => $"{frame[0]}/{Opcode(frame)}:{Convert.ToHexString(Body(frame))}")));
+                    That(dispatch == CommandResult.Handled,"真实Q3158的1459由已注册Handler处理");
+                    That(Frames(output,(1,1459)) && Body(output.Frames.Single()).SequenceEqual<byte>([1,0,0,0,0]),
+                        "真实Q3158的1459完成资源/房间/Run准备后只发布成功应答");
+                    That(Same(before,afterPreparation),"真实回放1459不写任务、奖励或持久预留");
+                    That(session.Phase == SessionPhase.Town && session.DungeonSnapshot is null,
+                        "真实回放1459准备后仍在城镇，不提前安装实例");
+                    output.Frames.Clear();
+                    That(await commands.DispatchAsync(context,Entry(7159)) == CommandResult.Handled && Frames(output,(1,15),(0,3)) &&
+                        session.Phase == SessionPhase.MapSelect && Same(before,repository.LoadCharacter(owner,0)),
+                        "真实城镇回放15消费原资源准备，尚不预留attempt/key");
+                    output.Frames.Clear();
+                    That(await commands.DispatchAsync(context,Selection(7159,3158)) == CommandResult.Handled && Frames(output,(0,28),(0,29)) &&
+                        BinaryPrimitives.ReadUInt32LittleEndian(Body(output.Frames[0])) == 7159 &&
+                        BinaryPrimitives.ReadUInt32LittleEndian(Body(output.Frames[1])[14..]) == 311189,
+                        "真实回放16发布D7159和MAP311189，不复用合成Prepared或改写原地图身份");
+                    var reserved = repository.LoadCharacter(owner,0);
+                    var entered = session.BeginQuestReplayDungeonSelection(7159).Replay!;
+                    That(entered is { Entry.IsQuestReplay:true,Entry.QuestId:0,Entry.RouteQuestId:3158 } &&
+                        entered.Monsters.Monsters.Single(row => row.MonsterId == 62245) is { IsBoss:true,CanReportDeath:true,IsFriendly:false } &&
+                        reserved.Revision == before.Revision+1 && reserved.DungeonState!.LastAttempt == before.DungeonState!.LastAttempt+1 &&
+                        Same(before with { Revision=reserved.Revision,DungeonState=reserved.DungeonState },reserved),
+                        "真实回放只持久预留一次实例，保留其它活动任务、完成、库存及成长");
+                    output.Frames.Clear();
+                    That(await commands.DispatchAsync(context,new(1,37,new byte[8])) == CommandResult.Handled &&
+                        Frames(output,(1,37),(0,30),(0,3)) && session.Phase == SessionPhase.Dungeon &&
+                        !session.BeginQuestReplayDungeonSelection(7159).Pending && Same(reserved,repository.LoadCharacter(owner,0)),
+                        "真实城镇回放37完成加载并清pending，保留原持久快照");
+                    var loaded = session.DungeonSnapshot!.Identity;
+                    output.Frames.Clear();
+                    That(await commands.DispatchAsync(context,new(1,37,new byte[8])) == CommandResult.Unhandled && output.Frames.Count == 0 &&
+                        session.DungeonSnapshot!.Identity == loaded && Same(reserved,repository.LoadCharacter(owner,0)),
+                        "真实城镇回放重复37不重做加载或持久预留");
+                }
+                finally { session.End(); }
             }
 
             async Task LoadingAsync()
@@ -311,7 +388,11 @@ internal static class QuestReplayPublicationTests
                     "取消连图后新回放真实16仍可安装且只预留一次attempt");
             }
         }
-        finally { TestFiles.DeleteDirectory(root,true); }
+        finally
+        {
+            if (passed) TestFiles.DeleteDirectory(root,true);
+            else Console.Error.WriteLine($"quest_replay_publication_failure EvidenceRoot={root}");
+        }
         Console.WriteLine($"PASS {Count-checks} 合成回放真实15/16/37 Handler发布、拒绝、重复预留及选角隔离断言（非主线/实机）");
     }
 

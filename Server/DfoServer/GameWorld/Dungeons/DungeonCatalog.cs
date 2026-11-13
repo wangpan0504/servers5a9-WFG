@@ -23,6 +23,8 @@ internal sealed record DungeonMap(string Kind, DungeonPoint Position, int Id, st
     public IReadOnlyList<int> CandidateIds { get; init; } = Array.Empty<int>();
     public IReadOnlyList<int> CandidateWeights { get; init; } = Array.Empty<int>();
 }
+// 仅由已核验的任务回放单房投影设置；不作为普通迷宫或解析器的通用豁免。
+internal sealed record DungeonQuestReplayRoom(uint QuestId, DungeonMap Map);
 internal sealed record DungeonRawSection(string Tag, IReadOnlyList<PvfToken> Tokens);
 // 实验性（未在95客户端实证）：深渊派对房间 = （maze 内或副本头）[hell dungeon] 1 + [seal door map index]（深渊房间地图）+ [seal door pos]（该房间在迷宫内的坐标）。
 // 依据参考项目 dungeon_hell_room.go（对应 A21 FindHellMapRoom/TryBuildSealDoorHellPartyRoom）。
@@ -46,6 +48,8 @@ internal sealed record DungeonMaze(
     IReadOnlyList<DungeonMap>? MapSpecification,
     IReadOnlyList<PvfToken> QuestConnectionTokens)
 {
+    // 显式单格任务回放的零出口身份；普通资源保持 null 并继续走完整 Greed 拓扑。
+    public DungeonQuestReplayRoom? QuestReplayRoom { get; init; }
     // 实验性：只有普通（非任务连接）maze 带密门深渊房间时才非空；任务 maze 带 [escape hell]，不属于深渊派对。
     public DungeonHellPartyRoom? HellParty { get; init; }
     // 实验性：深渊房间地图的 PVF 路径（[seal door map index] 对应的 map 文件），用于把 HellParty.Room 处的普通房间换成深渊房间。
