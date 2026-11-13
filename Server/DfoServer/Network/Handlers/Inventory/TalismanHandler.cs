@@ -75,6 +75,9 @@ internal sealed class TalismanHandler(InventoryTalismanService service, Inventor
         Func<byte[], (Func<Character, InventoryResult> Plan, Func<InventoryCommitReceipt, byte[]> Reply,
             Func<InventorySlot[]> Preload, string Detail)> parse)
     {
+        // 装卸只是搬移已有实例；1681与14共用正文及解析器，但不会播放获得提示。
+        var updateType = (CmdPacketType)packet.Opcode is CmdPacketType.EQUIP_RUNE or CmdPacketType.REMOVE_RUNE
+            ? NotiPacketType.UPDATE_ITEM_LIST_NOT_NOTICE : NotiPacketType.UPDATE_ITEM_LIST;
         var capture = context.Owner.Execute(() => (context.Session.Selected, context.Session.SelectionEpoch, context.Session.Phase));
         (Func<Character, InventoryResult> Plan, Func<InventoryCommitReceipt, byte[]> Reply,
             Func<InventorySlot[]> Preload, string Detail) action;
@@ -104,7 +107,7 @@ internal sealed class TalismanHandler(InventoryTalismanService service, Inventor
         {
             await context.Reply((CmdPacketType)packet.Opcode, TalismanPackets.Failure(result.Error), "talisman_rejected", Guard);
             if (capture.Selected is { } rejected)
-                await context.Notify(NotiPacketType.UPDATE_ITEM_LIST,
+                await context.Notify(updateType,
                     InventoryPackets.Delta(rejected.Inventory, InventoryListType.Talisman, TalismanSlots()), "talisman_rejected_restore", Guard);
             return CommandResult.Handled;
         }
@@ -115,7 +118,7 @@ internal sealed class TalismanHandler(InventoryTalismanService service, Inventor
         // 绝对差量随后补发；合成没有拖拽移动，材料格由请求体给出，必须一并预载（见 Compound）。
         var preload = action.Preload();
         if (preload.Length > 0)
-            await context.Notify(NotiPacketType.UPDATE_ITEM_LIST,
+            await context.Notify(updateType,
                 InventoryPackets.Delta(committed.Character.Inventory, InventoryListType.Talisman, preload, index: committed.Index),
                 "talisman_result_preload", Guard);
         await context.Reply((CmdPacketType)packet.Opcode, action.Reply(committed), "talisman_committed", Guard);
@@ -125,15 +128,15 @@ internal sealed class TalismanHandler(InventoryTalismanService service, Inventor
         {
             var unchanged = preload.Where(slot => !result.Plan!.ChangedSlots.Contains(slot)).ToArray();
             if (unchanged.Length != 0)
-                await context.Notify(NotiPacketType.UPDATE_ITEM_LIST,
+                await context.Notify(updateType,
                     InventoryPackets.Delta(committed.Character.Inventory, InventoryListType.Talisman, unchanged, index: committed.Index),
                     "talisman_refine_restore", Guard);
         }
         // 护石图鉴的符文页收到容器 46 全量（NOTI13）会重建整页：按技能筛选瞬间退回「所有技能」，
-        // 页面随后失去响应。装载/卸除成功后因此改发覆盖全部 216 格的差量（NOTI14，空槽即清空条目），
+        // 页面随后失去响应。装载/卸除成功后因此改发覆盖全部 216 格的静默差量（NOTI1681，空槽即清空条目），
         // 与拍卖行上架后的整列重发同一机制——就地冲刷客户端在拖拽期间残留的槽位状态，页面保留筛选。
         if ((CmdPacketType)packet.Opcode is CmdPacketType.EQUIP_RUNE or CmdPacketType.REMOVE_RUNE)
-            await context.Notify(NotiPacketType.UPDATE_ITEM_LIST,
+            await context.Notify(updateType,
                 InventoryPackets.Delta(committed.Character.Inventory, InventoryListType.Talisman, TalismanSlots(),
                     index: committed.Index),
                 "talisman_list_sync", Guard);
