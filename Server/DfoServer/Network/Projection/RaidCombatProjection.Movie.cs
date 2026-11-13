@@ -31,7 +31,9 @@ internal static partial class RaidCombatProjection
                 () => Guard() && context.RaidMoviePrompt != identity && context.RaidMovieCards != identity,
                 () => context.RaidMoviePrompt = identity);
         }
-        if (battle.HasAntonRewards || battle.Kind == RaidKind.Fiendwar) return true;
+        if (battle.HasAntonRewards) return true;
+        // 本人电影结束即可开牌；慢成员与断线成员只影响最终整团收尾。
+        if (battle.Kind == RaidKind.Fiendwar) return PostFiendwarMovieCards(context, actor, battle, view);
         if (battle.Kind == RaidKind.Prey)
         {
             return PostPreyResults(context, actor, battle, view);
@@ -166,11 +168,11 @@ internal static partial class RaidCombatProjection
     static bool PostFiendwarMovieCards(GameConnectionContext context, RaidActor actor, AntonRaidBattle battle,
         AntonRaidBattleView view)
     {
-        if (!battle.FiendwarMovieCardsReady(view) || battle.LukeEligibility(actor.Character, view.Phase) is not { Eligible: true } ||
+        if (!battle.FiendwarMovieCardsReady(view, actor) || battle.LukeEligibility(actor.Character, view.Phase) is not { Eligible: true } ||
             battle.RewardPolicy(actor, view.Phase) is not { Offers.IsEmpty: false } policy) return true;
         var identity = RaidCombatDisplayIdentity.Capture(actor, view);
         bool Cards() => context.Session.CanPublishRaidBattle(actor, view) && context.RaidDisplay == identity &&
-            battle.FiendwarMovieCardsReady(view) && context.RaidMovieCards != identity;
+            battle.FiendwarMovieCardsReady(view, actor) && context.RaidMovieCards != identity;
         var team = battle.FiendwarTeamEntitlements(view);
         if (team.IsDefaultOrEmpty) return true;
         // 原生第二页按分类2枚举完整owner表，须在state4装配子页之前准备。

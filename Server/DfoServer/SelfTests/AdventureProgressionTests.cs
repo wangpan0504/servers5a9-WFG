@@ -6,7 +6,7 @@ namespace DfoServer;
 
 internal static class AdventureProgressionTests
 {
-    // 合成资源：满级3、经验倍率0.3、等级边界2/3为10/20，勇者结晶5经验1点、上限250，胶囊总容量100、最多2格。
+    // 合成资源：满级3、经验倍率0.3、等级边界2/3为10/20，勇者结晶5经验1点、上限250，胶囊每颗100、最多2颗，总容量200。
     public static void RunCore()
     {
         int before = Count;
@@ -26,7 +26,7 @@ internal static class AdventureProgressionTests
             "经验倍率的小数部分留在Remainder，不按整数截断丢失");
         That(advanced.BraveExperience == 0 && advanced.Points[0] == 200 && advanced.Points.Skip(1).All(value => value == 0),
             "勇者结晶按5经验1点兑换，点数只写入类别0");
-        That(advanced.CapsuleExperience == 100, "胶囊进度按资源总容量封顶，不按每格经验乘格数放大");
+        That(advanced.CapsuleExperience == 200, "胶囊按单颗经验乘最大颗数封顶，允许累计多颗");
 
         var carried = AdventureProgression.Advance(initial with { Remainder = 0.9m }, rate, 1, catalog);
         That(carried.Level == 1 && carried.Experience == 1 && carried.BraveExperience == 1 && carried.Points[0] == 0 &&
@@ -38,7 +38,7 @@ internal static class AdventureProgressionTests
             "勇者结晶先兑换再按商店上限封顶，余数继续累计");
 
         var capsuleFull = AdventureProgression.Advance(initial with { CapsuleExperience = 80 }, 100 * rate, 100, catalog);
-        That(capsuleFull.CapsuleExperience == 100, "胶囊已有80时再灌100只补到容量100");
+        That(capsuleFull.CapsuleExperience == 180 && AdventurePackets.Claims(capsuleFull, catalog) == 1, "胶囊已有80再灌100，保留一整颗及80尾数");
 
         // 改版公告：累积的成长胶囊经验每周四06:00初始化；资源锚点为2018-02-22 06:00（周四）。
         var anchorWeek = AdventurePeriod.CapsuleWeek(catalog, new DateTimeOffset(2018, 2, 22, 6, 0, 0, TimeSpan.FromHours(8)));
@@ -53,8 +53,8 @@ internal static class AdventureProgressionTests
             new DateTimeOffset(2018, 3, 1, 6, 0, 0, TimeSpan.FromHours(8)));
         That(sameWeek.CapsuleExperience == 40 && nextWeek.CapsuleExperience == 0 && nextWeek.CapsuleWeek == 20180301,
             "同周期载入保留胶囊进度，跨周四06:00载入清空并记录新周期");
-        That(AdventurePeriod.Apply(initial with { CapsuleExperience = 150, CapsuleWeek = AdventurePeriod.CapsuleWeek(catalog, now) },
-            catalog, now).CapsuleExperience == 100, "旧版放大十倍的胶囊总量在载入时截回真实容量");
+        That(AdventurePeriod.Apply(initial with { CapsuleExperience = 250, CapsuleWeek = AdventurePeriod.CapsuleWeek(catalog, now) },
+            catalog, now).CapsuleExperience == 200, "超容量旧存量截回两颗容量，合法多颗不截断");
         var overCap = AdventurePeriod.Apply(initial with { CapsuleWeek = AdventurePeriod.CapsuleWeek(catalog, now),
             Points = [300, 12000, 0, 0, 0] }, catalog, now);
         That(overCap.Points.SequenceEqual([250u, 9999u, 0u, 0u, 0u]), "旧版超上限结晶在载入时按各商店上限截回");
@@ -92,7 +92,7 @@ internal static class AdventureProgressionTests
         var overflow = AdventureCredit.Apply(baselineOverflow, AdventureCreditSource.Earned, 1000, 1000, 1000, 500, 1000, catalog, 95, 95);
         That(overflow.PositionAfter == 1500 && overflow.Credit == 150 && overflow.RawOverflow == 500 &&
             overflow.After.Experience == 1050 && overflow.After.BraveExperience == 0 &&
-            overflow.After.Points[0] == 100 && overflow.After.CapsuleExperience == 100,
+            overflow.After.Points[0] == 100 && overflow.After.CapsuleExperience == 200,
             "入口线以上每500点只按倍率计入150，原始溢出照常累计结晶与胶囊");
 
         var grant = AdventureCredit.Apply(baselineOverflow, AdventureCreditSource.ExcludedGrant, 1000, 1000, 1000, 500, 1000, catalog, 95, 95);
@@ -163,10 +163,10 @@ internal static class AdventureProgressionTests
             "零经验与越界等级不产生溢出");
 
         That(AdventurePackets.Claims(advanced, catalog) == 2, "胶囊可领取次数不超过资源最大格数");
-        That(AdventurePackets.Claims(advanced with { CapsuleExperience = 15 }, catalog) == 1,
-            "胶囊按每格最小经验计算可领取次数");
-        That(AdventurePackets.Claims(advanced with { CapsuleExperience = 5 }, catalog) == 0,
-            "不足最小经验时不可领取");
+        That(AdventurePackets.Claims(advanced with { CapsuleExperience = 150 }, catalog) == 1,
+            "胶囊按单颗max exp计算可领取次数");
+        That(AdventurePackets.Claims(advanced with { CapsuleExperience = 99 }, catalog) == 0,
+            "不足完整一颗时不可领取");
 
         Console.WriteLine($"PASS {Count - before} 冒险团折算、排除额、里程修正、结晶、胶囊与领取次数断言");
     }

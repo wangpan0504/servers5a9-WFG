@@ -28,7 +28,6 @@ internal static partial class FormalDungeonTcpTests
             RefreshedQuests(peer);
             active = fixture.Snapshot("SELECT * FROM character_active_main_quests");
             string assets = fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid");
-            string fatigue = fixture.Snapshot("SELECT * FROM character_fatigue");
             SelectMap(peer);
             byte[] selection = Selection(3);
             BinaryPrimitives.WriteUInt32LittleEndian(selection,151);
@@ -54,7 +53,8 @@ internal static partial class FormalDungeonTcpTests
                 That(map[0] == 0 && map[1] == 0 && U32(map,14) == 91391 &&
                     fixture.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0",peer.Id) is [[long actual]] && actual == attempt,
                     "英雄冢真实16按28→29进入任务首图，每次只预留一次实例");
-                Load(peer);
+                Load(peer, fatigue: false);
+                peer.Expect(0,36,[(byte)attempt,0,156,0,0,0,0,0,0,0]);
                 peer.Barrier();
                 string loaded = fixture.Snapshot();
                 peer.Send(37,new byte[8]);
@@ -67,9 +67,12 @@ internal static partial class FormalDungeonTcpTests
                 peer.Barrier();
                 That(fixture.Snapshot("SELECT * FROM character_active_main_quests") == active &&
                     fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid") == assets &&
-                    fixture.Snapshot("SELECT * FROM character_fatigue") == fatigue &&
                     fixture.Query("SELECT town,area FROM characters WHERE id=$p0",peer.Id) is [[41L,2L]],
                     "入场、加载和放弃保持任务接取身份、进度与原有资产，返回真实入口地区");
+                That(fixture.Query("SELECT used,maximum,used_maximum,remaining,context_auxiliary,selection_auxiliary " +
+                    "FROM character_fatigue WHERE character_id=$p0",peer.Id) is
+                    [[long used,156L,0L,long remaining,0L,0L]] && used == attempt && remaining == 156-attempt,
+                    "英雄冢任务路线每次首房真实扣一点疲劳，重复加载与放弃不重复扣点");
             }
         }
         using (var peer = Open(fixture))

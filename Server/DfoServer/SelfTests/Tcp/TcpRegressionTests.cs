@@ -169,6 +169,7 @@ internal static class TcpRegressionTests
         }),
         ("packet-http", PacketCaptureTcpTests.RunHttpAsync),
         ("town", TownProtocolTcpTests.RunAsync),
+        ("raid-npc-travel", RaidChannelLandingTcpTests.RunNpcTravelAsync),
         ("party-dungeon", PartyDungeonTcpTests.RunAsync),
         ("helper-hell-rotation", PartyDungeonTcpTests.RunHelperHellAsync),
         ("guild-dungeon-party", PartyDungeonTcpTests.RunGuildPartyBuffAsync),
@@ -325,6 +326,11 @@ internal static class TcpRegressionTests
             QuestCinematicSettlementTests.Run(resources.Towns,resources.Archive,resources.Characters,resources.ItemResources,resources.Quests,resources.Learning);
             QuestAdventureSettlementTests.Run(resources.Towns,resources.Archive,resources.Characters,resources.ItemResources,resources.Quests,resources.Learning);
             await FormalDungeonTcpTests.RunTrainQuestAsync(options,root,resources);
+        }),
+        ("quest-mainline", (_, _, resources) =>
+        {
+            QuestMainlineTests.Run(resources.Towns,resources.Archive,resources.Characters,resources.ItemResources,resources.Quests,resources.Learning);
+            return Task.CompletedTask;
         }),
         ("story-scenes", (_, _, resources) =>
         {
@@ -715,6 +721,7 @@ internal static class TcpRegressionTests
         ("item-daily-expire", ItemDailyExpireTcpTests.RunAsync),
         ("epic-book", EpicBookTcpTests.RunAsync),
         ("epic-piece-drops", FormalDungeonTcpTests.RunEpicPiecesAsync),
+        ("secret-shop", FormalDungeonTcpTests.RunSecretShopAsync),
         ("material-exchange", MaterialExchangeTcpTests.RunAsync),
         ("recipe-craft", RecipeCraftTcpTests.RunAsync),
         ("upgrade-chronicle", UpgradeChronicleTcpTests.RunAsync),
@@ -733,6 +740,7 @@ internal static class TcpRegressionTests
             return Task.CompletedTask;
         }),
         ("booster-selection", BoosterSelectionTcpTests.RunAsync),
+        ("returning-adventurer-items", ReturningAdventurerItemTcpTests.RunAsync),
         ("booster-equipment", BoosterEquipmentTcpTests.RunAsync),
         ("authentication", AuthenticationTcpTests.RunAsync),
         ("native-login", NativeLoginTcpTests.RunAsync),
@@ -815,6 +823,7 @@ internal static class TcpRegressionTests
         "levelup-ticket-rules",
         "levelup-table-rules",
         "experience-consumable-rules",
+        "returning-adventurer-items",
         "legacy-status-rules",
         "stackable-actions",
         "gift-selection-tcp", "gift-selection-resources", "sea-rage-weapon-gift", "similar-gift-type", "dungeon-entry-plan", "assault-hunt-quest", "hosted-dungeon-eligibility", "quest-continuation", "quest-manual-skip", "quest-ticket", "quest-specified-ticket", "quest-awakening-ticket",

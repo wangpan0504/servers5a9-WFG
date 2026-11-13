@@ -482,7 +482,7 @@ internal static partial class FormalDungeonTcpTests
                         "清图未交重进逐房使用真实普通路线，回访不重建演员");
                     Load(peer, fatigue: false);
                     if (!revisit) repeatedRoomFatigue++;
-                    peer.Expect(0,36,[checked((byte)repeatedRoomFatigue),0,188,0,0,0,checked((byte)(188-repeatedRoomFatigue)),0,0,0]);
+                    peer.Expect(0,36,[checked((byte)repeatedRoomFatigue),0,188,0,0,0,0,0,0,0]);
                     That(fixture.Query("SELECT used,maximum,remaining FROM character_fatigue WHERE character_id=$p0",peer.Id) is
                         [[long used,188L,long remaining]] && used == repeatedRoomFatigue && remaining == 188-repeatedRoomFatigue,
                         "普通首次房间逐次扣一点，黑钻188上限的完整疲劳投影与SQLite相同且回访不重扣");
@@ -564,7 +564,7 @@ internal static partial class FormalDungeonTcpTests
             That(U16(map, 25) >= nextKey && U32(map,14) == 58548, "重登及服务重启进入普通路线且不复用旧实例怪key");
             Load(peer, fatigue: false);
             repeatedRoomFatigue++;
-            peer.Expect(0,36,[checked((byte)repeatedRoomFatigue),0,156,0,0,0,checked((byte)(156-repeatedRoomFatigue)),0,0,0]);
+            peer.Expect(0,36,[checked((byte)repeatedRoomFatigue),0,156,0,0,0,0,0,0,0]);
             That(repeatedRoomFatigue == 19 && fixture.Query("SELECT used,maximum,remaining FROM character_fatigue WHERE character_id=$p0",peer.Id)
                 is [[19L,188L,169L]], "重启首房继续扣第19点，关闭黑钻仅隐藏附加32点而不重置持久费用");
             peer.Send(39, oldReport!);
@@ -690,14 +690,14 @@ internal static partial class FormalDungeonTcpTests
             fixture.Sql("UPDATE character_fatigue SET used=maximum,remaining=0");
             string stored = fixture.Snapshot("SELECT * FROM character_fatigue");
             var selected = peer.Select().Single(row => row.Kind == 1 && row.Opcode == 4).Body;
-            That(U16(selected,11) == 0 && U16(selected,228) == 156 && fixture.Snapshot("SELECT * FROM character_fatigue") == stored,
-                "无限疲劳选角显示满值但不覆盖真实零疲劳");
+            That(U16(selected,11) == 0 && U16(selected,13) == 156 && fixture.Snapshot("SELECT * FROM character_fatigue") == stored,
+                "无限疲劳选角显示满值但不覆盖真实零疲劳；头=" + U16(selected,11) + ",疲劳=" + U16(selected,13) + ",前=" + stored + ",后=" + fixture.Snapshot("SELECT * FROM character_fatigue"));
             EntryTown(peer); SelectMap(peer);
             byte[] selection = Selection();
             BinaryPrimitives.WriteUInt32LittleEndian(selection.AsSpan(16),0);
             peer.Send(16,selection); peer.Expect(0,28); peer.Expect(0,29);
             long enteredRevision = Convert.ToInt64(fixture.Query("SELECT revision FROM characters")[0][0]);
-            Load(peer, fatigue: false); peer.Expect(0,36,[0,0,156,0,0,0,156,0,0,0]);
+            Load(peer, fatigue: false); peer.Expect(0,36,[0,0,156,0,0,0,0,0,0,0]);
             peer.Send(37,new byte[8]); peer.Barrier();
             That(fixture.Snapshot("SELECT * FROM character_fatigue") == stored &&
                 fixture.Query("SELECT count(*) FROM character_dungeon_fatigue_receipts") is [[0L]] &&
@@ -713,11 +713,11 @@ internal static partial class FormalDungeonTcpTests
             SelectMap(peer); peer.Send(16,selection); peer.Expect(1,16,[0,22,0,0]); peer.Barrier();
             That(fixture.Snapshot("SELECT * FROM character_fatigue") == stored, "关闭后真实零疲劳拒绝重新入场");
             That(Command("infinite-fatigue on").StartsWith("OK "), "重新开启无限疲劳");
-            peer.Expect(0,36,[0,0,156,0,0,0,156,0,0,0]);
+            peer.Expect(0,36,[0,0,156,0,0,0,0,0,0,0]);
             That(fixture.Snapshot("SELECT * FROM character_fatigue") == stored,
                 "开启开关立即刷新在线零疲劳客户端，实际余额仍为零");
             peer.Send(16,selection); peer.Expect(0,28); peer.Expect(0,29);
-            Load(peer, fatigue: false); peer.Expect(0,36,[0,0,156,0,0,0,156,0,0,0]);
+            Load(peer, fatigue: false); peer.Expect(0,36,[0,0,156,0,0,0,0,0,0,0]);
             peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]); peer.Expect(0,24); RefreshedQuests(peer); peer.Barrier();
         }
         That(Command("infinite-fatigue off").StartsWith("OK "), "普通扣点场景显式关闭无限模式");
@@ -727,7 +727,7 @@ internal static partial class FormalDungeonTcpTests
             byte[] selection = Selection(); BinaryPrimitives.WriteUInt32LittleEndian(selection.AsSpan(16),0);
             BinaryPrimitives.WriteUInt32LittleEndian(selection.AsSpan(21),0x12345678);
             peer.Send(16,selection); peer.Expect(0,28); peer.Expect(0,29);
-            Load(peer, fatigue: false); peer.Expect(0,36,[1,0,156,0,0,0,155,0,0,0]);
+            Load(peer, fatigue: false); peer.Expect(0,36,[1,0,156,0,0,0,0,0,0,0]);
             peer.Send(37,new byte[8]); peer.Barrier();
             That(fixture.Query("SELECT used,remaining FROM character_fatigue WHERE character_id=$p0",peer.Id) is [[1L,155L]] &&
                 fixture.Query("SELECT count(*) FROM character_dungeon_fatigue_receipts WHERE character_id=$p0",peer.Id) is [[0L]],
@@ -1325,7 +1325,7 @@ internal static partial class FormalDungeonTcpTests
             }
 
             void ExpectFatigue(int used) => peer.Expect(0, 36,
-                [checked((byte)used), 0, 156, 0, 0, 0, checked((byte)(156 - used)), 0, 0, 0]);
+                [checked((byte)used), 0, 156, 0, 0, 0, 0, 0, 0, 0]);
         }
     }
 
@@ -1344,7 +1344,7 @@ internal static partial class FormalDungeonTcpTests
         var map = peer.Expect(0, 29).Body;
         That(information[7] == 0 && U32(map, 14) == 58548 && map[18] == 4, "真实普通请求加载普通地图和全部资源怪物");
         Load(peer, fatigue: false);
-        byte[] expectedFatigue = [1, 0, 156, 0, 0, 0, 155, 0, 0, 0];
+        byte[] expectedFatigue = [1, 0, 156, 0, 0, 0, 0, 0, 0, 0];
         peer.Expect(0, 36, expectedFatigue);
         peer.Send(37, new byte[8]); peer.Barrier();
         That(fixture.Query("SELECT used,remaining FROM character_fatigue WHERE character_id=$p0", peer.Id) is [[1L, 155L]],
@@ -1352,7 +1352,7 @@ internal static partial class FormalDungeonTcpTests
         peer.Send(42); peer.Expect(1, 42, [1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]); peer.Expect(0, 24); RefreshedQuests(peer); peer.Barrier();
         SelectMap(peer); peer.Send(16, selection);
         peer.Expect(0, 28); var current = peer.Expect(0, 29).Body; Load(peer, fatigue: false);
-        peer.Expect(0, 36, [2, 0, 156, 0, 0, 0, 154, 0, 0, 0]);
+        peer.Expect(0, 36, [2, 0, 156, 0, 0, 0, 0, 0, 0, 0]);
         byte currentLevel = checked((byte)Convert.ToInt32(fixture.Query("SELECT level FROM characters WHERE id=$p0", peer.Id)[0][0]));
         for (int room = 0; room < 2; room++)
         {
@@ -1371,7 +1371,7 @@ internal static partial class FormalDungeonTcpTests
             }
             byte[] move = new byte[100]; move[0] = 1; move[1] = room == 0 ? (byte)1 : (byte)0;
             peer.Send(45, move); peer.Expect(1, 45, [1]); current = peer.Expect(0, 29).Body; Load(peer, fatigue: false);
-            peer.Expect(0, 36, [checked((byte)(3 + room)), 0, 156, 0, 0, 0, checked((byte)(153 - room)), 0, 0, 0]);
+            peer.Expect(0, 36, [checked((byte)(3 + room)), 0, 156, 0, 0, 0, 0, 0, 0, 0]);
         }
         That(U32(current, 14) == 58550 && current[18] == 8 && current[19 + 7 * 22 + 13] == 9,
             "普通实际过房生产NOTI29完整保留五只静态怪、两个机关子怪和原父对象");
@@ -1403,7 +1403,7 @@ internal static partial class FormalDungeonTcpTests
         string questAssets = fixture.Snapshot(originalRewardQuery, peer.Id);
         long attempt = Convert.ToInt64(fixture.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0", peer.Id)[0][0]);
         // 本用例此前明确关闭黑钻，客户端上限回到156；持久历史仍保留原黑钻上限，不能据此丢失已扣点。
-        var initialFatigue = fixture.Query("SELECT used,maximum,used_maximum,remaining,context_auxiliary FROM character_fatigue WHERE character_id=$p0", peer.Id)
+        var initialFatigue = fixture.Query("SELECT f.used,f.maximum,f.used_maximum,COALESCE(b.buff,0),f.context_auxiliary FROM character_fatigue f LEFT JOIN character_fatigue_battery b ON b.character_id=f.character_id WHERE f.character_id=$p0", peer.Id)
             .Single().Select(Convert.ToUInt16).ToArray();
         ulong experience = Experience(fixture, peer.Id);
         byte currentLevel = Convert.ToByte(fixture.Query("SELECT level FROM characters WHERE id=$p0", peer.Id)[0][0]);
@@ -1539,7 +1539,7 @@ internal static partial class FormalDungeonTcpTests
         void ExpectFatigue(int rooms)
         {
             int used = usedBefore + rooms;
-            peer.Expect(0,36,[checked((byte)used),0,156,0,0,0,checked((byte)(156-used)),0,0,0]);
+            peer.Expect(0,36,[checked((byte)used),0,156,0,0,0,0,0,0,0]);
             That(fixture.Query("SELECT used,maximum,remaining FROM character_fatigue WHERE character_id=$p0",peer.Id) is
                 [[long storedUsed,188L,long remaining]] && storedUsed == used && remaining == 188-used,
                 "领奖后的普通挑战沿原累计疲劳扣费，关闭黑钻不清旧费用或重复赠点");

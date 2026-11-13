@@ -311,6 +311,9 @@ internal sealed partial class GameSession
                 MonsterGrowthContractExperience = dungeon.KillGrowthContractExperience,
                 MonsterEquipmentExperience = dungeon.KillEquipmentExperience,
                 MonsterFatigueBurningExperience = dungeon.KillFatigueBurningExperience,
+                MonsterGuildExperience = dungeon.KillGuildExperience,
+                MonsterFatigueBuffExperience = dungeon.KillFatigueBuffExperience,
+                MonsterPartyExperience = dungeon.KillPartyExperience,
                 MonsterBossExperience = dungeon.KillBossExperience,
                 MonsterExperienceEntries = [.. dungeon.KillObjectExperience]
             }, Selected!)

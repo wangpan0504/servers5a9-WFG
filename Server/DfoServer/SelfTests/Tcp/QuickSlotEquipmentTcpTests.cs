@@ -19,7 +19,15 @@ internal static class QuickSlotEquipmentTcpTests
         var old = items.Get(196386);
         var crest = items.Get(400360017);
         var finite = items.Get(400360000);
-        That(old.IsQuickSlotEquipment && old.QuickSlotEquipment is { Heraldry: false } && old.Durability == 0 &&
+        // 永久纹章在累计资源中可补Heraldry标记，能量仍由零耐久声明决定。
+        var permanentTokens = resources.Archive.ReadTokens("equipment/character/common/crest/drj02.equ");
+        bool permanentHeraldry = permanentTokens.Any(token => token.Type == 3 && resources.Archive.ResolveString(token.Value) == "[heraldry item]");
+        int experienceAt = Array.FindIndex(permanentTokens, token => token.Type == 3 && resources.Archive.ResolveString(token.Value) == "[exp advantage]");
+        That(experienceAt >= 0 && experienceAt + 1 < permanentTokens.Length && permanentTokens[experienceAt + 1] is { Type: 0, Value: > 0 },
+            "永久纹章原始资源声明明确的正经验百分比");
+        int permanentExperience = permanentTokens[experienceAt + 1].Value;
+        That(old.ExperiencePercent == permanentExperience, "永久纹章经验解析与原始候选声明一致");
+        That(old.IsQuickSlotEquipment && old.QuickSlotEquipment is { } permanent && permanent.Heraldry == permanentHeraldry && old.Durability == 0 &&
             crest.IsQuickSlotEquipment && crest.QuickSlotEquipment is { Heraldry: true } && crest.Durability == 100 &&
             finite.IsQuickSlotEquipment && finite.QuickSlotEquipment is { Heraldry: false } && finite.Durability == 100,
             "真实PVF区分永久纹章、有限旧符咒与Heraldry；不从5000负重推导能量");
@@ -135,9 +143,10 @@ internal static class QuickSlotEquipmentTcpTests
             var notices = PartyDungeonTcpTests.Drain(peer);
             var exp = notices.Single(packet => packet.Kind == 0 && packet.Opcode == 37).Body;
             ulong gained = BinaryPrimitives.ReadUInt64LittleEndian(exp.AsSpan(1)) - previous;
-            That(exp.Length == 91 && gained > 0 && U32(exp, 51) > 0 && U32(exp, 51) == U32(exp, 55) &&
-                gained * 2 == U32(exp, 51) * 3UL,
-                "永久纹章即使Value与耐久均为0仍有200%经验，N37单列Buff并扣除基础余项，不重复授予");
+            uint equipmentExperience = U32(exp, 51);
+            That(exp.Length == 91 && gained > equipmentExperience && equipmentExperience > 0 && equipmentExperience == U32(exp, 55) &&
+                decimal.Floor((decimal)(gained - equipmentExperience) * permanentExperience / 100m) == equipmentExperience,
+                "永久纹章即使Value与耐久均为0仍按候选声明授予经验，N37单列Buff并扣除基础余项，不重复授予");
             peer.Send(39, FormalDungeonTcpTests.Death(U16(map, at + 6), peer.Id, map[at + 12]));
             That(!PartyDungeonTcpTests.Drain(peer).Any(packet => packet.Kind == 0 && packet.Opcode == 37),
                 "重复死亡不会重复发放装备经验或播报");

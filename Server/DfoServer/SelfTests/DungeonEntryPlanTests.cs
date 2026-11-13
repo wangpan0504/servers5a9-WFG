@@ -332,6 +332,7 @@ internal static class DungeonEntryPlanTests
 
     public static void Run(PvfArchive pvf)
     {
+        SequentialQuestContinuations(pvf);
         QuestDifficultyRoutes(global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf),
             global::DfoServer.Testing.SelfTestCatalogs.Quests(pvf));
         int checks = Count;
@@ -1041,6 +1042,53 @@ internal static class DungeonEntryPlanTests
         var next = DungeonQuestContinuationRules.Resolve(continuing, previous, continuationQuests, catalog, [82], out var nextReason);
         That(next is { Difficulty: 2, RequestedDifficulty: 0, Quest.QuestId: 29988 },
             "后继任务保留自动提升前的原请求值，不用旧实际难度覆盖它：" + nextReason);
+    }
+
+    internal static void SequentialQuestContinuations(PvfArchive pvf)
+    {
+        var quests = global::DfoServer.Testing.SelfTestCatalogs.Quests(pvf);
+        var dungeons = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf);
+        var parent = new ActiveMainQuest(0,3640,3) { AcceptanceId = Guid.NewGuid() };
+        var first = new ActiveMainQuest(1,3686,1) { AcceptanceId = Guid.NewGuid() };
+        var hunt = new ActiveMainQuest(1,3687,1) { AcceptanceId = Guid.NewGuid() };
+        var delivery = new ActiveMainQuest(1,3688,1) { AcceptanceId = Guid.NewGuid() };
+        var character = new Character(1,0,"SequentialNext",0,new(12,1,196,260),null)
+            { Level = 86, CompletedQuests = [3639,3686], ActiveMainQuests = [parent with { ConditionState = 2 },hunt] };
+        var previous = new DungeonEntryPlan(character.Id,character.Revision,517,3640,0,0,null!,null!,null!)
+            { QuestAcceptanceId = parent.AcceptanceId, QuestAcceptances = [parent,first] };
+        string snapshot = System.Text.Json.JsonSerializer.Serialize(character);
+        var next = DungeonQuestContinuationRules.Resolve(character,previous,quests,dungeons,[517,72],out var reason);
+        That(next is { DungeonId: 72, Quest.QuestId: 3687 } && next.Quest.AcceptanceId == hunt.AcceptanceId,
+            "父3640未领奖时，首子3686真实完成后的下一任务进入猎杀D72，不误回城：" + reason);
+        That(DungeonEntryPlan.TryCreate(dungeons,character,72,3687,next!.Difficulty,out var huntEntry,out _,
+                quest:quests.Get(3687),quests:quests) && huntEntry!.Maze.ConnectsQuest(3687,0),
+            "后继规划仍走真实D72九房及原3687接取身份");
+        var afterHunt = character with { CompletedQuests = [3639,3686,3687],
+            ActiveMainQuests = [parent with { ConditionState = 1 },delivery] };
+        next = DungeonQuestContinuationRules.Resolve(afterHunt,huntEntry!,quests,dungeons,[517,72],out reason);
+        That(next is { DungeonId: 517, Quest.QuestId: 3688 } && next.Quest.AcceptanceId == delivery.AcceptanceId,
+            "父内猎杀完成后使用3688交付路线返回D517，不重开3686：" + reason);
+        That(DungeonEntryPlan.TryCreate(dungeons,afterHunt,517,3688,next!.Difficulty,out var deliveryEntry,out _,
+                quest:quests.Get(3688),quests:quests) && deliveryEntry!.Maze.ConnectsQuest(3688,0),
+            "交付后继仍由原准入规则匹配真实地图与NPC，不伪造任务完成");
+        foreach (var rejected in new[]
+        {
+            character with { ActiveMainQuests = [parent with { ConditionState = 2 }] },
+            character with { ActiveMainQuests = [parent with { ConditionState = 2 },delivery] },
+            character with { ActiveMainQuests = [parent with { ConditionState = 2 },hunt with { AcceptanceId = Guid.Empty }] },
+            character with { ActiveMainQuests = [parent with { ConditionState = 2, AcceptanceId = Guid.NewGuid() },hunt] },
+            character with { ActiveMainQuests = [parent with { ConditionState = 3 },hunt] },
+            character with { ActiveMainQuests = [parent with { ConditionState = 2 },hunt,delivery with { Slot = 2 }] },
+            character with { CompletedQuests = [3639], ActiveMainQuests = [parent,first] }
+        })
+            That(DungeonQuestContinuationRules.Resolve(rejected,previous,quests,dungeons,[517,72],out _) is null,
+                "后继未接取、越序、空身份、重接父、错误父状态、多活动子或原子未完成均不能续图");
+        That(DungeonQuestContinuationRules.Resolve(character,previous with { QuestAcceptances = [] },quests,dungeons,[517,72],out _) is null,
+            "不借当前同名父任务修复缺失的原Run接取绑定");
+        That(DungeonQuestContinuationRules.Resolve(character,previous,quests,dungeons,[517],out reason) is null &&
+            reason == "successor-route-unavailable", "后继副本不在当前入口时保留合法准入限制");
+        That(System.Text.Json.JsonSerializer.Serialize(character) == snapshot,
+            "解析下一任务不修改玩家任务、接取身份、物品、奖励或完成记录");
     }
 
     static void OrdinaryHuntRoutes(DungeonCatalog catalog, QuestCatalog quests, DungeonRoomCatalog rooms, Character basis)

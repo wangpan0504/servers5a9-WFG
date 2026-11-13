@@ -68,13 +68,16 @@ internal static class FiendWarRosterTests
             var owners = new AccountOwners();
             using var owner = owners.Acquire("fiendwar-roster", () => { });
             var position = new Location(1, 0, 10, 10);
-            NewCharacter Role(string name, int[] quests) => new(name, position, position) { CompletedQuests = quests };
+            NewCharacter Role(string name, int[] quests, byte level = 1) => new(name, position, position)
+                { CompletedQuests = quests, Level = level };
             var both = repository.Create(owner, Role("FwBoth", [8672]));
             var questOnly = repository.Create(owner, Role("FwQuest", [8672]));
             var guildOnly = repository.Create(owner, Role("FwGuild", [10]));
-            // 魔兽资格与漩涡资格独立，完成5927只开启魔兽标志。
-            var beastDone = repository.Create(owner, Role("FwBeast", [5927]));
-            var beastMiss = repository.Create(owner, Role("FwPlain", [10]));
+            // 魔兽资格与漩涡资格独立，须同时达到90级并完成5927。
+            var beastDone = repository.Create(owner, Role("FwBeast", [5927], 90));
+            var beastMiss = repository.Create(owner, Role("FwPlain", [10], 90));
+            var beastLow = repository.Create(owner, Role("FwLow", [5927], 89));
+            var beastMax = repository.Create(owner, Role("FwMax", [5927], 95));
             using (var db = new SqliteConnection("Data Source=" + path + ";Pooling=False"))
             {
                 db.Open();
@@ -91,7 +94,10 @@ internal static class FiendWarRosterTests
             bool Flag(ushort id) => roster.Single(row => row.Id == id).FiendWarEligible;
             TestCheck.That(Flag(both.Id) && Flag(questOnly.Id) && !Flag(guildOnly.Id), "名册查询要求任务完成，无公会也可获得资格");
             TestCheck.That(TailOf(roster.Single(row => row.Id == beastDone.Id))[39] == 1 &&
-                TailOf(roster.Single(row => row.Id == beastMiss.Id))[39] == 0, "名册魔兽资格按5927完成态独立发布");
+                TailOf(roster.Single(row => row.Id == beastMiss.Id))[39] == 0 &&
+                TailOf(roster.Single(row => row.Id == beastLow.Id))[39] == 0 &&
+                TailOf(roster.Single(row => row.Id == beastMax.Id))[39] == 1,
+                "名册魔兽资格同时要求90级与5927完成态，89拒绝、90与95可用");
             var full = repository.List(owner);
             TestCheck.That(CharacterPackets.Roster(roster).SequenceEqual(CharacterPackets.Roster(full.Select(CharacterRosterEntry.FromCharacter).ToArray())),
                 "轻量名册与完整角色的资格字节一致");

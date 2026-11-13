@@ -30,6 +30,7 @@ internal static partial class ClientSettingsStoreTests
         HotkeyCharacterIsolation();
         HotkeyStorage();
         CharacterHotkeyMigration();
+        BatteryAndHotkey208Upgrade();
         CharacterHotkeyDeletionRollback();
         QuickChatStorage();
         ChatEmoticonStorage();

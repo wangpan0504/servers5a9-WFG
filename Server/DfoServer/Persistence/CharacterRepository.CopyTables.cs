@@ -40,6 +40,7 @@ internal sealed partial class CharacterRepository
         new("character_fatigue", "character_id", "character_id,account,used,maximum,used_maximum,remaining,context_auxiliary,selection_auxiliary"),
         new("character_fatigue_acceleration", "character_id", "character_id,account,enabled"),
         new("character_fatigue_reset_days", "character_id", "character_id,service_day"),
+        new("character_fatigue_battery", "character_id", "character_id,charging,buff"),
         new("character_fiendwar_title_facts", "character_id", "character_id,account,quest_id,total,applied"),
         new("character_game_settings", "character_id", "character_id,account,game_options"),
         new("character_hotkey_settings", "character_id", "character_id,account,profile,hotkeys"),

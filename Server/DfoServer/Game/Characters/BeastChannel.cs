@@ -10,6 +10,7 @@ internal static class BeastChannel
     internal const string Group = "[beast]";
     internal const int Town = 51;
     internal const int EntryQuest = 5927;
+    internal const byte EntryLevel = 90;
     internal const ushort OpenEvent = 333;
     internal static bool IsEntry(ChannelEntry? channel) => channel is not null && IsEntry(channel.Type, channel.Group);
     internal static bool IsEntry(int type, string group) => type == Type && group == Group;
@@ -21,7 +22,8 @@ internal static class BeastChannel
         return towns.ResolveRoomReturn(towns.Room, towns.InitialReturn, character.Level, completed);
     }
 
-    internal static bool CanProjectEntry(bool available, byte level, bool pvpPrivate, bool questCompleted) => questCompleted;
+    internal static bool Eligible(byte level, bool questCompleted) => level >= EntryLevel && questCompleted;
+    internal static bool CanProjectEntry(bool available, byte level, bool pvpPrivate, bool questCompleted) => Eligible(level, questCompleted);
     internal static ushort[] EntryEvents(bool available, IReadOnlyList<ushort> existing) =>
         existing.Append(OpenEvent).Distinct().ToArray();
 }

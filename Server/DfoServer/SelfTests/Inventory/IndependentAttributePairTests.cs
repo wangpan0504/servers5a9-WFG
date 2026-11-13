@@ -32,7 +32,7 @@ internal static class IndependentAttributePairTests
     {
         var policy = IndependentAttributePairCatalog.Load(Path.Combine(AppContext.BaseDirectory, "Resources", "independent-attribute-pairs.json"),
             resources.Items, resources.Boosters, resources.LimitCubes, resources.Enchantments, resources.EpicPieces, resources.Contracts,
-            id => CurrencyWallet.RewardKind(id) is not null);
+            id => CurrencyWallet.RewardKind(id) is not null, useBundledDefault: true);
         That(policy.ValidatedFamilies == 1 && policy.Resolve(BoosterId, AttributePairEntryKind.Booster).Policy is { MaximumBeads: 66000 } &&
             policy.Resolve(TicketId, AttributePairEntryKind.LimitCube).Kind == AttributePairResolutionKind.RequiredValidated,
             "实际11基向量、66卡完整token与两个来源共同通过加载，模板堆叠必要上界为66000");

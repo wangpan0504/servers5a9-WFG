@@ -33,7 +33,9 @@ internal sealed class LukePhaseExitProjection(GameConnectionContext context, Par
         {
             if (context.Session.Phase == Game.Session.SessionPhase.Town && battle.LukeWaitingRoom is { } waiting &&
                 context.Session.Selected?.Position is { } position && position.Town == waiting.Town && position.Area == waiting.Area &&
-                context.Session.CurrentParty?.Invoke()?.PreyBattleId != view.Instance) return;
+                context.Session.CurrentParty?.Invoke()?.PreyBattleId != view.Instance &&
+                (context.PreyFailureDisplay == (actor.Epoch, actor.Character, view.Instance, view.Phase, (byte)1) ||
+                 context.PreyFailureDisplay == (actor.Epoch, actor.Character, view.Instance, view.Phase, (byte)2))) return;
             run = context.Session.CurrentFormalDungeonScene()?.Snapshot.Identity.InstanceId;
         }
         if (!view.PhaseExpired && battle?.Kind == RaidKind.Fiendwar && context.Session.NeedsFiendwarFinalReturn())
@@ -51,7 +53,9 @@ internal sealed class LukePhaseExitProjection(GameConnectionContext context, Par
         lock (gate)
         {
             var identity = (view.Instance, view.Phase, run, reason);
-            if (disposed || scheduled == identity) return;
+            if (disposed || scheduled == identity || view.PhaseExpired && battle is { Kind: RaidKind.Prey, PreyGuide: false } &&
+                scheduled is { } previous && previous.Instance == view.Instance && previous.Phase == view.Phase &&
+                previous.Reason == ExitReason.PhaseExpired) return;
             scheduled = identity;
             requested = new(view, actor, run, reason);
             if (!running) { running = true; pending = DrainAsync(); }
@@ -99,6 +103,43 @@ internal sealed class LukePhaseExitProjection(GameConnectionContext context, Par
         bool returnCommitted = false;
         AntonRaidBattle? originalBattle = null;
         string prefix = "luke";
+        if (exitReason == ExitReason.PhaseExpired)
+        {
+            try
+            {
+                AntonRaidBattle? failedPrey = null;
+                using (var movieGates = await DispatchGateScope.EnterAsync(context, stop.Token))
+                {
+                    if (context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Prey, PreyGuide: false } prey &&
+                        actor.IsCurrent && prey.Instance == view.Instance && prey.View.Phase == view.Phase && prey.View.PhaseExpired)
+                    {
+                        failedPrey = prey;
+                        RaidCombatProjection.PostPreyFailure(context, prey.View, actor, Current);
+                    }
+                }
+                if (failedPrey is not null)
+                {
+                    // 先确认两帧真正写完，再开始资源演出等待；全程不持本人或共享队伍命令门禁。
+                    await context.Sender.DrainAsync().WaitAsync(stop.Token);
+                    using (var movieGates = await DispatchGateScope.EnterAsync(context, stop.Token))
+                    {
+                        if (!Current() || context.PreyFailureDisplay !=
+                            (actor.Epoch, actor.Character, view.Instance, view.Phase, (byte)1)) return;
+                    }
+                    await failedPrey.WaitPreyFailureMovieAsync(stop.Token);
+                }
+                bool Current() => actor.IsCurrent && context.Session.CurrentRaidBattle(actor) == failedPrey &&
+                    failedPrey?.View is { PhaseExpired: true } latest && latest.Phase == view.Phase;
+            }
+            catch (OperationCanceledException) when (stop.IsCancellationRequested) { return; }
+            catch (InvalidOperationException) when (!context.Owner.IsCurrent) { return; }
+            catch (Exception error) when (error is IOException or InvalidOperationException)
+            {
+                log.Write("prey_phase_exit_failed", new { Connection = context.Id, view.Instance, view.Phase, Error = error.Message });
+                context.Disconnect();
+                return;
+            }
+        }
         while (!stop.IsCancellationRequested)
         {
             DispatchGateScope? gates = null;
@@ -113,8 +154,10 @@ internal sealed class LukePhaseExitProjection(GameConnectionContext context, Par
                         if (!actor.IsCurrent || context.Session.CurrentRaidBattle(actor) is not { } battle ||
                             battle.Instance != view.Instance ||
                             (exitReason == ExitReason.PhaseExpired
-                                ? !battle.View.PhaseExpired || run is { } expiredRun &&
-                                    context.Session.CurrentFormalDungeonScene()?.Snapshot.Identity.InstanceId != expiredRun
+                                ? !battle.View.PhaseExpired || battle.View.Phase != view.Phase ||
+                                    (battle is { Kind: RaidKind.Prey, PreyGuide: false }
+                                        ? context.Session.CurrentFormalDungeonScene()?.Snapshot.Identity.InstanceId is { } activeRun && activeRun != run
+                                        : run is { } expiredRun && context.Session.CurrentFormalDungeonScene()?.Snapshot.Identity.InstanceId != expiredRun)
                                 : exitReason == ExitReason.PhaseCompleted
                                 ? !battle.RequiresLukeCompletedPhaseReturn(actor, view.Instance, view.Phase)
                                 : run is { } runId ? !(battle.RequiresLukeEnergyReturn(actor, runId) ||

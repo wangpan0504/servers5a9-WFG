@@ -36,7 +36,8 @@ internal static class TownTravel
     }
 
     public static TownTravelPlan Plan(Character character, AreaRequest request, TownCatalog towns, IReadOnlySet<int> completed, ChannelEntry? channel = null, NpcTownVisit? npcVisit = null,
-        bool fiendwarWaiting = false, bool fiendwarGuideWaiting = false, bool fiendwarActive = false, bool preyBoarding = false)
+        bool fiendwarWaiting = false, bool fiendwarGuideWaiting = false, bool fiendwarActive = false, bool preyBoarding = false,
+        byte? raidType = null, bool raidGuide = false)
     {
         if (!ChannelAreaLanding.AllowsFiendwarTown(channel, request.Town))
             return TownTravelPlan.Reject("fiendwar-channel-town-mismatch");
@@ -62,6 +63,15 @@ internal static class TownTravel
         }
         if (request.PreviousTown != character.Position.Town || request.PreviousArea != character.Position.Area)
             return TownTravelPlan.Reject("source-area-mismatch");
+        if (request.TargetNpc != 0 && towns.RaidNpcRoutes.FirstOrDefault(route => route.WaitingNpc == request.TargetNpc) is { } raidRoute)
+        {
+            // NPC菜单不授予入团或跨模式资格，房间和频道必须匹配当前真实攻坚队。
+            if (raidType != raidRoute.Type || channel is null || Raids.RaidTypes.FromChannelType(channel.Type) != raidRoute.Type)
+                return TownTravelPlan.Reject("raid-npc-membership-required");
+            var room = raidRoute.Room(raidGuide);
+            if (target.Town != room.Town || target.Area != room.Area)
+                return TownTravelPlan.Reject("raid-npc-mode-room-mismatch");
+        }
         // 公会菜单005B7960直接发送固定落点，不经过街区的PVF有向门。
         // 仅放行本版这一种菜单形状；最终保存仍在同一事务复核真实会籍。
         if (request is { Town: 8, Area: 0, X: 2110, Y: 270, Movement: 5, TargetNpc: 0, PathKind: 0 })

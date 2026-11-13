@@ -23,6 +23,9 @@ internal sealed partial class AntonRaidBattle
         if (!PreyGuide) return InitializePreyTeamSymbols(phase, symbols);
         if (phase == 0)
         {
+            // TYPE 0是普通据点，7才是空区域；引导不能把未选中的区域投成团队地图的普通据点。
+            for (int area = 1; area <= 20; area++)
+                symbols = symbols.SetItem($"[area_{area}]", 0).SetItem($"[area_{area}_dgn_type]", 7);
             // 单人布局在实例创建时冻结；两阶段沿原symbol继承，不把分支改成另一套圣地。
             symbols = symbols.SetItem("[single raid type]", preyRandom.Next(2)).SetItem("[slenikon hp]", PreyHeader("[max hp]"));
             // 本服布局策略：七个初始据点隔位分布，分支在实例内冻结；不声称是原服随机布局算法。
@@ -172,7 +175,7 @@ internal sealed partial class AntonRaidBattle
             for (int slot = 1; slot <= 20; slot++)
                 if (key == $"[area_{slot}]")
                 {
-                    int type = value == 0 ? 0 : script.Phases[state.Phase].Dungeons.FirstOrDefault(row => row.Id == value) is { } row ? PreyDungeonType(row) : 0;
+                    int type = value == 0 ? 7 : script.Phases[state.Phase].Dungeons.FirstOrDefault(row => row.Id == value) is { } row ? PreyDungeonType(row) : 0;
                     state = state with { Symbols = state.Symbols.SetItem($"[area_{slot}_dgn_type]", type) };
                     break;
                 }
@@ -208,7 +211,7 @@ internal sealed partial class AntonRaidBattle
                 run.Dungeon == state.Symbols[$"[area_{from - 300}]"]))
         {
             int dungeon = state.Symbols[$"[area_{from - 300}]"];
-            state = DamagePreyShip(state, PreyHeader("[single defence fail]"));
+            state = DamagePreyShip(state, PreyHeader("[single defence fail]"), collision: true);
             state = RemovePreyArea(state, dungeon);
         }
         // 015BB8F0读取205后减029107D0；必须发截止秒，不能一直发5/10使剩余时间立即归零。
@@ -225,24 +228,35 @@ internal sealed partial class AntonRaidBattle
             TimerAnchors = state.TimerAnchors.SetItem(key, lukeClock.GetTimestamp()), TimerSequence = generation };
     }
 
-    AntonRaidBattleView RemovePreyArea(AntonRaidBattleView state, int dungeon)
+    AntonRaidBattleView RemovePreyArea(AntonRaidBattleView state, int dungeon, int? area = null)
     {
         for (int slot = 1; slot <= (state.Phase == 0 ? 16 : 20); slot++)
-            if (state.Symbols[$"[area_{slot}]"] == dungeon)
+            if ((area is null || area == slot + 300) && state.Symbols[$"[area_{slot}]"] == dungeon)
                 return state with { Symbols = state.Symbols.SetItem($"[area_{slot}]", 0)
-                    .SetItem($"[area_{slot}_dgn_type]", PreyGuide ? 0 : 7) };
+                    .SetItem($"[area_{slot}_dgn_type]", 7) };
         return state;
     }
 
-    AntonRaidBattleView DamagePreyShip(AntonRaidBattleView state, int damage)
+    AntonRaidBattleView DamagePreyShip(AntonRaidBattleView state, int damage, bool collision = false)
     {
         if (state.Symbols["[slenikon invincibility]"] != 0) return state;
         int hp = Math.Max(0, state.Symbols["[slenikon hp]"] - damage);
+        int armor = hp > PreyHeader("[armor level hp boundary]") ? 0 : hp > PreyHeader("[armor level hp boundary]", 1) ? 1 : 2;
+        if (collision || armor > state.Symbols.GetValueOrDefault("[slenikon armor level]"))
+            state = state with { PreyWarningEvent = checked(state.PreyWarningEvent + 1), PreyWarningAnchor = lukeClock.GetTimestamp() };
+        // 二阶段回满体力不会修复已经破碎的铠甲，后续掉血同样不能把损坏等级倒退。
         state = state with { Symbols = state.Symbols.SetItem("[slenikon hp]", hp).SetItem("[slenikon armor level]",
-            hp > PreyHeader("[armor level hp boundary]") ? 0 : hp > PreyHeader("[armor level hp boundary]", 1) ? 1 : 2) };
+            Math.Max(state.Symbols.GetValueOrDefault("[slenikon armor level]"), armor)) };
         return hp != 0 ? state : state with { PhaseExpired = true,
             Dungeons = state.Dungeons.ToImmutableDictionary(row => row.Key, _ => RaidDungeonState.Hide),
             Timers = state.Timers.Clear(), TimerAnchors = state.TimerAnchors.Clear(), TimerGenerations = state.TimerGenerations.Clear() };
+    }
+
+    internal bool PreyWarningCurrent(AntonRaidBattleView view)
+    {
+        lock (gate) return Kind == RaidKind.Prey && view.Instance == Instance && view.Phase == current.Phase &&
+            view.PreyWarningEvent > 0 && view.PreyWarningEvent == current.PreyWarningEvent &&
+            lukeClock.GetElapsedTime(view.PreyWarningAnchor) < TimeSpan.FromSeconds(5);
     }
 
     AntonRaidBattleView SpawnPreyDefence(AntonRaidBattleView state, int tower)
@@ -262,7 +276,7 @@ internal sealed partial class AntonRaidBattle
         lock (gate)
         {
             if (Kind != RaidKind.Prey || !ReferenceEquals(current, view) || TerminalRequested(current) ||
-                timer.Kind is not (1 or 2) || !view.Timers.TryGetValue(timer, out int seconds) ||
+                timer.Kind is not (1 or 2 or 10001 or 10002) || !view.Timers.TryGetValue(timer, out int seconds) ||
                 !view.TimerAnchors.TryGetValue(timer, out long anchor)) return null;
             double remaining = seconds - lukeClock.GetElapsedTime(anchor).TotalSeconds;
             return remaining > 0 ? checked((uint)Math.Ceiling(remaining)) : null;

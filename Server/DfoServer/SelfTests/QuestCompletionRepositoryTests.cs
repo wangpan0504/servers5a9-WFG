@@ -39,6 +39,8 @@ internal static class QuestCompletionRepositoryTests
                 pair.First.Skills.SequenceEqual(pair.Second.Skills)) && commit.Character.Skills.SequenceEqual(expected.Skills),
                 "两树实际余额/TP/技能等级与稳定槽按原成长计划保留");
             Check(commit.Rewards.Length == 7 && commit.Rewards.Select(row => row.Item.Uid).Distinct().Count() == 7 &&
+                commit.Rewards.Select(row => row.Item.Core.ItemId).SequenceEqual(new[] { 10165055, 10005531, 8050536, 12403, 14403, 16403, 18403 }) &&
+                commit.Rewards.Select(row => row.Item.Core.Value).SequenceEqual(new[] { 1, 1, 1, 999999998, 999999998, 999999998, 999999998 }) &&
                 commit.Rewards.Select((row, index) => row.Item.Uid > 0 && row.Item.Core == plan.Rewards[index].Core &&
                     row.Item.Position == plan.Rewards[index].Position && row.GrantedCount == 1).All(value => value),
                 "七项原序奖励取得真实唯一UID、完整Core及实际库存槽");

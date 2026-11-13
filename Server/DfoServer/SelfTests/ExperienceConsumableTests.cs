@@ -139,8 +139,37 @@ internal static class ExperienceConsumableTests
             10005340, 10005341, 10006651, 10006652 })
             That(items.Items.ExperienceConsumable(id) is { VillageOnly: true, SeriaRoomOnly: false },
                 "真实城镇与赛丽亚并集胶囊不因两个合法地点被整体拒绝 " + id);
-        foreach (int id in new[] { 490012478, 490012481 })
-            That(items.Items.ExperienceConsumable(id) is null, "地点修复不放行重复限制字段的月饼 " + id);
+        foreach (var (id, percent) in new[] { (490012478, 10), (490012481, 20) })
+        {
+            That(items.Items.ExperienceConsumable(id) is { Percent: true } mooncake && mooncake.Amount == percent &&
+                mooncake.Allows(85, 0, 0) && mooncake.Allows(94, 0, 0) && !mooncake.Allows(84, 0, 0) && !mooncake.Allows(95, 0, 0),
+                "经验月饼的完整禁止用途并集不妨碍使用，等级和各自百分比保持 " + id);
+            using var f = Make(85, id);
+            var before = f.Read();
+            var used = f.Session.UseExperienceConsumable(Slot, service);
+            That(used.Outcome == ConsumableUseOutcome.Committed &&
+                f.Read().Learning.Experience == before.Learning.Experience + growth.GetLevelExperienceSpan(85) * (uint)percent / 100 &&
+                f.Read().Inventory.Find(Slot)!.Core.Count == 1,
+                "同根因月饼实际按10%或20%到账并只扣一件 " + id);
+        }
+        That(items.Items.ExperienceConsumable(490013860) is { Percent: true, Amount: 10, CoolTime: 1000 } returning &&
+            returning.Allows(85, 15, 0x22) && returning.Allows(90, 15, 0x22) &&
+            !returning.Allows(84, 15, 0x22) && !returning.Allows(91, 15, 0x22),
+            "回归10%胶囊的多段禁止用途不阻止使用，仍严格保留85至90闭区间和冷却");
+        foreach (byte level in new byte[] { 84, 85, 90, 91 })
+        {
+            using var f = Make(level, 490013860);
+            var before = f.Read();
+            var result = f.Session.UseExperienceConsumable(Slot, service);
+            if (level is 84 or 91)
+                That(result.Outcome == ConsumableUseOutcome.Rejected && Same(before, f.Read()),
+                    "回归胶囊超等级拒绝且源和经验均不变");
+            else
+                That(result.Outcome == ConsumableUseOutcome.Committed &&
+                    f.Read().Learning.Experience == before.Learning.Experience + growth.GetLevelExperienceSpan(level) / 10 &&
+                    f.Read().Inventory.Find(Slot)!.Core.Count == 1,
+                    "回归胶囊上下边界实际经验和扣源在同一成长事务提交");
+        }
         That(items.Items.ExperienceConsumable(490003969) is { } maleMage &&
             maleMage.Allows(60, 8, 0x23) && !maleMage.Allows(60, 8, 2) && maleMage.Allows(60, 3, 3) &&
             items.Items.ExperienceConsumable(490005503) is { } knight &&

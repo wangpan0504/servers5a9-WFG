@@ -2,6 +2,11 @@ namespace DfoServer.Game.Raids;
 
 internal sealed partial class AntonRaidBattle
 {
+    // 失败没有可领取奖励的659确认；沿资源声明的演出上限收尾，不借成功奖励屏障或另建阶段时钟。
+    internal Task WaitPreyFailureMovieAsync(CancellationToken cancellationToken) =>
+        Task.Delay(TimeSpan.FromSeconds(script.Headers.Single(row => row.Tag == "[movie end time]")
+            .Values.Max(row => row.Number)), lukeClock, cancellationToken);
+
     // 引导两阶段均有独立演出；普通一阶段仍沿退场后直接交付的原合同。
     bool HasPreyMovieBarrierLocked() => HasPreyAutomaticRewards && (PreyGuide || current.Phase == 1) &&
         lukePhaseCommits.ContainsKey(current.Phase);

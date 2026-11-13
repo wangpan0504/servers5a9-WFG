@@ -17,6 +17,10 @@ internal sealed partial class GameSession
 {
     long dungeonEpicProjectionEpoch = -1;
     long dungeonEpicProjectionVersion;
+    long completedDungeonEpicProjectionVersion = -1;
+    SessionPhase pendingDungeonEpicProjectionPhase;
+    ImmutableArray<DungeonEpicBuffDisplay> pendingDungeonEpicBuffs = [];
+    ImmutableArray<int> pendingDungeonEpicRemovedIds = [];
     ImmutableArray<DungeonEpicBuffDisplay> projectedDungeonEpicBuffs = [];
     internal int CurrentDungeonEpicBuffId => DisplayVariousBuffs((timeProvider ?? TimeProvider.System).GetUtcNow().ToUnixTimeMilliseconds())
         .FirstOrDefault()?.BuffId ?? 0;
@@ -51,19 +55,38 @@ internal sealed partial class GameSession
         {
             dungeonEpicProjectionEpoch = SelectionEpoch;
             projectedDungeonEpicBuffs = [];
+            pendingDungeonEpicBuffs = [];
+            pendingDungeonEpicRemovedIds = [];
+            completedDungeonEpicProjectionVersion = -1;
         }
         var desired = CurrentDropBuffDisplays();
         if (desired.SequenceEqual(projectedDungeonEpicBuffs) && (!force || desired.IsEmpty) && pendingVariousBuffRemovals.IsEmpty) return null;
         var removed = projectedDungeonEpicBuffs.Where(old => !desired.Any(buff => buff.BuffId == old.BuffId))
             .Select(buff => buff.BuffId).Concat(pendingVariousBuffRemovals).Distinct().Order().ToImmutableArray();
         var added = desired.Where(buff => force || pendingVariousBuffRemovals.Contains(buff.BuffId) || !projectedDungeonEpicBuffs.Contains(buff)).ToImmutableArray();
-        long epoch = SelectionEpoch, version = ++dungeonEpicProjectionVersion;
         var phase = Phase;
+        // 同一未完成视图共用发送代次，避免请求尾部刷新使已写帧的回执失效并补发相同图标。
+        if (force || completedDungeonEpicProjectionVersion == dungeonEpicProjectionVersion ||
+            pendingDungeonEpicProjectionPhase != phase || !pendingDungeonEpicBuffs.SequenceEqual(desired) ||
+            !pendingDungeonEpicRemovedIds.SequenceEqual(removed))
+        {
+            dungeonEpicProjectionVersion++;
+            pendingDungeonEpicProjectionPhase = phase;
+            pendingDungeonEpicBuffs = desired;
+            pendingDungeonEpicRemovedIds = removed;
+        }
+        long epoch = SelectionEpoch, version = dungeonEpicProjectionVersion;
         bool Current() => owner.Execute(() => owner.IsCurrent && Selected?.Id == character.Id && SelectionEpoch == epoch &&
-            Phase == phase && dungeonEpicProjectionVersion == version && CurrentDropBuffDisplays().SequenceEqual(desired));
+            Phase == phase && dungeonEpicProjectionVersion == version && completedDungeonEpicProjectionVersion != version &&
+            CurrentDropBuffDisplays().SequenceEqual(desired));
         void MarkSent() => owner.Execute(() =>
         {
-            if (Current()) { projectedDungeonEpicBuffs = desired; pendingVariousBuffRemovals = ImmutableHashSet<int>.Empty; }
+            if (Current())
+            {
+                projectedDungeonEpicBuffs = desired;
+                pendingVariousBuffRemovals = ImmutableHashSet<int>.Empty;
+                completedDungeonEpicProjectionVersion = version;
+            }
             return true;
         });
         return new DungeonEpicBuffProjectionReceipt(removed, added, Current, MarkSent);

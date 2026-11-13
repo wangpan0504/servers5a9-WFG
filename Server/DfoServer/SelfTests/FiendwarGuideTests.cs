@@ -28,13 +28,16 @@ internal static class FiendwarGuideTests
             That(state.Symbols["[single raid type]"] == route && state.Symbols["[fiendwar init]"] == 1 &&
                 state.Deadline == now.AddMinutes(30) && state.Merchant is null && state.Timers.IsEmpty,
                 "引导按原路线初始化，不生成团队兵线或商人计时");
-            That(state.Symbols["[radar state]"] == route && state.Symbols["[battery state]"] == 1 - route,
-                "引导两条路线各自动处理另一设施");
+            That(state.Symbols["[radar state]"] == 0 && state.Symbols["[battery state]"] == 0 && !state.FacilitiesDestroyed,
+                "引导两条路线未通关时均不获得雷达及炮台增益");
             int[] expected = route == 0 ? [36, 37, 39, 42, 43] : [35, 36, 37, 39, 41, 42, 43];
             That(state.Areas.Where(row => row.Value.Enemy is not null).Select(row => row.Key).Order().SequenceEqual(expected) &&
                 state.Areas[43].Enemy?.Kind == 13 && state.Dungeons[5356] == "open", "引导原固定遭遇及单世界罗什正确开放");
             int facility = route == 0 ? 38 : 40;
             var completed = engine.CompleteArea(state, facility, now.AddSeconds(1)).State;
+            That(completed.Symbols[route == 0 ? "[radar state]" : "[battery state]"] == 1 &&
+                completed.Symbols[route == 0 ? "[battery state]" : "[radar state]"] == 0 && completed.FacilitiesDestroyed,
+                "引导真实设施通关只点亮本人路线增益，另一设施保持关闭");
             That(completed.Symbols[route == 0 ? "[movie radar on]" : "[movie battery on]"] == 1,
                 "真实清理引导路线设施触发原增益符号");
             var terminal = engine.CompleteArea(completed, 43, now.AddSeconds(2)).State;

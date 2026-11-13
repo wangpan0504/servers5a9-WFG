@@ -14,8 +14,8 @@ internal static class SupportOpeningTests
             var ordinals = SupportOpeningDelta.Ordinals(source, actor.Path);
             var replay = new DecisionReplay(AiPrograms.Action(actor.Definition, skillOrdinals: ordinals), actor.Definition) { Party = true, Hp = 20 };
             replay.Skills.UnionWith(ordinals.Keys);
-            int first = actor.Definition.Id == 74990 ? 14 : 330;
-            int second = actor.Definition.Id == 74990 ? 21 : 335;
+            int first = actor.Definition.Id == 74990 ? 14 : 335;
+            int second = actor.Definition.Id == 74990 ? 21 : 330;
             int heal = actor.Definition.Id == 74990 ? 3 : 367;
             Check(replay.Run() == ordinals[first], "Opening first buff must precede healing");
             replay.Buffs.Add(first);
@@ -27,9 +27,10 @@ internal static class SupportOpeningTests
             int attack = actor.Definition.Id == 74990 ? 16 : 333;
             replay.Skills.Clear(); replay.Skills.Add(attack); replay.Enemy = new Enemy(50, 20, 0);
             Check(replay.Run() == ordinals[attack], "Attack continues when buffs are sufficient");
-            replay.Skills.Add(second); replay.Buffs.Remove(second);
-            Check(replay.Run() == ordinals[second], "Missing main buff preempts attack after death or expiry");
-            replay.Buffs.Add(second);
+            int main = actor.Definition.Id == 74990 ? 14 : 335;
+            replay.Skills.Add(main); replay.Buffs.Remove(main);
+            Check(replay.Run() == ordinals[main], "Missing main buff preempts attack after death or expiry");
+            replay.Buffs.Add(main);
             Check(replay.Run() == ordinals[attack], "Buff refill yields to attack");
             replay.Skills.Clear();
             Check(replay.Run() == -1, "No cooldown-ready skills cannot become ordinary attack");

@@ -492,7 +492,13 @@ internal static partial class ConsumableUseSessionTests
                 display.IsCurrent() && f.Session.NextVariousBuffWake(f.Clock.GetUtcNow()).ToUnixTimeMilliseconds() == until &&
                 saved.Inventory.VariousBuffs.IsEmpty,
                 "旧小灯笼账本发布原生Buff及真实截止，纳入到期唤醒但不复制药效资格");
+            // 同一药效在发送完成前被命令尾部和周期刷新各观察一次，不能互相废弃写帧回执。
+            var queuedAgain = f.Session.PlanDungeonEpicBuffProjection()!;
+            That(display.IsCurrent() && queuedAgain.IsCurrent(),
+                "相同未完成药效投影保留原写帧回执，未写成功时仍可重试");
             display.MarkSent();
+            That(!queuedAgain.IsCurrent(), "首批药效图标写成功后，队列中的同状态投影不得再次发送");
+            queuedAgain.MarkSent();
             That(f.Session.PlanDungeonEpicBuffProjection() is null,
                 "相同小灯笼截止无需重复补图标，只有成功写帧才确认显示水位");
             f.Session.ReturnToRoster(); f.Select();

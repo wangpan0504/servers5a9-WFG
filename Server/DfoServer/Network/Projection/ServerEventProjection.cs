@@ -51,6 +51,7 @@ internal sealed class ServerEventProjection : IAsyncDisposable
     }
     internal bool NeedsStrongwayDisplay(bool value) => queuedEpoch != context.Session.SelectionEpoch ||
         queuedStrongway != value || queuedStrongwayRevision != events.Strongway2019DisplayRevision;
+    internal bool NeedsEndlessDisplay(bool value) => queuedEpoch != context.Session.SelectionEpoch || queuedEndless != value;
     // 这里只去重已接受的快照，不表示客户端已显示；版本变化仍须重发被发送守卫丢弃的旧包。
     public void Queued(bool value, bool strongway, long selectionEpoch, long revision, bool nolanVisible = true,
         bool seriaLuck = true, bool hongbao = true, bool jonathan = true, long promotionRevision = 0,

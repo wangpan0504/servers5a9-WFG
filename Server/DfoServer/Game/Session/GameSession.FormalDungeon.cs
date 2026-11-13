@@ -61,6 +61,9 @@ internal sealed partial class GameSession
         public uint KillGrowthContractExperience { get; set; }
         public uint KillEquipmentExperience { get; set; }
         public uint KillFatigueBurningExperience { get; set; }
+        public uint KillGuildExperience { get; set; }
+        public uint KillFatigueBuffExperience { get; set; }
+        public uint KillPartyExperience { get; set; }
         // 结果页“领主”行只读评分quartet的147槽；按本实例实际到账的领主基础经验累计（不含加成）。
         public uint KillBossExperience { get; set; }
         // 结果页特殊怪物明细：每只实际到账的怪一条（对象键、基础经验），客户端按类型归并。
@@ -90,6 +93,11 @@ internal sealed partial class GameSession
         public EpicPieceShopState? EpicPieceShop { get; set; }
         public PendingEpicPieceShop? PendingEpicPieceShop { get; set; }
         public DungeonRunIdentity? EpicPieceShopPresentation { get; set; }
+        public SecretShopState? SecretShop { get; set; }
+        public bool SecretShopQuoted { get; set; }
+        public bool SecretShopOpen { get; set; }
+        public PendingSecretShopPurchase? PendingSecretShopPurchase { get; set; }
+        public DungeonRunIdentity? SecretShopPresentation { get; set; }
         public Dictionary<(DungeonMap Map, int Template, int Ordinal), PendingQuestScene> QuestSceneEvents { get; } = [];
         public QuestDropResources? QuestDrops { get; init; }
         public QuestDropPlan? PendingQuestDrop { get; set; }
@@ -1404,6 +1412,8 @@ internal sealed partial class GameSession
             pendingQuestReplay = null;
             SetState(dungeon.Run.Phase == SinglePlayerDungeonPhase.Settlement ? SessionPhase.Settlement : SessionPhase.Dungeon);
             return FormalReceipt() with { LostLandStarted = lostLandStarted,
+                BossRushStart = dungeon.BossRush is { } rush && dungeon.Run.LastLoadingFact is { IsInitialLoading: true }
+                    ? rush.Hud(dungeon.StartedTimestamp) : null,
                 FatigueEnergySlots = QuickSlotEquipmentEnergy.ChangedSlots(expected.Inventory, Selected!.Inventory),
                 BattlePassMissionClock = expected.Fatigue is {} oldFatigue && Selected?.Fatigue is {} newFatigue && newFatigue.Remaining < oldFatigue.Remaining ? timeProvider ?? TimeProvider.System : null };
         });
@@ -1764,16 +1774,24 @@ internal sealed partial class GameSession
         SetState(dungeon.Run.Phase == SinglePlayerDungeonPhase.Settlement ? SessionPhase.Settlement : SessionPhase.Dungeon);
         // 满级入口线后角色经验到账为 0，击杀累计改用「角色到账 + 熟练度到账」的有效经验。
         uint effective = checked(committed.Commit.GainedExperience + committed.Commit.ProficiencyGained);
+        var appliedBonuses = reward.Bonuses?.Applied(effective);
         dungeon.KillExperienceTotal = checked(dungeon.KillExperienceTotal + effective);
         dungeon.KillGrowthContractExperience = checked(dungeon.KillGrowthContractExperience +
-            (reward.Bonuses?.Applied(effective).Amount(ExperienceBonusSource.GrowthContract) ??
+            (appliedBonuses?.Amount(ExperienceBonusSource.GrowthContract) ??
             GrowthContractPolicy.AppliedBonus(reward.Amount - reward.GrowthContractExperience,
                 reward.GrowthContractExperience, effective)));
         // 结果页杀怪侧装备加成行按每只怪实际到账的分项累计；未冻结分项的历史奖励没有该口径，保持 0。
         dungeon.KillEquipmentExperience = checked(dungeon.KillEquipmentExperience +
-            (reward.Bonuses?.Applied(effective).Amount(ExperienceBonusSource.Equipment) ?? 0));
+            (appliedBonuses?.Amount(ExperienceBonusSource.Equipment) ?? 0));
         dungeon.KillFatigueBurningExperience = checked(dungeon.KillFatigueBurningExperience +
-            (reward.Bonuses?.Applied(effective).Amount(ExperienceBonusSource.FatigueBurning) ?? 0));
+            (appliedBonuses?.Amount(ExperienceBonusSource.FatigueBurning) ?? 0));
+        // 只累计提交后实际到账的分项，保留公会资格事务复核和满级熟练度封顶。
+        dungeon.KillGuildExperience = checked(dungeon.KillGuildExperience +
+            (appliedBonuses?.Amount(ExperienceBonusSource.Guild) ?? 0));
+        dungeon.KillFatigueBuffExperience = checked(dungeon.KillFatigueBuffExperience +
+            (appliedBonuses?.Amount(ExperienceBonusSource.FatigueBuff) ?? 0));
+        dungeon.KillPartyExperience = checked(dungeon.KillPartyExperience +
+            (appliedBonuses?.Amount(ExperienceBonusSource.Party) ?? 0));
         dungeon.KillObjectExperience.Add(new(pending.Death.MonsterKey, reward.BaseAmount));
         // 领主行独立于明细列表：客户端用评分段147槽显示，不取该对象在151/155里的条目。
         if (pending.Monster.IsBoss)

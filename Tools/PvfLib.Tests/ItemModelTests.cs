@@ -222,7 +222,8 @@ internal static class ItemModelTests
         That(StackableFile.Parse(1,"stackable/level.stk",[new(3,1)],LevelResolve).HasBoosterInfo,
             "random booster declaration remains distinguishable from a fixed ticket");
         Reject<InvalidDataException>(() => PvfItemIndex.Stackable([new(0, 1), new(6, 5)], Resolve, _ => true));
-        string[] experienceStrings = ["[increase status type]", "[expPercentUp]", "[/increase status type]", "[expUp]", "[levelUpByTable]"];
+        string[] experienceStrings = ["[increase status type]", "[expPercentUp]", "[/increase status type]", "[expUp]", "[levelUpByTable]",
+            "[impossible contents]", "[/impossible contents]", "gift", "hardcore mode", "ban redeemitem"];
         string[] etcStrings = ["[equipment index]", "[/equipment index]", "defaultEquipment", "[key value index]", "[/key value index]", "other"];
         string EtcResolve(int index) => etcStrings[index];
         That(CharacterEquipmentFile.ReadDefaultEquipment([new(3,0),new(6,2),new(0,-1),new(0,101),new(0,102),new(3,1),
@@ -254,6 +255,18 @@ internal static class ItemModelTests
         var experience = ExperienceConsumableFile.Parse(1, "stackable/capsule.stk", capsule, ExperienceResolve);
         That(experience.Effect is { Label: "[expPercentUp]", Parameters: [10] } && experience.Diagnostics.IsEmpty,
             "经验胶囊保留百分比标签和原始整数，不在资源库内计算角色经验");
+        PvfToken[] restrictions = [new(3,5),new(6,7),new(6,8),new(3,6),new(3,5),new(6,9),new(3,6)];
+        That(ExperienceConsumableFile.Parse(1, "stackable/return.stk", [.. capsule, .. restrictions], ExperienceResolve) is
+            { Effect.Parameters: [10], Diagnostics.IsEmpty: true },
+            "回归胶囊多个完整禁止用途块按并集兼容，不误报重复效果");
+        foreach (var invalid in new PvfToken[][]
+        {
+            [.. capsule, .. restrictions.Select(token => token is { Type: 6, Value: 9 } ? new PvfToken(0,9) : token)],
+            [.. capsule, new(3,5), new(3,0), new(6,1), new(0,10), new(3,2), new(3,6), .. restrictions],
+            [.. capsule, .. capsule, .. restrictions]
+        })
+            That(!ExperienceConsumableFile.Parse(1, "stackable/return.stk", invalid, ExperienceResolve).Diagnostics.IsEmpty,
+                "非字符串、嵌套禁止用途及重复经验效果仍拒绝");
         PvfToken[] table = [new(3,0),new(6,4),new(0,1),new(0,28),new(0,80),new(0,29),new(0,49),new(0,81),new(3,2)];
         That(ExperienceConsumableFile.Parse(1,"stackable/table.stk",table,ExperienceResolve) is
             { Effect.Parameters: [1,28,80,29,49,81], Diagnostics.IsEmpty: true },

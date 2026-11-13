@@ -34,7 +34,9 @@ internal sealed class GameConnectionContext(ConnectionContext connection, Accoun
     // 重返已绑定但落位尚未完成时，原668重试必须继续位置提交与初始化。
     internal (long Epoch, ushort Character, Guid Instance)? PreyRejoinPending { get; set; }
     // 失败601和结束587各自按实际写帧去重；不保存业务终态或奖励资格。
-    internal (long Epoch, ushort Character, Guid Instance, int Phase, bool Ended)? PreyFailureDisplay { get; set; }
+    // 失败展示只记录本连接已写出的601、587演出、587终态，不拥有团本业务状态。
+    internal (long Epoch, ushort Character, Guid Instance, int Phase, byte Stage)? PreyFailureDisplay { get; set; }
+    internal (Guid Instance, long Event)? PreyWarningDisplay { get; set; }
     internal bool PreyBoardingPending(Guid instance) => Session.Selected is { } character &&
         Session.StartedRaid?.InstanceId == instance &&
         PreyBoardingDisplay != (Session.SelectionEpoch, character.Id, instance);

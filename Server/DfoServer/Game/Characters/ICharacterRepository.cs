@@ -23,6 +23,7 @@ internal interface IExpertJobSetter
 
 internal interface ICharacterRepository
 {
+    DfoServer.GameWorld.Characters.FatigueBatteryCatalog? FatigueBatteryCatalog => null;
     DfoServer.GameWorld.Adventure.AdventureCatalog? AdventureCatalog => null;
     QuestStageState LoadQuestStageState(AccountOwners.Lease owner, Character expected);
     string ReadAdventureName(AccountOwners.Lease owner);
@@ -110,6 +111,7 @@ internal interface ICharacterRepository
     Character CommitFatigueConsumable(AccountOwners.Lease owner, FatigueConsumablePlan plan, DateTimeOffset now);
     Character ReserveDungeonAttempt(AccountOwners.Lease owner, Character expected, uint nextObjectKey,
         WeeklyDungeonEntry? weekly = null);
+    FatigueBatteryFillResult FillFatigueBatteries(AccountOwners.Lease owner, Character? expected = null) => throw new NotSupportedException();
     DungeonEntryResetResult ResetDungeonEntries(AccountOwners.Lease owner);
     RewardLimitResetResult ResetRewardLimits(AccountOwners.Lease owner);
     DungeonQuotaResetResult ResetDungeonLimits(AccountOwners.Lease owner);

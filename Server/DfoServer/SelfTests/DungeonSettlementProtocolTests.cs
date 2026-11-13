@@ -165,25 +165,26 @@ internal static class DungeonSettlementProtocolTests
                 new(ExperienceBonusSource.Guild, 112)
             ]
         };
-        byte[] body = DungeonSettlementPackets.EmptyCardReward(reward, 1200, 118, 120, monsterFatigueBurningExperience: 116);
-        That(body.Length == 218 && U32(body, 0) == 100 && U32(body, 41) == 107 &&
+        byte[] body = DungeonSettlementPackets.EmptyCardReward(reward, 1200, 118, 120, monsterFatigueBurningExperience: 116,
+            monsterGuildExperience: 121, monsterFatigueBuffExperience: 117, monsterPartyExperience: 113);
+        That(body.Length == 218 && U32(body, 0) == 100 && U32(body, 41) == 107 && U32(body, 206) == 107 &&
             U32(body, 8) == 808 && U32(body, 12) == 1212 && U32(body, 21) == 105 &&
             U32(body, 25) == 103 && U32(body, 29) == 104 && U32(body, 37) == 106 && U32(body, 49) == 109 &&
             U32(body, 53) == 114 && U32(body, 61) == 112 && U32(body, 77) == 116 && U32(body, 85) == 118 && U32(body, 93) == 120 &&
-            U32(body, 194) == 1200,
-            "35基础不含冒险团，41槽单列实际冒险团奖励，其余分项及两类燃烧仍按已证槽位写入");
+            U32(body, 65) == 113 && U32(body, 81) == 117 && U32(body, 97) == 121 && U32(body, 194) == 1200,
+            "35基础不含冒险团，41初始槽与206最终覆盖槽均为实际冒险团奖励，其余分项及两类燃烧仍按已证槽位写入");
         var legacy = new DungeonClearExperienceReward(100, 7, 1000, 1, "fixture", "fixture")
         { GrowthContractExperience = 109, PotionExperience = 102 };
         byte[] old = DungeonSettlementPackets.EmptyCardReward(legacy, 1200);
         That(U32(old, 21) == 102 && U32(old, 49) == 109 && U32(old, 8) == 0 && U32(old, 25) == 0 &&
-            U32(old, 41) == 0 && U32(old, 53) == 0 && U32(old, 61) == 0 && U32(old, 77) == 0,
+            U32(old, 41) == 0 && U32(old, 206) == 0 && U32(old, 53) == 0 && U32(old, 61) == 0 && U32(old, 77) == 0,
             "未冻结分项的历史结算只按旧口径展示成长契约与秘药，其余来源保持0");
         // 杀怪经验明细是变长段：u32 条数在151，条目（对象键、基础经验）从155起，其后卡牌区与尾部整体平移8N。
         DungeonObjectExperience[] entries = [new(3587, 211), new(3591, 907)];
         byte[] detail = DungeonSettlementPackets.EmptyCardReward(reward, 1200, 118, 120, entries);
         That(detail.Length == 234 && U32(detail, 147) == 0 && U32(detail, 151) == 2 && U32(detail, 155) == 3587 && U32(detail, 159) == 211 &&
             U32(detail, 163) == 3591 && U32(detail, 167) == 907 && detail[171] == 0 && U32(detail, 194) == 0 &&
-            U32(detail, 210) == 1200 && detail.AsSpan(226, 8).IndexOfAnyExcept((byte)0) == -1,
+            U32(detail, 210) == 1200 && U32(detail, 222) == 107 && detail.AsSpan(226, 8).IndexOfAnyExcept((byte)0) == -1,
             "35杀怪明细按条数+对象键/基础经验写入，尾段杀怪合计与八bool尾随8N平移；未传领主值时147槽保持0");
         That(U32(DungeonSettlementPackets.EmptyCardReward(reward, 1200), 151) == 0,
             "35没有明细时条数为0，不能借旧的固定正文让客户端读出条目");
@@ -194,12 +195,25 @@ internal static class DungeonSettlementProtocolTests
         var detailCardReward = new DungeonCardReward(123,
             new DfoServer.Game.Inventory.Models.ItemCore(10400, DfoServer.GameWorld.Items.ItemKind.Equipment, 345), "fixture", "fixture", 1);
         byte[] detailCard = DungeonSettlementPackets.CardReward(reward, 1200, detailCardReward, objectExperience: entries,
-            monsterBossExperience: 4400, monsterFatigueBurningExperience: 116);
+            monsterBossExperience: 4400, monsterFatigueBurningExperience: 116,
+            monsterGuildExperience: 121, monsterFatigueBuffExperience: 117, monsterPartyExperience: 113);
         That(detailCard.Length == 250 && U32(detailCard, 147) == 4400 && U32(detailCard, 155) == 3587 && U32(detailCard, 159) == 211 &&
             detailCard[172] == 2 && U32(detailCard, 173) == 0 && U32(detailCard, 177) == 123 &&
             detailCard[224] == 0 && U32(detailCard, 226) == 1200 && U32(detailCard, 77) == 116 &&
-            detailCard.AsSpan(242, 8).IndexOfAnyExcept((byte)0) == -1,
+            U32(detailCard, 65) == 113 && U32(detailCard, 81) == 117 && U32(detailCard, 97) == 121 &&
+            U32(detailCard, 238) == 107 && detailCard.AsSpan(242, 8).IndexOfAnyExcept((byte)0) == -1,
             "35杀怪明细与免费席同时存在时两段动态长度都按各自8N平移");
+        var members = new DungeonCardView?[8];
+        members[3] = new(null, true, null) { Slot = 3, Free = detailCardReward, BlackDiamond = detailCardReward };
+        foreach (byte slot in Enumerable.Range(0, 8).Select(value => (byte)value))
+        {
+            var memberCard = DungeonSettlementPackets.CardReward(reward, 1200, detailCardReward,
+                blackDiamond: detailCardReward, objectExperience: entries, slot: slot);
+            var partyCard = DungeonSettlementPackets.PartyCardReward(memberCard, slot, members);
+            That(U32(memberCard, memberCard.Length - 12) == 107 && U32(partyCard, partyCard.Length - 12) == 107 &&
+                U32(partyCard, partyCard.Length - 24) == 1200 && partyCard.AsSpan(partyCard.Length - 8).IndexOfAnyExcept((byte)0) == -1,
+                "35各成员席位、双奖励和队友扩展后最终冒险团槽保持已提交金额，杀怪合计与八bool不串位");
+        }
     }
 
     static void PartyReports()

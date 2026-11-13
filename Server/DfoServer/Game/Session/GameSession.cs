@@ -238,8 +238,8 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
                 });
             if (expected is not null && (character.Id != expected.Id || character.Slot != expected.Slot || character.Name != expected.Name))
                 throw new InvalidOperationException("Selection published roster identity changed");
-            if (BeastChannel.IsEntry(ChannelEntry) && !character.CompletedQuests.Contains(BeastChannel.EntryQuest))
-                throw new InvalidDataException("魔兽频道要求完成5927");
+            if (BeastChannel.IsEntry(ChannelEntry) && !BeastChannel.Eligible(character.Level, character.CompletedQuests.Contains(BeastChannel.EntryQuest)))
+                throw new InvalidDataException("魔兽频道要求90级并完成5927");
             // 普通选角与原生换频道共用此门禁；拒绝发生在修复、扣费和位置保存之前。
             if (DfoServer.Game.Raids.RaidAdmissionPlan.Rejection(ChannelEntry, character) is { } raidRejection)
                 throw new DfoServer.Game.Raids.RaidAdmissionException(raidRejection);

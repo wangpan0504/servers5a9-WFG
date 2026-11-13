@@ -20,6 +20,8 @@ internal sealed record AntonRaidBattleView(Guid Instance, long Revision, int Pha
     public ImmutableHashSet<Guid> FiendwarExpiredRuns { get; init; } = ImmutableHashSet<Guid>.Empty;
     public ImmutableHashSet<Guid> PreyExpelledRuns { get; init; } = ImmutableHashSet<Guid>.Empty;
     public ImmutableDictionary<byte, int> PreyMarkers { get; init; } = ImmutableDictionary<byte, int>.Empty;
+    public long PreyWarningEvent { get; init; }
+    public long PreyWarningAnchor { get; init; }
     public ImmutableDictionary<ushort, ushort> PreyMemberLocations { get; init; } = ImmutableDictionary<ushort, ushort>.Empty;
     public ImmutableDictionary<(ushort Character, int Dungeon), uint> PreyMemberRetryDeadlines { get; init; } =
         ImmutableDictionary<(ushort Character, int Dungeon), uint>.Empty;
@@ -525,7 +527,8 @@ internal sealed partial class AntonRaidBattle
                     LukeWaitAnchor = lukeClock.GetTimestamp(), LukeWaitSeconds = lukeFlow.BreakSeconds }
                 : Initialize(before.Phase + 1, before.Revision + 1, Kind is RaidKind.Luke or RaidKind.Prey ? before.Symbols : null, before.TimerSequence);
             if (Kind == RaidKind.Prey && !PreyGuide && current.Phase != before.Phase)
-                current = current with { PreyMemberLocations = before.PreyMemberLocations };
+                current = InheritPreyTeamMerchant(before, current) with { PreyMemberLocations = before.PreyMemberLocations,
+                    PreyWarningEvent = before.PreyWarningEvent, PreyWarningAnchor = before.PreyWarningAnchor };
             // 旧阶段实例不能在下一阶段再次产生clear，集合随阶段释放，不随游玩时长增长。
             entries.Clear();
             AnchorLukePhaseLocked();

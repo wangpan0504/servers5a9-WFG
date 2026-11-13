@@ -140,6 +140,13 @@ internal sealed partial class PartyDungeonInstance(Guid id, PartySnapshot party,
         epicPieceShopAvailable ??= roll();
         return epicPieceShopAvailable.Value;
     }
+    int? secretShopMerchant;
+    internal int ResolveSecretShop(Func<int> roll)
+    {
+        if (!IsExecuting) throw new InvalidOperationException("普通商人出场必须由当前共享副本owner冻结");
+        secretShopMerchant ??= roll();
+        return secretShopMerchant.Value;
+    }
     sealed record CinematicCompletion(uint Quest, DungeonMap Map);
     CinematicCompletion? cinematicCompletion;
     public bool HasCompletedCinematic(uint quest, DungeonMap map) => Volatile.Read(ref cinematicCompletion) is { } completed &&

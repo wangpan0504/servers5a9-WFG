@@ -144,7 +144,7 @@ internal static class AntonRaidRejoinPresentationTests
                         "呈现屏障在用户库存规划前拒绝移动、穿脱、删除、消耗和丢弃，不调用资产operation");
                     That(!current.ChangeSkillTree(0).Success && !current.BeginAutoCombo(0, null!).Success &&
                         current.ChangeQuest(0, QuestLifecycleAction.Accept, null!, null!, null!, null!) is null &&
-                        current.FinishQuest(0, ushort.MaxValue, null!, null!, null!, null!, null!, null!).Receipt is null,
+                        current.FinishQuest(0, ushort.MaxValue, resources.Quests, null!, null!, null!, null!, null!).Receipt is null,
                         "未确认呈现前拒绝技能、任务接取和交付，不能替换冻结场景的角色快照");
                     if (scenario == "giveup")
                     {

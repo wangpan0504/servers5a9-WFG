@@ -241,7 +241,13 @@ internal sealed partial class TcpPeer : IDisposable
     public WirePacket Read()
     {
         if (pushedBack is { } packet) { pushedBack = null; return packet; }
-        return ReadCore(channelNumber);
+        var current = ReadCore(channelNumber);
+        if (fixture?.DefaultSecretShopSuppressed == true && current is { Kind: 0, Opcode: 279 })
+        {
+            TestCheck.Bytes(current.Body, [232, 3, 0, 0], "无关业务显式零出现目录仍收到完整279无商人1000通知");
+            current = ReadCore(channelNumber);
+        }
+        return current;
     }
     // 服务端在ACK、房间通知与补发buff之后才发36，读到房间通知时它尚未上路；
     // 是否发送取决于真实疲劳规则，无包时必须尽快返回，不能把可选通知拖成5秒socket超时。
@@ -254,8 +260,10 @@ internal sealed partial class TcpPeer : IDisposable
         if (packet is { Kind: 0, Opcode: 36 })
         {
             TestCheck.That(packet.Body.Length == 10, "正式疲劳通知保留五个u16的10字节合同");
-            TestCheck.That(U16(packet.Body, 0) + U16(packet.Body, 6) == U16(packet.Body, 2),
-                "正式疲劳通知已用与剩余之和等于上限");
+            var battery = fixture!.Query("SELECT COALESCE((SELECT buff FROM character_fatigue_battery WHERE character_id=$p0),0)", Id);
+            TestCheck.That(U16(packet.Body, 0) <= U16(packet.Body, 2) &&
+                U16(packet.Body, 6) == Convert.ToInt64(battery.Single()[0]),
+                "疲劳已用不超过上限，第四WORD独立匹配已提交电量");
             return;
         }
         pushedBack = packet;
@@ -580,7 +588,9 @@ internal sealed partial class TcpPeer : IDisposable
             Enumerable.Range(0, 8).Any(slot => U32(DevilService0, 9 + slot * 9) > 0) == (PremiumServices[58] > 0),
             "魔王八项期限独立投影，58概览与至少一项有效服务一致，黄金牌次数不超过10");
     }
-    public void Barrier(Action<WirePacket>? validateNotification = null)
+    public void Barrier(Action<WirePacket>? validateNotification = null,
+        [System.Runtime.CompilerServices.CallerLineNumber] int callerLine = 0,
+        [System.Runtime.CompilerServices.CallerFilePath] string callerFile = "")
     {
         SendBarrier();
         var packet = Read();
@@ -602,7 +612,8 @@ internal sealed partial class TcpPeer : IDisposable
             ReadDungeonEnterCounts(packet);
             packet = Read();
         }
-        TestCheck.That(packet.Kind == 1 && packet.Opcode == 1347, "屏障仅允许已校验虚弱与两祭坛次数通知，不跳过其他包");
+        TestCheck.That(packet.Kind == 1 && packet.Opcode == 1347,
+            $"屏障仅允许已校验虚弱与两祭坛次数通知，不跳过其他包；实际kind={packet.Kind} opcode={packet.Opcode} bytes={packet.Body.Length}，调用={Path.GetFileName(callerFile)}:{callerLine}");
         TestCheck.Bytes(packet.Body, [1], "body (1,1347)");
         lastBarrierCompleted = UnixTime;
     }
@@ -783,7 +794,7 @@ internal sealed partial class TcpPeer : IDisposable
         switch (packet.Opcode)
         {
             case 36:
-                var fatigue = fixture!.Query("SELECT used,maximum,used_maximum,remaining,context_auxiliary FROM character_fatigue WHERE character_id=$p0", Id).Single();
+                var fatigue = fixture!.Query("SELECT f.used,f.maximum,f.used_maximum,COALESCE(b.buff,0),f.context_auxiliary FROM character_fatigue f LEFT JOIN character_fatigue_battery b ON b.character_id=f.character_id WHERE f.character_id=$p0", Id).Single();
                 TestCheck.Bytes(packet.Body, Build(w => { foreach (var field in fatigue) w.Write(checked((ushort)Convert.ToInt64(field))); }), "在线疲劳通知与已提交余额一致");
                 break;
             case 99:
@@ -1234,7 +1245,7 @@ internal sealed partial class TcpPeer : IDisposable
                 packet = Read();
             }
             TestCheck.That(packet.Kind == expected[index].Kind && packet.Opcode == expected[index].Opcode,
-                $"entry packet order at {index}");
+                $"entry packet order at {index}; expected={expected[index].Kind}/{expected[index].Opcode}, actual={packet.Kind}/{packet.Opcode}/{packet.Body.Length}");
             if (packet is { Kind: 0, Opcode: 356 })
             {
                 // Actor头部为5B+116B状态+u16角色号+u32名字字节数，名字后才是职业。

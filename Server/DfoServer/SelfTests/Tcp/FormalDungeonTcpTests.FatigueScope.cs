@@ -82,13 +82,13 @@ internal static partial class FormalDungeonTcpTests
             return result;
         }
         static void ExpectFatigue(TcpPeer peer, bool enabled) => peer.Expect(0, 36,
-            enabled ? [0, 0, 156, 0, 0, 0, 156, 0, 0, 0] : [156, 0, 156, 0, 0, 0, 0, 0, 0, 0]);
+            enabled ? [0, 0, 156, 0, 0, 0, 0, 0, 0, 0] : [156, 0, 156, 0, 0, 0, 0, 0, 0, 0]);
         static void SelectFull(TcpPeer peer, ushort slot, ushort id, bool enabled)
         {
             byte[] ack = peer.Select(slot).Single(row => row.Kind == 1 && row.Opcode == 4).Body;
             That(peer.Id == id && U16(ack, 11) == (enabled ? 0 : 156) && U16(ack, 13) == 156 &&
-                U16(ack, 228) == (enabled ? 156 : 0),
-                "选角按本账号开关显示实际或满疲劳");
+                U16(ack, 228) == 0,
+                "选角按本账号开关显示实际或满疲劳，不凭无限疲劳复制电量");
         }
     }
 }

@@ -178,9 +178,6 @@ internal sealed partial class RaidHandler(ServerLog log, RaidCatalog catalog, Ra
                     if (raid is not { Type: 3, Guide: false })
                         context.Sender.Post(0, (ushort)(raid.Type == 2 ? NotiPacketType.PREPARE_START_FIEND_WAR : NotiPacketType.PREPARE_START_RAID),
                             [], "raid_rejoin_prepare", Current);
-                    if (raid.Type == 3)
-                        context.Sender.Post(0, (ushort)NotiPacketType.PREY_RAID, RaidCombatPackets.PreyStatus(1),
-                            "prey_rejoin_initialized", Current);
                     if (raid.Type == 2)
                     {
                         // 释放共享/本人命令门禁后，由原reader等待真实START；补Notice可能读SQL，

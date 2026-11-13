@@ -33,6 +33,16 @@ internal static class QuestCharacterRewardTests
             { Job = "[all]", Exceptions = [new(6,0,"[urgent]")] }
         };
         That(QuestCoverage.HasOrdinaryDeclarations(quest),"已确认角色分类、urgent例外与槽位属性沿普通任务合同");
+        var dungeonDialogue = Field("attribute",[new(6,0,"complete quest in dungeon")]) with
+            { Attributes = ["complete quest in dungeon"] };
+        That(QuestCoverage.HasOrdinaryDeclarations(dungeonDialogue),"副本内交付对话属性不阻断普通任务资格");
+        foreach (var invalid in new[]
+        {
+            Field("attribute",[new(0,25,null)]),
+            Field("attribute",[new(6,0,"complete quest in dungeon")],[new("unknown",[],[])]),
+            Field("attribute",[new(6,0,"complete quest in dungeon"),new(6,0,"future")])
+        })
+            That(!QuestCoverage.HasOrdinaryDeclarations(invalid),"副本交付属性仍拒绝数字、嵌套和未知属性");
         var catalog = new QuestCatalog(new() { [100] = quest });
         var character = new Character(1,0,"Slots",1,new Location(38,2,450,240),null);
         for (byte job = 0; job < 16; job++)

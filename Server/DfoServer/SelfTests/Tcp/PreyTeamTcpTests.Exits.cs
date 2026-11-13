@@ -43,6 +43,35 @@ internal static partial class PreyTeamTcpTests
         int total = definition.Script.Headers.Single(row => row.Tag == "[phase total time over]").Values.Single().Number;
         clock.Advance(total);
         var failed = remaining.Select(_ => new List<WirePacket>()).ToArray();
+        int movieSeconds = definition.Script.Headers.Single(row => row.Tag == "[movie end time]").Values.Max(row => row.Number);
+        long movieDue = checked(clock.GetTimestamp() + movieSeconds * clock.TimestampFrequency);
+        // 观察两个等待都已登记，再推进可控时钟；收到了587本身不能证明异步执行器已开始等待。
+        for (int attempt = 0; attempt < 100 && clock.PendingOneShots.Count(due => due == movieDue) < remaining.Length; attempt++)
+        {
+            for (int index = 0; index < remaining.Length; index++)
+                failed[index].AddRange(Read(remaining[index], "failure movie before return"));
+            if (clock.PendingOneShots.Count(due => due == movieDue) < remaining.Length) await Task.Delay(10);
+        }
+        That(clock.PendingOneShots.Count(due => due == movieDue) >= remaining.Length,
+            "每位留团成员均已写完失败演出两帧并按资源期限登记可取消等待");
+        for (int index = 0; index < remaining.Length; index++)
+            failed[index].AddRange(Read(remaining[index], "failure movie written barrier"));
+        foreach (var rows in failed)
+            That(rows.Any(row => row is { Kind: 0, Opcode: 601, Body: [3, 0, 0, 0, 0, 0, 0, 0, 0, 0] }) &&
+                rows.Any(row => row is { Kind: 0, Opcode: 587, Body: [3, 0] }) &&
+                rows.All(row => row is not { Kind: 0, Opcode: 24, Body: [59, 2, ..] }),
+                "失败先在原场景发送601和587/state3，不提前退回悬崖");
+        clock.Advance(movieSeconds - 1);
+        foreach (var peer in remaining)
+        {
+            peer.Send(1361, Build(writer => { writer.Write((byte)2); writer.Write(key); }));
+            var during = Read(peer, "failure movie command barrier");
+            That(Position(fixture, peer).Area == 4 && during.Any(row => row is { Kind: 1, Opcode: 1361 } &&
+                RaidInformationState(row.Body, key) == 3),
+                "演出期间保留原地点及state3，等待不占命令门禁，末秒之前不退场或用名册提前清电影");
+            failed[Array.IndexOf(remaining, peer)].AddRange(during);
+        }
+        clock.Advance(1);
         for (int attempt = 0; attempt < 100 && remaining.Where((peer, index) => !FailureDisplayed(failed[index], peer)).Any(); attempt++)
         {
             for (int index = 0; index < remaining.Length; index++)
@@ -60,15 +89,16 @@ internal static partial class PreyTeamTcpTests
                 "失败后的完整1361地点将余两名更新为备战区2，不残留原侧区4");
             int arrival = failed[index].FindLastIndex(row => row is { Kind: 0, Opcode: 24, Body: [59, 2, ..] });
             int result = failed[index].FindIndex(row => row is { Kind: 0, Opcode: 601 });
+            int movie = failed[index].FindIndex(row => row is { Kind: 0, Opcode: 587, Body: [3, 0] });
             int ended = failed[index].FindIndex(row => row is { Kind: 0, Opcode: 587, Body: [6, 0] });
             Bytes(failed[index].Single(row => row is { Kind: 0, Opcode: 601 }).Body,
                 [3, 0, 0, 0, 0, 0, 0, 0, 0, 0], "失败601保留完整10B和当前phase0，不伪造成功结算统计");
             That(Returned(failed[index], remaining[index], 2) && Removed(failed[index], party) &&
-                result > arrival && ended > result &&
+                result >= 0 && movie > result && arrival > movie && ended > arrival &&
                 failed[index].Count(row => row is { Kind: 0, Opcode: 601 }) == 1 &&
                 failed[index].Count(row => row is { Kind: 0, Opcode: 587, Body: [6, 0] }) == 1 &&
                 failed[index].All(row => row.Opcode is not (600 or 665)),
-                "总时限失败先以原24回59/2并解除Party，再发送完整601失败与587终态，不强退攻坚队或展示成功奖励");
+                "总时限失败先播放原场景失败演出，再以原24回59/2解除Party，最后发587终态，保留攻坚队且不展示成功奖励");
             That(RaidInformationState(information, key) == 6 &&
                 failed[index].Skip(ended + 1).All(row => row is not { Kind: 0, Opcode: 587, Body: [2, 0] }),
                 "失败后的完整1361及通知保持原生state6，不能重新安装战斗态");
