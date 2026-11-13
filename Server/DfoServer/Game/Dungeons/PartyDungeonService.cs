@@ -141,6 +141,11 @@ internal sealed partial class PartyDungeonService(PartyService parties, IPartyDu
         // 提交完成后仍在命令门禁内移除名册，并释放剩余加载屏障。
         var result = preserveRaidSquad || preserveSolo && party.Members.Length == 1 ? new PartyResult(0, []) : parties.Leave(target);
         if (!result.Accepted) throw new InvalidOperationException("副本回城提交后退队状态不一致");
+        // 权限已按原队长和旧槽校验；只标注实际被踢者，不把回城或附带拆队解释为踢人。
+        if (kickSlot is not null)
+            result = result with { Notices = result.Notices.Select(notice => notice.Kind == PartyNoticeKind.Removed &&
+                ReferenceEquals(notice.Party, party) && ReferenceEquals(notice.Recipient, removed)
+                    ? notice with { RemovalReason = PartyRemovalReason.Kicked } : notice).ToArray() };
         return new(0, result.Notices, [..instance.Detach(target),
             new(PartyDungeonNoticeKind.Departure, removed, instance.Members, Travel: travel)]);
     }

@@ -64,14 +64,25 @@ internal static partial class PartyDungeonTcpTests
 
             peers[2].Send(14, [1]); var refused = group.All(peers[2]);
             That(refused[2].Any(p => p is { Kind: 1, Opcode: 14, Body: [0, 4, 0] }), "普通队员不能踢队长");
+            That(refused.All(rows => rows.All(p => p is not { Kind: 0, Opcode: 10 })), "拒绝踢人不发布强制退队通知");
             peers[1].Send(14, [2]); var kicked = group.All(peers[1]);
             CheckRemoved(kicked[2], null);
+            int kickNotice = Array.FindIndex(kicked[2], p => p is { Kind: 0, Opcode: 10, Body: [2, 0] });
+            int removedNotice = Array.FindIndex(kicked[2], p => p is { Kind: 0, Opcode: 9 } && p.Body[9] == 3);
+            int townNotice = Array.FindIndex(kicked[2], p => p is { Kind: 0, Opcode: 24 });
+            That(kickNotice >= 0 && kickNotice < removedNotice && removedNotice < townNotice &&
+                kicked[2].Count(p => p is { Kind: 0, Opcode: 10 }) == 1 &&
+                !kicked[2].Any(p => p is { Kind: 1, Opcode: 14 }) &&
+                kicked.Where((_, index) => index != 2).All(rows => rows.All(p => p is not { Kind: 0, Opcode: 10 })),
+                "普通副本只向原目标先发旧槽强制退队，再清名册回城，不伪造目标ACK或广播队友");
             That(kicked[1].Any(p => p is { Kind: 1, Opcode: 14, Body: [1] }), "队长踢人只向发起者确认对应命令");
             CheckMenu(peers[2], peers[1], false);
             peers[3].Send(13); var left = group.All(peers[3]); CheckRemoved(left[3], 13);
+            That(left.All(rows => rows.All(p => p is not { Kind: 0, Opcode: 10 })), "主动离队不发布强制退队通知");
             CheckSurvivors(left[1], partyId, 1, [peers[1]], [1]);
             peers[1].Send(42); var solo = group.All(peers[1]);
-            That(solo[1].Any(p => p is { Kind: 0, Opcode: 24 }) && !solo[1].Any(p => p is { Kind: 0, Opcode: 9 } && p.Body[9] == 3),
+            That(solo[1].Any(p => p is { Kind: 0, Opcode: 24 }) && !solo[1].Any(p => p is { Kind: 0, Opcode: 10 } ||
+                p is { Kind: 0, Opcode: 9 } && p.Body[9] == 3),
                 "最后一人放弃副本回城保留单人队伍");
             CheckMenu(peers[1], peers[0], true);
             peers[1].Send(13); group.All(peers[1]); CheckMenu(peers[1], peers[0], false);

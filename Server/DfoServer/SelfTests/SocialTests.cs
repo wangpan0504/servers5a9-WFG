@@ -1,6 +1,7 @@
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Auth;
 using DfoServer.Game.Chat;
+using DfoServer.Game.Party;
 using DfoServer.Game.Session;
 using DfoServer.Game.Social;
 using DfoServer.GameWorld.Towns;
@@ -236,11 +237,24 @@ internal static class SocialTests
                 "委任后原队长立即失去委任、修改及踢人权限，新队长获得设置权限");
             That(parties.TransferLeader(sb, 0).Accepted && transferred.Notices.All(n => n.Guard?.Invoke() == false),
                 "新队长可委任回来，迟到的旧队长投影失效");
+            That(!parties.Leave(sa, 0).Accepted && !parties.Leave(sa, 3).Accepted,
+                "踢自身或空槽不产生移除通知");
+            var kicked = parties.Leave(sa, 1);
+            var removed = kicked.Notices.Single(n => n.Kind == PartyNoticeKind.Removed);
+            That(kicked.Accepted && ReferenceEquals(removed.Recipient.Actor.Session, sb) && removed.Recipient.Slot == 1 &&
+                removed.RemovalReason == PartyRemovalReason.Kicked && removed.Guard?.Invoke() == true &&
+                kicked.Notices.Where(n => !ReferenceEquals(n, removed)).All(n => n.RemovalReason == PartyRemovalReason.None),
+                "成功踢人只标记原目标和旧槽，不标记幸存者更新");
+            That(parties.Invite(sa, sb, 0).Accepted && parties.Respond(sb, actor.Character.Id, 0, true).Accepted &&
+                removed.Guard?.Invoke() == false, "被踢后合法重入使原移除通知失效");
             var left = parties.Leave(sb);
             That(left.Accepted && !parties.HasMultipleMembers(sa) && parties.PartyId(other.Character.Id) == ushort.MaxValue &&
+                left.Notices.All(n => n.RemovalReason == PartyRemovalReason.None) &&
                 joined.Notices.Where(n => n.Kind == DfoServer.Game.Party.PartyNoticeKind.Updated).All(n => n.Guard?.Invoke() == false),
                 "离队更新名册并使在途旧队伍快照失效");
-            parties.Detach(sa);
+            var detached = parties.DetachNotices(sa);
+            parties.Publish(detached);
+            That(detached.All(n => n.RemovalReason == PartyRemovalReason.None), "生命周期清理不标记为踢人");
             That(parties.PartyId(actor.Character.Id) == ushort.MaxValue && parties.PartyId(actor.Character.Id) != createdPartyId,
                 "退出后菜单恢复空队伍哨兵，在途旧菜单不能恢复已清除的队伍标记");
             That(sa.BeginClassExperienceSelection() is not null && sa.ReturnFromDungeonSelection(false) is not null,
@@ -256,6 +270,22 @@ internal static class SocialTests
                 "目标换角后即使旧槽位尚未清理，也不能把队长委任给新epoch");
             parties.Detach(sa);
             parties.Detach(sb);
+            // 仅合成boarding标记，驱动真实Leave→Remove的双人拆队；不代替普雷准入测试。
+            foreach (bool kick in new[] { true, false })
+            {
+                That(parties.Invite(sa, sb, 0).Accepted && parties.Respond(sb, actor.Character.Id, 0, true).Accepted,
+                    "自动拆队原因用例复用真实双人队伍");
+                var boarding = parties.Current(sa)!;
+                typeof(PartySnapshot).GetProperty(nameof(PartySnapshot.PreyBattleId))!.SetValue(boarding, Guid.NewGuid());
+                var dissolved = kick ? parties.Leave(sa, 1) : parties.Leave(sb);
+                var removals = dissolved.Notices.Where(n => n.Kind == PartyNoticeKind.Removed).ToArray();
+                That(dissolved.Accepted && removals.Length == 2 && parties.Current(sa) is null && parties.Current(sb) is null &&
+                    removals.All(n => ReferenceEquals(n.Party, boarding) && n.Guard?.Invoke() == true) &&
+                    removals.Single(n => ReferenceEquals(n.Recipient.Actor.Session, sb)).RemovalReason ==
+                        (kick ? PartyRemovalReason.Kicked : PartyRemovalReason.None) &&
+                    removals.Single(n => ReferenceEquals(n.Recipient.Actor.Session, sa)).RemovalReason == PartyRemovalReason.None,
+                    "双Removed只原被踢者携带原因，附带拆队与主动退出均不冒充踢人");
+            }
             other = sb.CaptureSocialActor()!;
             That(AccountOwners.Lease.ExecuteTogether(a, b, () => a.Execute(() => b.Execute(() => 7))) == 7,
                 "固定双角色入口允许已持两把锁的明确重入");

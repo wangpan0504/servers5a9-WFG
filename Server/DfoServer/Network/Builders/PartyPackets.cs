@@ -4,6 +4,9 @@ namespace DfoServer.Network.Builders;
 
 internal static class PartyPackets
 {
+    // 023A19C0读取旧队伍槽u8、原因u8；reason0使用原生强制退队提示。
+    public static byte[] Kicked(byte slot) => slot < 4 ? [slot, 0] : throw new ArgumentOutOfRangeException(nameof(slot));
+
     // 023A2237读取一个u8；023A24B3..24B8写入UDP管理器的主机槽位。
     public static byte[] Host(byte slot) => slot < 4 ? [slot] : throw new ArgumentOutOfRangeException(nameof(slot));
 
