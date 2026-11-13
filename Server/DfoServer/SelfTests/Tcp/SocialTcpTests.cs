@@ -49,10 +49,21 @@ internal static class SocialTcpTests
             alpha.Send(1684);
             alpha.Expect(0, 1702, Build(w => { for (byte group = 0; group < 4; group++) { w.Write(group); WriteName(w, ""); } }));
             Refresh(alpha, 0);
+            string[] changedNames = ["临时分组", "Stage B", "StageC", "伙伴"];
+            byte[] changedIcons = [6, 5, 1, 7];
+            alpha.Send(1683, GroupRequest(changedIcons, changedNames)); alpha.Expect(1, 1683, [1]);
+            alpha.Expect(0, 1702, GroupInfo(changedIcons, changedNames));
+            That(fixture.Query("SELECT slot,icon,name FROM account_social_groups WHERE account='sociala' ORDER BY slot") is
+                [[0L, 6L, "临时分组"], [1L, 5L, "Stage B"], [2L, 1L, "StageC"], [3L, 7L, "伙伴"]],
+                "首次保存按ACK再1702即时回放已提交四组，不需1684或重选角色");
             alpha.Send(1683, GroupRequest(alphaIcons, alphaNames)); alpha.Expect(1, 1683, [1]);
+            alpha.Expect(0, 1702, alphaGroups);
             That(fixture.Query("SELECT slot,icon,name FROM account_social_groups WHERE account='sociala' ORDER BY slot") is
                 [[0L, 7L, "一二三四五"], [1L, 0L, "Team B"], [2L, 4L, "!"], [3L, 2L, "好友"]],
-                "1683真实分派提交四组后才ACK01，10B名称保持完整");
+                "连续再次保存提交后按ACK再1702回放，10B名称保持完整");
+            beta.Barrier();
+            That(fixture.Query("SELECT count(*) FROM account_social_groups WHERE account='socialb'") is [[0L]],
+                "连续两次保存仅通知本人，不向另一账号发布或写入分组");
             alpha.Send(1684); alpha.Expect(0, 1702, alphaGroups); Refresh(alpha, 0);
             alpha.Send(120); alpha.Expect(1, 120, [1, 0]);
             alpha.Send(290, Build(w => { w.Write(beta.Id); w.Write((byte)2); WriteName(w, "SocialB"); }));
@@ -112,6 +123,7 @@ internal static class SocialTcpTests
             beta.Expect(0, 1702, Build(w => { for (byte group = 0; group < 4; group++) { w.Write(group); WriteName(w, ""); } }));
             Refresh(beta, 0, Request(false, "TeamA"));
             beta.Send(1683, GroupRequest(betaIcons, betaNames)); beta.Expect(1, 1683, [1]);
+            beta.Expect(0, 1702, betaGroups);
             beta.Send(1684); beta.Expect(0, 1702, betaGroups); Refresh(beta, 0, Request(false, "TeamA"));
             alpha.Send(1684); alpha.Expect(0, 1702, alphaGroups); Refresh(alpha, 1, Request(true, "TeamB"));
             That(fixture.Query("SELECT count(*) FROM account_social_groups") is [[8L]], "两个账号各自保存四组，回放互不覆盖");
@@ -166,10 +178,11 @@ internal static class SocialTcpTests
         {
             rejected.Create("GroupsReject"); rejected.Select();
             rejected.Send(1683, GroupRequest(betaIcons, betaNames)); rejected.Expect(1, 1683, [1]);
+            rejected.Expect(0, 1702, betaGroups);
             Execute("CREATE TRIGGER fail_group_packet BEFORE INSERT ON account_social_groups WHEN NEW.account='groupsreject' AND NEW.slot=3 BEGIN SELECT RAISE(ABORT,'fixture'); END");
             rejected.Send(1683, GroupRequest(alphaIcons, alphaNames)); rejected.Closed();
             That(fixture.Query("SELECT name FROM account_social_groups WHERE account='groupsreject' ORDER BY slot") is
-                [["Raid"], ["Farm"], ["Trade"], ["伙伴"]], "1683晚期SQL异常整笔回滚且不发成功ACK");
+                [["Raid"], ["Farm"], ["Trade"], ["伙伴"]], "1683晚期SQL异常整笔回滚且不发成功ACK或1702");
             Execute("DROP TRIGGER fail_group_packet");
         }
         using (var rejected = Open(fixture, "groupsreject"))
