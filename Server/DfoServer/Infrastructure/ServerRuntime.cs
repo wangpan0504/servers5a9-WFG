@@ -1085,7 +1085,7 @@ internal static class ServerRuntime
             new GuildAppearanceHandler(new Game.Guild.GuildAppearanceService(repository,
                 new GameWorld.Guilds.GuildAppearanceCatalog(pvf), guildManagement), log),
             new AuctionHandler(itemResources.Items, auctions, inventoryProjection, auctionProbe.NextSearch, auctionProbe.NextAverage,
-                auctionProbe.NextMyList, log),
+                auctionProbe.NextMyList, log, online),
             new ClientNoticeHandler(log),
             // 聊天：0x0011 入站按 CP936 解析；普通/公会/悄悄话投 0x0C（正文带 CP936 文本，客户端按长度读取），
             // 两种喇叭投已实测可见的 0x76 喇叭页签（见 Docs/模块/聊天.md）。

@@ -208,7 +208,7 @@ internal static class AuctionDepositTests
             using var log = new ServerLog(logDirectory);
             var off = AuctionProbe.Parse("off");
             var handler = new AuctionHandler(catalog, service, projection,
-                () => off.NextSearch(), () => off.NextAverage(), panel => off.NextMyList(panel), log);
+                () => off.NextSearch(), () => off.NextAverage(), panel => off.NextMyList(panel), log, new OnlineSessionDirectory());
             var commands = new GameCommandRegistry();
             handler.Register(commands);
             commands.Seal();

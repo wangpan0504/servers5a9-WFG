@@ -22,6 +22,7 @@ internal static class AuctionListingTests
         Seed();
         Pagination();
         Filters();
+        TemplateCandidates();
         Categories();
         ProductionDatabaseShape();
         CategoryLeaves();
@@ -138,6 +139,33 @@ internal static class AuctionListingTests
         That(f.Search(AuctionCategoryFilter.All, 0).TotalCount == 2, "到期时间等于当前时间的挂牌按已过期处理");
         f.Execute($"UPDATE auction_listings SET expires_at_unix={f.Now + 1} WHERE seller_name='机器人'");
         That(f.Search(AuctionCategoryFilter.All, 0).TotalCount == 3, "未到期的挂牌恢复参与搜索");
+    }
+
+    static void TemplateCandidates()
+    {
+        using var f = new Fixture();
+        f.Repository.InsertListings(Enumerable.Range(0, 12).Select(index =>
+            Stackable(index == 0 ? 7 : null, "候选", index % 2 == 0 ? 3037 : 1000, f.Now,
+                index % 2 == 0 ? ItemKind.Material : ItemKind.Consumable, 1)).Append(
+            Draft(null, "候选外", 101010912, f.Now)).ToImmutableArray());
+        var request = new AuctionSearchRequest(0, null, AuctionCategoryFilter.All)
+        {
+            ItemTemplateIds = [3037, 1000, 3037]
+        };
+        var first = f.Service.Search(request, null, f.Now);
+        var second = f.Service.Search(request with { Offset = 10 }, null, f.Now);
+        That(first.TotalCount == 12 && first.Listings.Length == 10 && second.TotalCount == 12 && second.Listings.Length == 2 &&
+            first.Listings.Concat(second.Listings).Select(row => row.ListingId).Distinct().Count() == 12,
+            "多模板 IN 同时应用于总数与分页，重复模板不重复挂牌，自己的挂牌也可见");
+        That(f.Service.Search(request with { CategoryId = 13002 }, null, f.Now).TotalCount == 6 &&
+            f.Matches(first.Plan!.Filter).Length == 12,
+            "多模板与分类取交集，内存过滤前的全量匹配入口使用同一候选集合");
+        var sorted = f.Service.Search(request with { SortOrder = AuctionSortOrder.PriceDesc }, null, f.Now);
+        That(sorted.TotalCount == 12 && sorted.Listings.All(row => row.ItemTemplateId is 3037 or 1000),
+            "多模板自定义排序仍保持候选限制与正确总数");
+        That(f.Service.Search(request with { ItemTemplateIds = [] }, null, f.Now).TotalCount == 0 &&
+            f.Service.Search(request with { ItemTemplateIds = [999_999] }, null, f.Now).TotalCount == 0,
+            "空候选及不存在模板不会退回全表查询");
     }
 
     /// <summary>
