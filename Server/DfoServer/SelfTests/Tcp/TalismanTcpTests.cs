@@ -124,11 +124,11 @@ internal static class TalismanTcpTests
             That(Rows("list_type=3 AND slot_index=34") == 1, "护石穿戴到装备槽34并提交");
 
             peer.Send(1659, Equip(210, (ushort)runeSlot.Slot, rune));
-            var socketPreload = peer.Expect(0, 14).Body;
+            var socketPreload = peer.Expect(0, 1681).Body;
             That(socketPreload[0] == 46 && U16(socketPreload, 1) == 1 && U16(socketPreload, 3) == 210 &&
-                U32(socketPreload, 5) == (uint)rune, "装载回执前先投影210单枚已提交实例");
+                U32(socketPreload, 5) == (uint)rune, "装载回执前用静默1681投影210单枚已提交实例");
             peer.Expect(1, 1659, Equipped(210, rune));
-            var loaded = peer.Expect(0, 14).Body;
+            var loaded = peer.Expect(0, 1681).Body;
             That(loaded[0] == 46 && U16(loaded, 1) == 2 && U16(loaded, 3) == (ushort)runeSlot.Slot && U32(loaded, 9) == 2 &&
                 U16(loaded, 3 + 123) == 210 && U32(loaded, 3 + 123 + 2) == (uint)rune && U32(loaded, 3 + 123 + 6) == 1,
                 "装载后同页差量同步源堆剩余两枚与210单枚实例");
@@ -138,7 +138,7 @@ internal static class TalismanTcpTests
             // USERINFO 会走 0267C4F0→023C3A90 重灌六符文向量并触发护石面板刷新（00698B70），是图鉴
             // 符文页在按技能筛选时退回「所有技能」的唯一未排除触发路径（#747）。这里断言差量之后直接
             // 就是 216 格重发，中间没有 USERINFO。
-            var loadedResync = peer.Expect(0, 14).Body;
+            var loadedResync = peer.Expect(0, 1681).Body;
             That(loadedResync[0] == 46 && U16(loadedResync, 1) == 216 && loadedResync.Length == 3 + 216 * 123 &&
                 U16(loadedResync, 3 + 210 * 123) == 210 && U32(loadedResync, 3 + 210 * 123 + 2) == (uint)rune &&
                 U32(loadedResync, 3 + runeSlot.Slot * 123 + 6) == 2 &&
@@ -149,15 +149,15 @@ internal static class TalismanTcpTests
 
             // 重放相同装载是原规则允许的替换：旧枚归还、再装一枚，总量不能减少。
             peer.Send(1659, Equip(210, (ushort)runeSlot.Slot, rune));
-            var replayPreload = peer.Expect(0, 14).Body;
+            var replayPreload = peer.Expect(0, 1681).Body;
             That(replayPreload[0] == 46 && U16(replayPreload, 1) == 1 &&
                 U16(replayPreload, 3) == 210 && U32(replayPreload, 5) == (uint)rune,
                 "重放装载仍先投影提交后的210实例");
             peer.Expect(1, 1659, Equipped(210, rune));
-            var replayDelta = peer.Expect(0, 14).Body;
+            var replayDelta = peer.Expect(0, 1681).Body;
             That(replayDelta.AsSpan().SequenceEqual(replayPreload),
                 "相同装载重放只更换孔位实例，源堆数量不变且差量等于预载");
-            var replayResync = peer.Expect(0, 14).Body;
+            var replayResync = peer.Expect(0, 1681).Body;
             That(replayResync[0] == 46 && U16(replayResync, 1) == 216 &&
                 replayResync.AsSpan(3 + 210 * 123, 123).SequenceEqual(replayPreload.AsSpan(3)) &&
                 U32(replayResync, 3 + runeSlot.Slot * 123 + 6) == 2,
@@ -188,37 +188,37 @@ internal static class TalismanTcpTests
                 Rows($"list_type=46 AND slot_index={stoneSlot.Slot}") == 0,
                 "直接卸下后的护石可重新穿戴");
             peer.Send(1659, Equip(210, (ushort)runeSlot.Slot, rune));
-            peer.Expect(0, 14);
+            peer.Expect(0, 1681);
             peer.Expect(1, 1659, Equipped(210, rune));
-            peer.Expect(0, 14);
-            peer.Expect(0, 14);
+            peer.Expect(0, 1681);
+            peer.Expect(0, 1681);
             peer.Barrier();
             That(Rows("list_type=46 AND slot_index=210") == 1 && StackCount(rune) == 2,
                 "重新穿戴后可再次装载符文");
 
             peer.Send(1659, Equip(211, (ushort)runeSlot.Slot, rune));
             peer.Expect(1, 1659, Failure(23));
-            var restore = peer.Expect(0, 14).Body;
+            var restore = peer.Expect(0, 1681).Body;
             That(restore[0] == 46 && U16(restore, 1) == 216 && restore.Length == 3 + 216 * 123 &&
                 U16(restore, 3 + 210 * 123) == 210 && U32(restore, 3 + 210 * 123 + 2) == (uint)rune &&
                 U32(restore, 3 + 211 * 123 + 2) == uint.MaxValue,
-                "拒绝装载后同样以216格差量恢复：210保持已装实例、211仍为空槽，客户端状态与存档一致");
+                "拒绝装载后同样以静默1681的216格差量恢复：210保持已装实例、211仍为空槽，客户端状态与存档一致");
             peer.Barrier();
             That(Rows("list_type=46 AND slot_index=211") == 0 && StackCount(rune) == 2, "孔色不一致被拒绝且不扣材料");
 
             peer.Send(1660, Remove(210));
-            var clearedPreload = peer.Expect(0, 14).Body;
+            var clearedPreload = peer.Expect(0, 1681).Body;
             That(clearedPreload[0] == 46 && U16(clearedPreload, 1) == 1 && U16(clearedPreload, 3) == 210 &&
-                U32(clearedPreload, 5) == uint.MaxValue, "卸除回执前先投影210清空条目");
+                U32(clearedPreload, 5) == uint.MaxValue, "卸除回执前用静默1681投影210清空条目");
             peer.Expect(1, 1660, Removed(210));
-            var returned = peer.Expect(0, 14).Body;
+            var returned = peer.Expect(0, 1681).Body;
             That(returned[0] == 46 && U16(returned, 1) == 2 && U16(returned, 3) == (ushort)runeSlot.Slot &&
                 U32(returned, 9) == 3 && U16(returned, 3 + 123) == 210 && U32(returned, 3 + 123 + 2) == uint.MaxValue,
                 "卸除后同页差量合回三枚并清空210");
             That(returned.AsSpan(3 + 123, 123).SequenceEqual(clearedPreload.AsSpan(3)),
                 "卸除预载与回执后孔位差量是同一清空条目");
             // 卸除同样只发容器差量：210 清空后直接是 216 格重发，不得插入本人 USERINFO。
-            var removedResync = peer.Expect(0, 14).Body;
+            var removedResync = peer.Expect(0, 1681).Body;
             That(removedResync[0] == 46 && U16(removedResync, 1) == 216 && removedResync.Length == 3 + 216 * 123 &&
                 U32(removedResync, 3 + 210 * 123 + 2) == uint.MaxValue &&
                 U32(removedResync, 3 + runeSlot.Slot * 123 + 6) == 3,
@@ -228,7 +228,7 @@ internal static class TalismanTcpTests
 
             peer.Send(1660, Remove(210));
             peer.Expect(1, 1660, Failure(23));
-            var emptyReplay = peer.Expect(0, 14).Body;
+            var emptyReplay = peer.Expect(0, 1681).Body;
             That(emptyReplay.AsSpan().SequenceEqual(removedResync),
                 "空孔重复卸除只拒绝并恢复同一216格状态，不重复归还符文");
             peer.Barrier();
@@ -313,6 +313,39 @@ internal static class TalismanTcpTests
             That(Rows("list_type=3 AND slot_index=34") == 1 && Rows("list_type=46 AND slot_index=210") == 0 &&
                 SocketColors() == colors, "重连保持穿戴、卸除结果与重锻孔色");
             peer.Barrier();
+        }
+        // 已断开测试连接后，将同一隔离夹具的目标源堆设为一枚，覆盖UID整件搬移与空格归还。
+        int singleRune = campRunes.First(id => catalog.Rune(id)!.SocketColor == (byte)colors);
+        long singleUid = Uid(singleRune);
+        fixture.Sql("UPDATE character_inventory_items SET item_core=json_set(item_core,'$.Value',1) WHERE item_uid=$p0", singleUid);
+        using (var peer = Open(fixture))
+        {
+            peer.Select();
+            short sourceSlot = SlotOf(singleRune).Slot;
+            peer.Send(1659, Equip(210, (ushort)sourceSlot, singleRune));
+            peer.Expect(0, 1681);
+            peer.Expect(1, 1659, Equipped(210, singleRune));
+            var loaded = peer.Expect(0, 1681).Body;
+            That(U16(loaded, 1) == 2 && U16(loaded, 3) == (ushort)sourceSlot &&
+                U32(loaded, 5) == uint.MaxValue && U16(loaded, 126) == 210 && U32(loaded, 128) == (uint)singleRune,
+                "单枚装载只用静默差量清源并安装孔位，不额外清空已预载孔位");
+            peer.Expect(0, 1681);
+            peer.Barrier();
+            long installedCount = Convert.ToInt64(fixture.Query(
+                "SELECT json_extract(item_core,'$.Value') FROM character_inventory_items WHERE item_uid=$p0", singleUid)[0][0]);
+            That(SlotOf(singleRune).Slot == 210 && Uid(singleRune) == singleUid && installedCount == 1,
+                "单枚装载保持原UID且只持有一个符文实例");
+            peer.Send(1660, Remove(210));
+            peer.Expect(0, 1681);
+            peer.Expect(1, 1660, Removed(210));
+            var returned = peer.Expect(0, 1681).Body;
+            That(U16(returned, 1) == 2 && U32(returned, 5) == (uint)singleRune &&
+                U32(returned, 9) == 1 && U16(returned, 126) == 210 && U32(returned, 128) == uint.MaxValue,
+                "空背包格归还同一单枚实例，孔位清空且不播放获得提示");
+            peer.Expect(0, 1681);
+            peer.Barrier();
+            That(SlotOf(singleRune).Slot is >= 70 and < 210 && Uid(singleRune) == singleUid && StackCount(singleRune) == 1,
+                "卸除至空格后UID与单枚数量不变");
         }
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0,
             "护石 TCP 夹具无外键或完整性异常");
