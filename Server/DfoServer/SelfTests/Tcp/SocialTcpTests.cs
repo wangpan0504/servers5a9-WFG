@@ -198,6 +198,37 @@ internal static class SocialTcpTests
             alpha.Expect(0, 1378, Build(w => WriteName(w, "TeamB"))); Refresh(alpha, 0);
             That(fixture.Query("SELECT count(*) FROM account_social_links") is [[0L]], "冒险团好友删除双方边并同步删除通知");
         }
+        // 喇叭目标沿既有1439精确账号名寻址：完整32B可用，短前缀和同账号都不能命中。
+        using (var requester = Open(fixture, "targetrequest"))
+        using (var target = Open(fixture, "targetlong"))
+        {
+            requester.Create("TargetAsk"); target.Create("TargetLong");
+            requester.Select(); target.Select();
+            string fullName = new('测', 16), prefixName = new('测', 8);
+            fixture.Sql("UPDATE account_adventures SET name='TargetRequester',name_initialized=1 WHERE account='targetrequest'");
+            fixture.Sql("UPDATE account_adventures SET name=$p0,name_initialized=1 WHERE account='targetlong'", fullName);
+            byte[] Add(string name) => Build(w =>
+            {
+                WriteName(w, name); WriteName(w, "喇叭邀请"); w.Write((byte)0); WriteName(w, "");
+            });
+            requester.Send(1439, Add(prefixName)); requester.Expect(1, 1439, [0, 3, 0]);
+            That(fixture.Query("SELECT count(*) FROM account_social_requests WHERE source_account='targetrequest'") is [[0L]],
+                "16B前缀不误命中32B冒险团名，不产生错误邀请");
+            requester.Send(1439, Add(fullName));
+            requester.Expect(1, 1439, Build(w => { w.Write((byte)1); WriteName(w, fullName); w.Write((byte)0); WriteName(w, ""); }));
+            That(fixture.Query("SELECT source_account,target_account FROM account_social_requests WHERE source_account='targetrequest'")
+                is [["targetrequest", "targetlong"]], "32B/16UTF16完整邀请键精确命中目标账号，不按角色名或截断别名查询");
+            byte[] Pending(bool outgoing, string name) => Build(w =>
+            {
+                w.Write((byte)1); w.Write(outgoing ? (byte)1 : (byte)0); WriteName(w, name);
+                WriteName(w, "喇叭邀请"); w.Write(0x7ffeae7fu);
+            });
+            Refresh(requester, 0, Pending(true, fullName));
+            Refresh(target, 0, Pending(false, "TargetRequester"));
+            target.Send(1439, Add(fullName)); target.Expect(1, 1439, [0, 3, 0]);
+            That(fixture.Query("SELECT count(*) FROM account_social_requests WHERE source_account='targetlong'") is [[0L]],
+                "完整长名仍保留同账号拒绝错误3，不为换角喇叭放宽自身好友规则");
+        }
         That(fixture.Query("PRAGMA foreign_key_check").Length == 0 && fixture.Query("PRAGMA integrity_check") is [["ok"]],
             "社交操作重启后保持外键与数据库完整");
         Console.WriteLine($"PASS {Count - before} 玩家社交、名字聊天、资料及重启TCP断言");

@@ -1,5 +1,7 @@
 using System.Buffers.Binary;
 using DfoServer.Game.Chat;
+using DfoServer.Game.Adventure;
+using DfoServer.Game.Characters;
 
 namespace DfoServer.Network.Builders;
 
@@ -12,10 +14,10 @@ namespace DfoServer.Network.Builders;
 /// type11对应道具36，type13对应道具37，type14是1120官方路径。str1是角色名，str2是正文。
 /// </para>
 /// <para>
-/// 客户端硬性要求（此前所有失败的真因）：三条字符串<b>都必须非空</b>（<c>len ≥ 1</c>），
-/// 任一条写 <c>len = 0</c> 会让客户端把<b>整帧丢弃</b>；长度上限分别是 <c>str1 &lt; 0x1E</c>、
-/// <c>str2 &lt; 0x200</c>、<c>str3 &lt; 0x11</c>，这里复用 <see cref="ChatText"/> 的截断逻辑按字符边界回退
-/// （不会切出半个汉字），截空时再回退成单字节占位，保证任何输入都不会生成 <c>len = 0</c> 的串。
+/// str1/str2保留既有29/511字节截断及非空回退；str3是账号冒险团邀请目标，
+/// 按现行命名合同完整编码为CP936最多32字节/16UTF16，不截断、不替代、不回退合法占位。
+/// 空或未初始化/非法账号名写长度0；配套客户端两tag局部reader解耦窄字节/宽字符容量，
+/// 空metadata经原非空菜单门不形成邀请目标，不将reader返回0误称整帧必丢。
 /// </para>
 /// <para>
 /// 正式投递携带发送者的频道身份，不能以接收者频道或全0代替；来源与本机分组/频道匹配时客户端复用本地角色上下文。
@@ -38,13 +40,10 @@ internal static class MegaphonePackets
     /// <summary><c>str2</c>（正文）字节上限；客户端要求 <c>len &lt; 0x200</c>，所以最多 511 字节。</summary>
     public const int TextMaxBytes = 0x200 - 1;
 
-    /// <summary><c>str3</c>（附加标记）字节上限；客户端要求 <c>len &lt; 0x11</c>，所以最多 16 字节。</summary>
-    public const int TagMaxBytes = 0x11 - 1;
+    /// <summary><c>str3</c>账号冒险团名的完整编码上限；另须满足16UTF16的现行命名合同。</summary>
+    public const int TagMaxBytes = 32;
 
-    /// <summary><c>str3</c> 的固定占位：画面不显示，只用来保证该串非空。</summary>
-    public const string Tag = "X";
-
-    // 三条串都必须 len >= 1（否则整帧被丢弃），空输入回退成单字节 ASCII。
+    // 只有发言人/正文沿用非空回退；目标串不能生成可命中另一账号的占位。
     const string SpeakerFallback = "?";
     const string TextFallback = " ";
 
@@ -60,18 +59,18 @@ internal static class MegaphonePackets
         _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "只有喇叭种类有 0x0076 类型")
     };
 
-    /// <summary>按种类构造一帧 <c>NOTI 0x0076</c> 正文，<c>str3</c> 用固定占位（生产入口）。</summary>
+    /// <summary>不提供账号冒险团名时目标为空，不以角色名或固定占位代替。</summary>
     public static byte[] Build(ChatKind kind, string speaker, string text) => Build(kind, speaker, text, null);
 
     public static byte[] Build(ChatKind kind, MegaphoneText message) => Build(kind, message.Speaker, message.Text,
-        null, message.Channel.ServerIndex, message.Channel.Number, message.Actor);
+        message.AdventureName, message.Channel.ServerIndex, message.Channel.Number, message.Actor);
 
     public static byte[] BuildBytes(ChatKind kind, MegaphoneText message, byte[] text) => Build(kind, message.Speaker,
-        text.Length == 0 ? [(byte)' '] : text, null, message.Channel.ServerIndex, message.Channel.Number, message.Actor);
+        text.Length == 0 ? [(byte)' '] : text, message.AdventureName, message.Channel.ServerIndex, message.Channel.Number, message.Actor);
 
     /// <summary>
-    /// 按种类构造一帧 <c>NOTI 0x0076</c> 正文；<paramref name="tag"/> 为 <c>null</c> 时用 <see cref="Tag"/>。
-    /// 给出显式 <c>str3</c> 只用于复现实测帧，生产投递不要传。
+    /// 按种类构造一帧 <c>NOTI 0x0076</c> 正文；<paramref name="tag"/> 是完整账号冒险团名，
+    /// 空或不合法时写空目标，不截断或替代。生产投递通过MegaphoneText携带owner快照。
     /// </summary>
     public static byte[] Build(ChatKind kind, string speaker, string text, string? tag,
         byte server = 0, byte channel = 0, ushort actor = 0) =>
@@ -81,7 +80,7 @@ internal static class MegaphonePackets
         byte server, byte channel, ushort actor)
     {
         byte[] speakerBytes = Encode(speaker, SpeakerMaxBytes, SpeakerFallback);
-        byte[] tagBytes = Encode(tag ?? Tag, TagMaxBytes, Tag);
+        byte[] tagBytes = EncodeAdventureTarget(tag);
 
         byte[] body = new byte[HeaderLength + 3 * sizeof(uint) + speakerBytes.Length + textBytes.Length + tagBytes.Length];
         body[0] = TypeOf(kind);
@@ -104,6 +103,14 @@ internal static class MegaphonePackets
         (TypeOf(kind),
             Encode(speaker, SpeakerMaxBytes, SpeakerFallback).Length,
             Encode(text, TextMaxBytes, TextFallback).Length);
+
+    /// <summary>邀请键必须完整满足现行冒险团命名合同；坏旧数据只失去目标，不生成截断别名。</summary>
+    public static byte[] EncodeAdventureTarget(string? name)
+    {
+        if (name is null || !AdventureName.IsValid(name)) return [];
+        byte[] bytes = CharacterName.Encoding.GetBytes(name);
+        return bytes.Length <= TagMaxBytes && CharacterName.Encoding.GetString(bytes) == name ? bytes : [];
+    }
 
     /// <summary>写一条 <c>u32LE 字节长度 + 字节</c>，返回下一段的偏移。</summary>
     static int WriteString(byte[] body, int offset, byte[] bytes)

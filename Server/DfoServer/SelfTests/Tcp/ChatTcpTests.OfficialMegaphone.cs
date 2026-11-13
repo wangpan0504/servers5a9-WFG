@@ -1,4 +1,5 @@
 using DfoServer.Game.Accounts;
+using DfoServer.Game.Auth;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Chat;
 using DfoServer.Game.Inventory.Models;
@@ -25,7 +26,13 @@ internal static partial class ChatTcpTests
             new(0, new(InventoryListType.Main, 71), core),
             new(0, new(InventoryListType.Main, 72), core with { EquipmentLockId = 1 }),
             new(0, new(InventoryListType.Main, 73), core with { ExpireTime = checked((int)clock.GetUtcNow().ToUnixTimeSeconds() + 20) })]);
+        new AuthenticationService(new AuthenticationRepository(fixture.Database)).Create("30011", "fixture-password");
         repository.Create(owner, new NewCharacter("GMRule", resources.Towns.Room, resources.Towns.InitialReturn) { Inventory = inventory });
+        repository.InitializeAdventure(owner, resources.Adventure, clock.GetUtcNow());
+        fixture.Sql("UPDATE account_adventures SET name=$p0,name_initialized=1 WHERE account='30011'", new string('测', 16));
+        That(fixture.Query("SELECT account,name,name_initialized FROM account_adventures WHERE account='30011'")
+            is [["30011", string initializedName, 1L]] && initializedName == new string('测', 16),
+            "隔离账号已实际建号及初始化一行32B冒险团，不以零行UPDATE冒充准备完成");
         var session = new GameSession(repository, resources.Towns, owner, entry: new(new(2, 10), 22, "[granfloris]"),
             items: resources.ItemResources.Items, timeProvider: clock);
         try
@@ -52,9 +59,11 @@ internal static partial class ChatTcpTests
 
             ChatNotice? queued = null;
             session.ChatNoticeArrived = notice => queued = notice;
-            var origin = session.ChatOrigin()!;
+            var origin = session.ChatOrigin(includeAdventureName: true)!;
+            That(origin.AdventureName == new string('测', 16), "owner内账号长名快照与角色/频道同时取得");
             session.TryDeliverChat(_ => true, new(ChatKind.OfficialMegaphone, origin.CharacterId, origin.ChannelNumber,
-                Megaphone: new(origin.Name, "queued") { Channel = origin.Scene.Channel, Actor = origin.CharacterId })
+                Megaphone: new(origin.Name, "queued")
+                { Channel = origin.Scene.Channel, Actor = origin.CharacterId, AdventureName = origin.AdventureName })
                 { Origin = origin, Guard = origin.IsCurrent });
             That(queued?.Guard?.Invoke() == true, "当前身份的GM喇叭出队资格有效");
             session.ReturnToRoster();
@@ -66,7 +75,8 @@ internal static partial class ChatTcpTests
                 "重选同角色仅新epoch有效，已排队GM喇叭不复活");
             using var replacement = owners.Acquire("30011", () => { });
             Reject<InvalidOperationException>(() => session.CanUseOfficialChatMegaphone(71), "旧owner不能复用1120只读资格");
-            That(!queued.Guard!(), "账号接管后旧GM消息守卫拒绝");
+            That(!queued.Guard!() && queued.Megaphone!.AdventureName == new string('测', 16),
+                "账号接管后旧GM消息守卫拒绝，旧消息账号名快照仍独立不被换角改写");
         }
         finally { session.End(); }
 
@@ -112,18 +122,18 @@ internal static partial class ChatTcpTests
             string text = "无限GM" + attempt;
             alpha.Send(CommandSendMessage, SendBody(14, 9999, 71, text));
             foreach (var peer in peers)
-                Same(peer.Expect(0, NoticeMegaphone).Body, MegaphoneBody(14, "ChatA", text, 2, 10, alpha.Id),
+                Same(peer.Expect(0, NoticeMegaphone).Body, MegaphoneBody(14, "ChatA", text, 2, 10, alpha.Id, AlphaAdventureTarget),
                     "1120重复文字保持14与真实来源，投递同分组的其他频道");
             BarrierAll();
         }
         alpha.Send(CommandItemHyperlink, Quoted(71, equipment, stackable));
         foreach (var peer in peers)
-            Same(peer.Expect(0, 372).Body, LinkedMegaphoneBody(14, alpha.Id, 10, "ChatA", expectedText, equipment, stackable),
+            Same(peer.Expect(0, 372).Body, LinkedMegaphoneBody(14, alpha.Id, 10, "ChatA", expectedText, AlphaAdventureTarget, equipment, stackable),
                 "1120引用使用原372头、真实发言人和完整148B记录，不扣源");
         BarrierAll();
         alpha.Send(CommandItemHyperlink, Quoted(71));
         foreach (var peer in peers)
-            Same(peer.Expect(0, NoticeMegaphone).Body, MegaphoneBody(14, "ChatA", Text.GetString(expectedText), 2, 10, alpha.Id),
+            Same(peer.Expect(0, NoticeMegaphone).Body, MegaphoneBody(14, "ChatA", Text.GetString(expectedText), 2, 10, alpha.Id, AlphaAdventureTarget),
                 "1120记录不足仅降级118/type14，不改普通喇叭或聊天");
         BarrierAll();
 
@@ -132,7 +142,7 @@ internal static partial class ChatTcpTests
             alpha.Send(CommandSendMessage, SendBody(14, 9999, 71, "GM限频" + attempt));
         for (int attempt = 0; attempt < ChatRateLimiter.ShortWindowLimit; attempt++)
             foreach (var peer in peers)
-                Same(peer.Expect(0, NoticeMegaphone).Body, MegaphoneBody(14, "ChatA", "GM限频" + attempt, 2, 10, alpha.Id),
+                Same(peer.Expect(0, NoticeMegaphone).Body, MegaphoneBody(14, "ChatA", "GM限频" + attempt, 2, 10, alpha.Id, AlphaAdventureTarget),
                     "无限使用不绕过原每连接限频");
         BarrierAll();
         That(fixture.Snapshot() == before && fixture.Snapshot("SELECT * FROM inventory_audit_log ORDER BY rowid") == auditBefore &&

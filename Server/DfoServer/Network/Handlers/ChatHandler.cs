@@ -236,7 +236,8 @@ internal sealed class ChatHandler(ChatService chat, InventoryProjection? invento
             return CommandResult.Handled;
         }
 
-        var origin = context.Session.ChatOrigin();
+        var origin = context.Session.ChatOrigin(includeAdventureName: kind is
+            ChatKind.ServerMegaphone or ChatKind.ChannelMegaphone or ChatKind.OfficialMegaphone);
         if (origin is null)
         {
             log.Write("chat_rejected", new { Connection = context.Id, Reason = "no-character", send.Type });
@@ -320,7 +321,8 @@ internal sealed class ChatHandler(ChatService chat, InventoryProjection? invento
             return CommandResult.Handled;
         }
 
-        var origin = context.Session.ChatOrigin();
+        var origin = context.Session.ChatOrigin(includeAdventureName: kind is
+            ChatKind.ServerMegaphone or ChatKind.ChannelMegaphone or ChatKind.OfficialMegaphone);
         if (origin is null)
         {
             log.Write("chat_rejected", new { Connection = context.Id, Reason = "no-character", link.Kind });
@@ -352,7 +354,7 @@ internal sealed class ChatHandler(ChatService chat, InventoryProjection? invento
                     origin.Scene.Channel.ServerIndex, ""), link.Text, link.Records)
                 : kind is ChatKind.ServerMegaphone or ChatKind.ChannelMegaphone or ChatKind.OfficialMegaphone
                     ? ItemLinkPackets.DesignMegaphone(kind, new(origin.Name, "")
-                        { Channel = origin.Scene.Channel, Actor = origin.CharacterId }, link.Text, link.Records)
+                        { Channel = origin.Scene.Channel, Actor = origin.CharacterId, AdventureName = origin.AdventureName }, link.Text, link.Records)
                     : ItemLinkPackets.Design(kind, origin.CharacterId, origin.Name, link.Text, link.Records,
                         origin.Scene.Channel.ServerIndex);
             log.Write("item_hyperlink", new
