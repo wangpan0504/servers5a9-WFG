@@ -13,6 +13,8 @@ internal static partial class DungeonRoomCatalogTests
     {
         int checks = Count;
         var fixture = new Fixture();
+        RunMonsterFollowers();
+        NativeMissingRankPrefix(fixture);
         foreach (string tag in new[] { "no champion", "is named monster" })
         {
             bool Restricted(params PvfToken[] body) => DungeonRoomCatalog.ParseChampionRestriction(body, id => fixture.Resolve(id));
@@ -472,6 +474,51 @@ internal static partial class DungeonRoomCatalogTests
         Reject(() => fixture.Parse(fixture.Block("buff", [new(7, 1)])), "opaque buff reference rejected");
         Reject(() => fixture.Parse([fixture.Tag("buff"), new(0, 0)]), "unclosed buff block rejected");
         Console.WriteLine($"PASS {Count - checks} dungeon room resource assertions");
+    }
+
+    private static void NativeMissingRankPrefix(Fixture fixture)
+    {
+        var values = new[] { 1, 0, 95, 573, 197, 0, 1, 1 };
+        var missing = fixture.Block("monster", [.. values.Select(value => new PvfToken(0,value)), fixture.String("[fixed]")]);
+        var npc = fixture.Block("NPC", [new(0,1000),fixture.String("[left]"),new(0,100),new(0,200),new(0,0)]);
+        PvfToken[] suffix =
+        [
+            .. npc, .. fixture.Block("buff", [new(0,999)]),
+            .. fixture.Block("event monster position", [new(0,1)]),
+            fixture.Tag("ai character"), new(0,6000), fixture.Tag("/ai character"),
+            fixture.Tag("type"), fixture.String("[boss]")
+        ];
+        var room = fixture.Parse([.. missing, .. suffix]);
+        That(room.Monsters is [{ RankKind: null, PlacementKind: "[fixed]", Modifiers.Count: 0, NpcParameter: null }] &&
+            room.Monsters[0].RawValues.SequenceEqual(values) && room.Monsters[0].Path == "monster/fixture.mob",
+            "缺rank怪物保留八整数、原路径和缺失事实，不补normal或附加属性");
+        That(room.Npcs.Count == 0 && room.NpcMetadataError is null && room.Buffs.Count == 0 &&
+            room.EventMonsterPositions.Count == 0 && room.AiCharacters.Count == 0 && room.AltarWaves is null && room.DeclaredType is null,
+            "原生停止分派后不消费NPC、buff、事件、APC、祭坛或地图类型后缀");
+        var before = fixture.Parse([.. npc, .. fixture.Block("buff", [new(0,7)]), .. missing, .. suffix]);
+        That(before.Npcs is [{ Id: 1000 }] && before.Buffs.SequenceEqual([7]), "原生停止点前已消费的声明仍保留");
+        var normal = fixture.Monster(values);
+        var both = fixture.Parse(fixture.Block("monster", [.. normal[1..^1], .. missing[1..^1]]));
+        That(both.Monsters.Count == 2 && both.Monsters[0].RankKind == "[normal]" && both.Monsters[1].RankKind is null,
+            "停止点保留此前怪物顺序和显式品级");
+        var plan = DungeonMonsterPlan.FromRoom(both,99,10,playerTeam:0);
+        That(plan.Monsters.Count == 2 && plan.Monsters[1].SourceOrdinal == 1 && plan.Monsters[1].SpawnType == 0 &&
+            plan.Monsters[1].ObjectKey == 11 && !plan.Monsters[1].IsBoss && plan.Monsters[1].Source!.RankKind is null,
+            "缺rank行按原生初值投影类型0，保留原ordinal、key和缺失品级");
+        int draws = 0;
+        var implicitOnly = plan with { Monsters = [plan.Monsters[1]] };
+        That(ReferenceEquals(implicitOnly.WithChampionRolls(new(100,100,100,100),0,max => { draws++; return 0; }),implicitOnly) && draws == 0,
+            "未声明rank不获得显式normal的随机精英资格");
+        var complete = fixture.Parse([.. normal, .. npc, .. fixture.Block("buff",[new(0,8)])]);
+        That(complete.Monsters[0].RankKind == "[normal]" && complete.Npcs.Count == 1 && complete.Buffs.SequenceEqual([8]),
+            "完整显式rank仍消费正常后续资源，不受缺rank截断规则影响");
+        Reject<NotSupportedException>(() => fixture.Parse([.. missing[..^1], .. npc]), "未闭合怪物块不按缺rank放行");
+        Reject<NotSupportedException>(() => fixture.Parse(fixture.Block("monster",[.. values.Take(7).Select(value => new PvfToken(0,value)),fixture.String("[fixed]")])),
+            "七整数不能冒充已证八整数缺rank行");
+        Reject<NotSupportedException>(() => fixture.Parse(fixture.Block("monster",[.. missing[1..^1],.. normal[1..^1]])),
+            "非块末缺rank不恢复被跳过的下一怪物");
+        Reject<NotSupportedException>(() => fixture.Parse(fixture.Block("condition",missing)),
+            "条件块中的缺rank行不能提升成无条件生成来源");
     }
 
     private sealed class Fixture

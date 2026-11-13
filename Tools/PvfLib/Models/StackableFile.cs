@@ -40,6 +40,7 @@ public sealed record StackableFile(int TemplateId, string ScriptPath,
     public IReadOnlyList<int>? DeclaredBoosterEtc { get; init; }
     public int? DeclaredStackInAccountInventory { get; init; }
     public bool HasStackInAccountInventory { get; init; }
+    public bool HasCommonInventory { get; init; }
 
     public static StackableFile Parse(int templateId, string path, PvfToken[] tokens, Func<int, string> resolve)
     {
@@ -49,7 +50,7 @@ public sealed record StackableFile(int TemplateId, string ScriptPath,
                 "action usable server type", "need material", "dont change grow type", "usable first growtype",
                 "class change grow type check off", "stackable action limit indexes",
                 "stackable action result limit indexes", "creature minimum level", "levelup range", "cool time",
-                "stack in account inventory"]);
+                "stack in account inventory", "stack in account common item inventory"]);
         StackableTypeDeclaration? type = null;
         PvfTokenDocument? repeatedDocument = null;
         PvfTokenSection[] RepeatedSections(string name)
@@ -136,6 +137,8 @@ public sealed record StackableFile(int TemplateId, string ScriptPath,
             name == "action usable place" && places is not null)).ToArray();
         return new(templateId, path, type, limit, price, sellPrice, minimum, group, Array.AsReadOnly(unsupported))
         {
+            // stack in account common item inventory 是无参数的存在标记，不能按账号材料的0/1标量读取。
+            HasCommonInventory = tokens.Any(token => token.Type == 3 && resolve(token.Value) == "[stack in account common item inventory]"),
             DeclaredStackInAccountInventory = accountInventory,
             HasStackInAccountInventory = tokens.Any(token => token.Type == 3 && resolve(token.Value) == "[stack in account inventory]"),
             ActionDeclaration = action, HasActionType = tokens.Any(token => token.Type == 3 && resolve(token.Value) == "[action type]"),

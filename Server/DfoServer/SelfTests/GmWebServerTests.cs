@@ -45,6 +45,7 @@ internal static partial class GmWebServerTests
             if (line.StartsWith("item-filter")) return "OK {\"total\":0,\"offset\":0,\"items\":[]}";
             if (line.Contains(" stats ")) return "OK {\"stats\":{}}";
             if (line.Contains(" title-list ")) return "OK {\"total\":0,\"quests\":[]}";
+            if (line.Contains(" npc-favor-max ")) return InGame ? "ERR 角色正在游戏中" : "OK {\"name\":\"Hero\",\"characterId\":7,\"total\":36}";
             if (InGame && line.Contains(" title-complete ")) return "ERR 角色正在游戏中，客户端背包或邮箱不会即时刷新；请先回到选角再执行";
             if (line.StartsWith("item-search")) return "OK {\"total\":1,\"offset\":0,\"items\":[{\"id\":100,\"name\":\"剑\",\"tag\":\"x\",\"minLevel\":1,\"rarity\":2,\"set\":0}]}";
             if (line.Contains(" show ")) return "OK Hero id=7 level=" + (Commands.Count(c => c.Contains(" level ")) == 0 ? 50 : 60);
@@ -166,6 +167,27 @@ internal static partial class GmWebServerTests
             using var response = await http.SendAsync(request);
             TestCheck.That(response.IsSuccessStatusCode && data.Commands.Contains("account acct reward-limit-reset"),
                 "奖励限额刷新确认后透传账号命令并返回真实回执");
+        }
+        foreach (var row in new[] { (Account: "acct", Confirm: false, Accept: false),
+            (Account: "bad account", Confirm: true, Accept: false), (Account: "acct", Confirm: true, Accept: true) })
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, "/api/dungeon-limit-reset")
+            { Content = JsonContent.Create(new { account = row.Account, confirm = row.Confirm }) };
+            request.Headers.Add("X-GM-Request", "1");
+            int previous = data.Commands.Count;
+            using var response = await http.SendAsync(request);
+            TestCheck.That(response.IsSuccessStatusCode == row.Accept && (row.Accept
+                ? data.Commands.Skip(previous).SequenceEqual(["account acct dungeon-limit-reset"])
+                : data.Commands.Count == previous), "组合额度刷新验证确认和账号，只执行一次原子命令");
+        }
+        using (var request = new HttpRequestMessage(HttpMethod.Post, "/api/debug")
+        { Content = JsonContent.Create(new { key = "infinite-fatigue", value = "on", confirm = true }) })
+        {
+            request.Headers.Add("X-GM-Request", "1");
+            int previous = data.Commands.Count;
+            using var response = await http.SendAsync(request);
+            TestCheck.That(response.StatusCode == HttpStatusCode.BadRequest && data.Commands.Count == previous,
+                "疲劳开关缺当前账号时不回退全局命令");
         }
         foreach (string path in new[] { "/index.html", "/assets/app.js", "/assets/gm.css", "/assets/missing.js", "/assets/..%2Findex.html" })
             TestCheck.That((await http.GetAsync(path)).StatusCode == HttpStatusCode.NotFound, "旧静态入口均为404：" + path);
@@ -378,6 +400,21 @@ internal static partial class GmWebServerTests
         data.InGame = true;
         TestCheck.That((await Post("/api/direct/set", new { account = "acct", name = "Hero", setIndex = 2, upgrade = 0, refine = 0, confirm = true })).StatusCode == HttpStatusCode.BadRequest, "直接发套装同样要求先小退");
 
+        int beforeFavor = data.Commands.Count;
+        TestCheck.That((await Post("/api/npc-favor/max", new { account = "acct", name = "Hero" })).StatusCode == HttpStatusCode.BadRequest &&
+            data.Commands.Count == beforeFavor, "好感度拉满缺确认不执行GM命令");
+        data.InGame = true;
+        TestCheck.That((await Post("/api/npc-favor/max", new { account = "acct", name = "Hero", confirm = true })).StatusCode == HttpStatusCode.BadRequest,
+            "好感度拉满沿服务端拒绝在线角色");
+        data.InGame = false;
+        var favorMax = await Post("/api/npc-favor/max", new { account = "acct", name = "Hero", confirm = true });
+        TestCheck.That(favorMax.IsSuccessStatusCode && data.Commands.Last() == "account acct npc-favor-max Hero" &&
+            (await favorMax.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("data").GetProperty("total").GetInt32() == 36,
+            "HTTP好感度拉满传递明确账号角色并返回真实凭据");
+        var favorAudit = await http.GetFromJsonAsync<JsonElement>("/api/audit?action=npc-favor-max&limit=50");
+        TestCheck.That(favorAudit.EnumerateArray().Any(row => row.GetProperty("ok").GetBoolean()) &&
+            favorAudit.EnumerateArray().Any(row => !row.GetProperty("ok").GetBoolean()), "好感度写入成功与拒绝均保留GM审计");
+
         // 扩展装备栏：只读走命令；写入只接受1/2/16组合，在线角色须 returnFirst 先小退，两步都审计。
         TestCheck.That((await http.GetAsync("/api/characters/acct/Hero/equip-slots")).IsSuccessStatusCode && data.Commands.Contains("account acct equip-slots Hero"), "扩展装备栏只读接口");
         data.InGame = true; data.Returned.Clear();
@@ -476,7 +513,7 @@ internal static partial class GmWebServerTests
             TestCheck.That((await http.GetAsync("/api/events?id=" + id)).StatusCode == HttpStatusCode.BadRequest &&
                 data.Commands.Count == rejectedEvents, "活动查询拒绝未登记或无效编号：" + id);
         var eventAudit = (await http.GetFromJsonAsync<JsonElement>("/api/audit?limit=200")).EnumerateArray()
-            .Where(row => row.GetProperty("target").GetString() == "-/诺兰显示").ToArray();
+            .Where(row => row.GetProperty("target").GetString() == "-/阿拉德谋略战").ToArray();
         TestCheck.That(eventAudit.Length == 3 && eventAudit.All(row => row.GetProperty("ok").GetBoolean()) &&
             eventAudit.Select(row => row.GetProperty("action").GetString()).ToHashSet().SetEquals(["event-on", "event-off", "event-auto"]),
             "诺兰网页三种持久开关写入原审计，不覆盖黄金牌记录");

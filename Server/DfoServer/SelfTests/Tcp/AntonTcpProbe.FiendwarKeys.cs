@@ -116,7 +116,7 @@ internal static partial class AntonTcpProbe
         return keyLeases.GetOrCreateValue(peer).Available.Dequeue();
     }
 
-    // 预期拒绝的生成只观察已授键，不提前消耗本地信用；合法报告才由Take取走。
+    // 仅窥视队列；模拟原生已采用的FWS2必须由Take取走，不能因预期登记被拒而保留本地信用。
     internal static ushort PeekFiendwarKey(TcpPeer peer)
     {
         var state = keyLeases.GetOrCreateValue(peer);

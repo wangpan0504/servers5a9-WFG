@@ -48,6 +48,7 @@ internal sealed class InventoryEquipmentUpgradeService(ItemCatalog items, Equipm
         var upgraded = source.Core with
         {
             ItemId = request.TargetId,
+            Rune = 0,
             Attr = (byte)((source.Core.Attr & 0xE0) | request.Upgrade),
             GenuineUpgrade = request.GenuineUpgrade,
             EnchantCardId = request.InheritEnchant ? source.Core.EnchantCardId : 0,
@@ -103,6 +104,7 @@ internal sealed class InventoryEquipmentUpgradeService(ItemCatalog items, Equipm
         // 目标实例、品级和材质不变；打造逐字段覆盖，不能取高值，也不能复制源完整核心。
         var inherited = target.Core with
         {
+            Rune = 0,
             Attr = (byte)((target.Core.Attr & 0xE0) | source.Core.Upgrade),
             AmplifyType = source.Core.AmplifyType,
             AmplifyValue = source.Core.AmplifyValue,
@@ -153,7 +155,7 @@ internal sealed class InventoryEquipmentUpgradeService(ItemCatalog items, Equipm
         after = CurrencyWallet.Set(after, CurrencyKind.Gold, CurrencyWallet.Get(after, CurrencyKind.Gold) - gold);
         after = after with
         {
-            Items = after.Items.Replace(source, source with { Core = source.Core with { ItemId = targetId } })
+            Items = after.Items.Replace(source, source with { Core = source.Core with { ItemId = targetId, Rune = 0 } })
         };
         return new(true, 0, CreatePlan(character, after, "equipment_power_conversion", source));
     }

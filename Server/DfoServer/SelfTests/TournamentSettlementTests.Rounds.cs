@@ -93,7 +93,7 @@ internal static partial class TournamentSettlementTests
         var room = new DungeonRoomDefinition(map, apc ? [] : monsters, [], [])
         {
             AiCharacters = apc ? monsters.Select(monster => new DungeonRoomAiCharacter(monster.MonsterId,
-                [monster.MonsterId, 760, 270, 0, 0, 0], "[monster]", monster.RankKind,
+                [monster.MonsterId, 760, 270, 0, 0, 0], "[monster]", monster.RankKind ?? throw new InvalidDataException("合成大会怪物必须显式声明品级"),
                 "aicharacter/fixture-tournament-rounds.aic", 70)).ToArray() : []
         };
         var plan = DungeonMonsterPlan.FromRoom(room, 99, 10);

@@ -6,6 +6,21 @@ namespace DfoServer.Network.Handlers;
 
 internal sealed partial class DungeonHandler
 {
+    static string Strongway2019EntryRejectionText(string reason)
+    {
+        var parts = reason.Split(':');
+        if (parts is ["strongway2019-anti-evil-required", var required, var actual])
+            return $"未能进入：需要抗魔值 {required}，当前服务端计算抗魔值为 {actual}。已返回准备区，请调整装备后重试。";
+        return reason switch
+        {
+            "strongway2019-activity-inactive" => "未能进入：强者之路活动当前未开放。已返回准备区。",
+            "strongway2019-level-required" => "未能进入：强者之路需要95级角色。已返回准备区。",
+            "strongway2019-member-count-required" => "未能进入：强者之路挑战人数需为1至4人。已返回准备区。",
+            "strongway2019-resource-unavailable" => "未能进入：活动副本资源暂不可用，请联系管理员。已返回准备区。",
+            _ => "未能进入：入场条件已变化，请确认处于强者之路频道准备区后重试。已返回准备区。"
+        };
+    }
+
     async Task ReturnStrongway2019NormalTimeoutAsync(GameConnectionContext context, Strongway2019NormalTimeout timeout)
     {
         if (context.Stop.IsCancellationRequested || !context.Session.IsCurrentStrongway2019NormalTimeout(timeout)) return;

@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Currency;
@@ -48,6 +49,15 @@ internal static class QuestAntonUnlockTcpTests
                 "CMD34发布原寻物交付和四项真实奖励");
             peer.Expect(0, 14);
             peer.Expect(0, 37);
+            var adventure = peer.Expect(0, 1349).Body;
+            var progress = fixture.Query("SELECT level,experience,capsule_experience FROM account_adventures WHERE account=$p0",
+                fixture.Options.DevelopmentAccount).Single();
+            That(adventure.Length == 50 && U16(adventure, 0) == peer.Id && U32(adventure, 2) == 40 &&
+                U32(adventure, 6) == Convert.ToUInt32(progress[0]) &&
+                BinaryPrimitives.ReadUInt64LittleEndian(adventure.AsSpan(14)) == Convert.ToUInt64(progress[1]) &&
+                BinaryPrimitives.ReadUInt64LittleEndian(adventure.AsSpan(22)) == resources.Adventure.Experience.GetValueOrDefault(Convert.ToInt32(progress[0]) + 1) &&
+                BinaryPrimitives.ReadUInt64LittleEndian(adventure.AsSpan(30)) == Convert.ToUInt64(progress[2]),
+                "安徒恩解锁交付在任务候选前同步真实角色的已提交冒险团进度");
             peer.Expect(0, 21);
             var completed = peer.Expect(0, 356).Body;
             That(completed[4 + 12829] != 0 && fixture.Query(

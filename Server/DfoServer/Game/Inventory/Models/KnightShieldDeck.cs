@@ -13,5 +13,5 @@ internal sealed record KnightShieldDeck(ImmutableArray<int> Items)
             Items.Where(id => id != 0).Distinct().Count() != Items.Count(id => id != 0))
             throw new InvalidDataException("守护者盾牌配置必须是五个不重复的有效模板或空位");
     }
-    public bool Same(KnightShieldDeck other) => Items.SequenceEqual(other.Items);
+    public bool Same(KnightShieldDeck other) => ReferenceEquals(this, other) || Items == other.Items || Items.SequenceEqual(other.Items);
 }

@@ -37,4 +37,23 @@ internal sealed partial class GameSession
                 : new BattlePassMissionSessionResult(false, result.Error);
         });
     }
+
+    public BattlePassMissionSessionResult ObserveQuickReboundSkill(BattlePassQuickReboundObservation use)
+    {
+        if (repository is not IBattlePassMissionStore store) return new(false, 19);
+        var capture = CaptureInventoryPlan(requireTown: false);
+        if (capture is null) return new(false, 19);
+        return owner.Execute(() =>
+        {
+            if (!InventoryPlanIsCurrent(capture, requireTown: false) ||
+                formalDungeon is not { } active ||
+                !BattlePassQuickReboundSource.Eligible(capture.Character, active.Run.Entry, active.Run.Snapshot.Identity, use))
+                return new BattlePassMissionSessionResult(false, 19);
+            var result = store.CommitBattlePassQuickRebound(owner, capture.Character, active.Run.Entry,
+                active.Run.Snapshot.Identity, use, timeProvider ?? TimeProvider.System);
+            return result.Accepted && result.State is { } state
+                ? new BattlePassMissionSessionResult(true, 0, state, InventoryReceipt(capture.Character))
+                : new BattlePassMissionSessionResult(false, result.Error);
+        });
+    }
 }

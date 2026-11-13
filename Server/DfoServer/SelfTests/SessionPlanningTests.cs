@@ -780,7 +780,9 @@ internal static partial class SessionPlanningTests
                 INSERT INTO character_skill_combos VALUES({{id}},0,5,X'');
                 INSERT INTO character_client_settings VALUES({{id}},'planning',zeroblob(512));
                 INSERT INTO character_game_settings VALUES({{id}},'planning',zeroblob(204));
+                INSERT INTO character_hotkey_settings VALUES({{id}},'planning',0,X'4930310937370A');
                 INSERT INTO character_quest_notify VALUES({{id}},'planning',X'02000000000000000000000000000000');
+                INSERT INTO character_npc_bookmarks VALUES({{id}},'planning',X'11000000');
                 INSERT INTO character_privilege_service VALUES({{id}},1000,2000000000,1,1,739916,5,739916,1);
                 INSERT INTO character_dungeon_state(character_id,account,next_object_key,last_attempt,
                   capsule_experience,proficiency_level,proficiency_experience) VALUES({{id}},'planning',256,1,0,0,0);
@@ -788,10 +790,12 @@ internal static partial class SessionPlanningTests
                 INSERT INTO character_fatigue VALUES({{id}},'planning',0,156,0,156,0,0);
                 INSERT INTO character_fatigue_acceleration VALUES({{id}},'planning',1);
                 INSERT INTO character_fatigue_reset_days VALUES({{id}},739916);
+                INSERT INTO character_fatigue_battery VALUES({{id}},123,53);
                 INSERT INTO character_pcroom_claims VALUES({{id}},'planning',20261031);
                 INSERT INTO character_teleport_cooldowns(character_id,account,potion_until,aura_until) VALUES({{id}},'planning',2000000000000,2000000420000);
                 INSERT INTO character_exp_bonus VALUES({{id}},'planning',2000007200,1000);
                 INSERT INTO character_consumable_states VALUES({{id}},'planning',0,10087825,2000000000000,7,5);
+                INSERT INTO character_various_buffs VALUES({{id}},'planning','[]');
                 INSERT INTO character_boss_selection_buff VALUES({{id}},'planning','{"ItemId":490705256,"Remaining":5,"UntilMilliseconds":2000000000000,"Definition":{"BuffId":300,"DungeonId":7191,"Entries":5,"Weights":[{"MapId":92689,"Weight":40},{"MapId":92690,"Weight":40},{"MapId":92697,"Weight":20}]} }');
                 INSERT INTO character_expert_job(character_id,account,job_type,expertness) VALUES({{id}},'planning',1,0);
                 INSERT INTO character_expert_meta VALUES({{id}},'planning',0,1,300);
@@ -866,6 +870,7 @@ internal static partial class SessionPlanningTests
                 INSERT INTO character_raid_reward_receipts(character_id,account,instance_id,phase,kind,card,week_key,final_phase,plan_json,mail_ids,created_at)
                   VALUES({{id}},'planning','1234567890abcdef1234567890abcdef',1,0,2,20261022,1,'{}','[]',1);
                 INSERT INTO character_dungeon_card_rewards(character_id,account,instance_id,plan_json,reward_json,mail_id,revision) VALUES({{id}},'planning','instance','{}','{}',NULL,1);
+                INSERT INTO character_clear_reward_resets(character_id,instance_id) VALUES({{id}},'instance');
                 INSERT INTO character_dungeon_card_options VALUES({{id}},'planning','instance','{}',NULL,NULL,NULL,NULL,NULL,NULL,NULL);
                 INSERT INTO character_dungeon_tournament_rewards VALUES({{id}},'planning','instance','{}',0,0,'[{},{}]',NULL,1);
                 INSERT INTO character_tutorial_state VALUES({{id}},'planning',7115,0,0);
@@ -904,12 +909,15 @@ internal static partial class SessionPlanningTests
                   SELECT {{id}},id,0,0,'' FROM characters WHERE id<>{{id}} ORDER BY id LIMIT 1;
                 INSERT INTO character_dungeon_incount VALUES({{id}},'planning',400000016,20261020,1,20261015,1);
                 INSERT INTO character_dungeon_incount_extra VALUES({{id}},'planning',5428,20261020,1,20261015,1);
+                INSERT INTO character_dungeon_reward_extra VALUES({{id}},'planning',0,1,20261020,1,20261015,1);
                 INSERT INTO character_ekern_cycle VALUES({{id}},'planning',739917,3,1);
                 INSERT INTO character_rename_pending VALUES({{id}},'planning',95001);
                 INSERT INTO character_name_history VALUES({{id}},'planning',0,'FormerName',1000);
                 INSERT INTO character_beast_dungeon_entries VALUES({{id}},'planning',20261020,310,1);
                 INSERT INTO character_beast_dungeon_reservations VALUES({{id}},'planning','abcdef1234567890abcdef1234567890',1,1,20261020,310,0,0);
                 INSERT INTO character_beast_stage_rewards VALUES({{id}},'planning','abcdef1234567890abcdef1234567890',0,'abcdef1234567890abcdef1234567891',400363,1,10303240);
+                INSERT INTO character_revised_beast_stage_rewards VALUES({{id}},'planning','abcdef1234567890abcdef1234567892',1,1,5335,2,1,20261101,20261029,1,0,1,'{}');
+                INSERT INTO character_revised_beast_rewards VALUES({{id}},'planning','abcdef1234567890abcdef1234567892',1,1,5335,2,1,20261101,20261029,1,1,2,'{}');
                 INSERT INTO character_guild_hongbao_purchases(character_id,day_start_unix,cera) VALUES({{id}},2000000000,1);
                 INSERT INTO guilds(guild_id,name,address,master_character_id,created_at_unix)
                   SELECT 65000,'删除福利夹具','deletion-benefits',id,1 FROM characters WHERE id<>{{id}} ORDER BY id LIMIT 1;

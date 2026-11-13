@@ -25,7 +25,27 @@ internal static class DazzlementTowerAdmissionTests
         Bytes(DfoServer.Network.Builders.DazzlementTowerPackets.State(0), new byte[11], "1605 type0未入场完整11B正文");
         Bytes(DfoServer.Network.Builders.DazzlementTowerPackets.State(1), [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0],
             "1605已用资格只写offset6，不把日用量写到层进度或领奖标志");
+        Bytes(DfoServer.Network.Builders.DazzlementTowerPackets.State(1, 7, 1, 1), [0, 7, 0, 0, 0, 1, 1, 0, 0, 0, 1],
+            "1605 type0完整编码7层进度、通关与周领奖标志");
         Reject<InvalidDataException>(() => DfoServer.Network.Builders.DazzlementTowerPackets.State(2), "每日上限1不截断非法计数");
+        var progress = DazzlementTowerProgress.Initial(20261022);
+        for (int floor = 1; floor <= 7; floor++)
+            progress = progress.AdvanceFloor(1000 + floor, floor, dropSpecialKey: floor is 3 or 6);
+        That(progress.Floor == 7 && progress.Cleared && progress.NormalKeys == 7 && progress.SpecialKeys == 2 &&
+            progress.AllowedSelectionCount == 3 && progress.StashBox.Length == 7,
+            "眩惑7层递进累积贮藏箱候选、普通钥匙与最多2把特殊死神之钥");
+        progress = progress.SelectRewards([0, 2, 5]);
+        Bytes(DfoServer.Network.Builders.DazzlementTowerPackets.ReaperKeys(progress.NormalKeys, progress.SpecialKeys),
+            [2, 7, 2], "1605 type2死神之钥通知");
+        Bytes(DfoServer.Network.Builders.DazzlementTowerPackets.SelectedRewards([0, 2, 5]),
+            [3, 3, 0, 2, 5], "1605 type3已选贮藏箱槽位通知");
+        Bytes(DfoServer.Network.Builders.DazzlementTowerPackets.SelectRewardReply(1, [0, 2, 5]),
+            [1, 3, 0, 2, 5], "1592眩惑奖励选择成功ACK");
+        That(progress.TryClaimWeeklyRewards(out var claimedProgress, out var claimedCards, out _) &&
+            claimedProgress.RewardClaimed && claimedCards.Select(c => c.Slot).SequenceEqual(new byte[] { 0, 2, 5 }) &&
+            !claimedProgress.TryClaimWeeklyRewards(out _, out _, out string? repeatErr) &&
+            repeatErr == "dazzlement-weekly-reward-already-claimed",
+            "眩惑第7层通关后按所选槽位结算周奖励且拒绝重复领取");
         Bytes(DfoServer.Network.Builders.DazzlementTowerPackets.Bindings(new(previous,
                 [new(1, 1, previous.Day, "眩惑", 0)])),
             [1, 4, 0, 0, 0, 0xD1, 0xA3, 0xBB, 0xF3, 0],

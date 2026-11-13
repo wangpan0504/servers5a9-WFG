@@ -42,7 +42,8 @@ internal sealed partial class AntonRaidBattle
 
     AntonRaidBattleView FiendwarBossSnapshot(AntonRaidBattleView before, FiendwarBossRound boss, DateTimeOffset now)
     {
-        var values = new Dictionary<string, int> { ["[boss pattern state]"] = 1 };
+        // 00D71FF0按千/百/十/个四位十进制非零位保留109035562–109035565四颗行星生成PO；00D726A0要求四PO齐备才进入召唤。
+        var values = new Dictionary<string, int> { ["[boss pattern state]"] = 1111 };
         foreach (var side in Enum.GetValues<FiendwarWorld>())
         {
             var progress = boss.Side(side);
@@ -125,13 +126,13 @@ internal sealed partial class AntonRaidBattle
             }
             else if (kind is 0 or 2)
             {
-                if (value > boss.RemainingHp || progress.Stage != FiendwarWorldStage.DamageWindow ||
-                    progress.WindowEnd is not { } end || kind == 0 && now >= end ||
-                    kind == 2 && (now < end || now > end + FiendwarBossReportGrace) ||
-                    value > boss.RemainingHp - progress.Damage) return null;
-                progress = progress with { Damage = boss.RemainingHp - value };
+                if (value > 100 || progress.Stage != FiendwarWorldStage.DamageWindow ||
+                    progress.WindowEnd is not { } end || kind == 0 && now >= end + FiendwarBossReportGrace ||
+                    kind == 2 && now > end + FiendwarBossReportGrace) return null;
+                ulong clamped = Math.Min(value, boss.RemainingHp);
+                progress = progress with { Damage = Math.Max(progress.Damage, boss.RemainingHp - clamped) };
                 boss = side == FiendwarWorld.Black ? boss with { Black = progress } : boss with { White = progress };
-                if (kind == 2) boss = boss.Save(side, now)!;
+                if (kind == 2) boss = boss.Save(side, now < end ? end : now)!;
             }
             else return null;
             fiendwarBossReports[run.Id] = (kind, value);
@@ -147,7 +148,12 @@ internal sealed partial class AntonRaidBattle
         foreach (var encounter in fiendwarEncounters)
             if (encounter.Value.Area is 30 or 31 && boss.Side(BossSide(encounter.Value.Area)).Stage == FiendwarWorldStage.Saved &&
                 !(boss.Joined && boss.RemainingHp == 0))
-                candidate = candidate with { FiendwarExpiredRuns = candidate.FiendwarExpiredRuns.Add(encounter.Key) };
+                candidate = candidate with
+                {
+                    FiendwarExpiredRuns = candidate.FiendwarExpiredRuns.Add(encounter.Key),
+                    FiendwarBridgeReturns = candidate.FiendwarBridgeReturns.SetItem(encounter.Key, encounter.Value.Area == 30 ? 31 : 30),
+                    FiendwarDungeonTimers = candidate.FiendwarDungeonTimers.Remove(encounter.Value.Area)
+                };
         CommitBattleCandidate(before, candidate);
     }
 

@@ -1,6 +1,8 @@
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
+using DfoServer.GameWorld.Items;
+using System.Collections.Immutable;
 
 namespace DfoServer.Game.Session;
 
@@ -12,6 +14,8 @@ internal sealed partial class GameSession
         public bool EnforceCooldown { get; init; } = true;
     }
     readonly Dictionary<int, UsedConsumable> usedConsumables = new();
+    // 免耗请求只保留原token的重放保护，绝不作为普通模式的冷却来源。
+    readonly Dictionary<int, UsedConsumable> freeConsumableUses = new();
     InventoryPlan? pendingConsumableUse;
     sealed record PortableCargoAccess(long Generation, long SelectionEpoch,
         Guid DungeonInstance, ushort PersonalCapacity, ushort AccountCapacity,
@@ -20,24 +24,62 @@ internal sealed partial class GameSession
 
     bool CanAccessPortableCargo(InventoryListType list) =>
         list is not (InventoryListType.PersonalCargo or InventoryListType.AccountCargo) ||
-        portableCargo is { } access && !AntonRejoinPresentationPending && Ready && Selected is { } character &&
-        (list == InventoryListType.PersonalCargo ? access.Personal : access.Account) &&
+        !AntonRejoinPresentationPending && Ready && Selected is { } character &&
         Phase is SessionPhase.Dungeon or SessionPhase.Settlement &&
-        access.Generation == owner.Generation && access.SelectionEpoch == SelectionEpoch &&
-        access.DungeonInstance == formalDungeon?.Run.Snapshot.Identity.InstanceId &&
-        access.PersonalCapacity == character.Inventory.CargoCapacity &&
-        access.AccountCapacity == character.Inventory.AccountCargo.Capacity;
+        (list == InventoryListType.PersonalCargo ? character.Inventory.CargoCapacity : character.Inventory.AccountCargo.Capacity) > 0 &&
+        (portableCargo is { } access &&
+            (list == InventoryListType.PersonalCargo ? access.Personal : access.Account) &&
+            access.Generation == owner.Generation && access.SelectionEpoch == SelectionEpoch &&
+            access.DungeonInstance == formalDungeon?.Run.Snapshot.Identity.InstanceId &&
+            access.PersonalCapacity == character.Inventory.CargoCapacity &&
+            access.AccountCapacity == character.Inventory.AccountCargo.Capacity ||
+            HasUnlimitedPortableCargo(character, list));
 
-    bool CanUseDungeonItem(int itemId, IReadOnlySet<uint>? allowedDungeons = null) => !IsImperialArenaCombat &&
-        (formalDungeon is not { Entry.Maze.IsGriefTower: true } grief || grief.GriefItems?.CanUse(itemId) == true) &&
-        (formalDungeon is not { Entry.RaidEntry.Kind: Raids.RaidKind.Fiendwar } fiendwar ||
-            allowedDungeons?.Contains(fiendwar.Entry.DungeonId) == true);
+    bool HasUnlimitedPortableCargo(Character character, InventoryListType list)
+    {
+        if (consumables is null || formalDungeon is not { } instance || !CanUseConsumable() ||
+            (list == InventoryListType.PersonalCargo ? character.Inventory.CargoCapacity : character.Inventory.AccountCargo.Capacity) == 0)
+            return false;
+        long now = (timeProvider ?? TimeProvider.System).GetUtcNow().ToUnixTimeSeconds();
+        foreach (var item in character.Inventory.Items)
+        {
+            if (item.Position.List != InventoryListType.Main ||
+                item is not { Uid: > 0, Core: { IsStackable: true, Count: > 0, EquipmentLockId: 0 } } ||
+                item.IsExpired(now) ||
+                !ItemSlotBoundService.Allows(character.Inventory, item.Position, item.Core.Kind) ||
+                !consumables.TryGet(item.Core.ItemId, out var definition) ||
+                !definition.OpensPortableCargo || !definition.Unlimited ||
+                !definition.Allows(character.Level) ||
+                items?.Get(item.Core.ItemId).RequiresPcRoom == true && !PremiumPcRoom ||
+                !CanUseStackableItem(character, item.Core.ItemId, places: definition.Places) ||
+                !CanUseDungeonItem(item.Core.ItemId) ||
+                definition.AllowedDungeons is { } allowed && (Phase != SessionPhase.Dungeon || !allowed.Contains(instance.Entry.DungeonId)) ||
+                definition.ExcludedDungeons.Contains(instance.Entry.DungeonId) ||
+                definition.RaidUseForbidden && instance.Entry.RaidEntry is not null)
+                continue;
+            return true;
+        }
+        return false;
+    }
+
+    bool CanUseDungeonConsumableState(int itemId) => !IsImperialArenaCombat &&
+        (formalDungeon?.PotionUses?.CanUse(itemId) ?? true) &&
+        (formalDungeon is not { Entry.Maze.IsGriefTower: true } grief || grief.GriefItems?.CanUse(itemId) == true);
+
+    // 非普通恢复药入口仍保留尚未接入对应玩法的能力边界，不借模板资格委派开放资产类道具。
+    bool CanUseDungeonItem(int itemId) => CanUseDungeonConsumableState(itemId) &&
+        formalDungeon is not { Entry.RaidEntry.Kind: Raids.RaidKind.Fiendwar };
 
     void CommitDungeonItemUse(int itemId)
     {
+        formalDungeon?.PotionUses?.Commit(itemId);
         if (formalDungeon is { Entry.Maze.IsGriefTower: true } grief)
             (grief.GriefItems ?? throw new InvalidOperationException("悲叹实例缺少物品使用规则")).CommitUse(itemId);
     }
+
+    internal int? RemainingDungeonPotions() => owner.Execute<int?>(() =>
+        Ready && Selected is not null && formalDungeon is { } dungeon && Phase is SessionPhase.Dungeon or SessionPhase.Settlement
+            ? dungeon.PotionUses?.Remaining : null);
 
     bool CanUseConsumable() => !AntonRejoinPresentationPending && pendingRental is null && !HasPendingTownQuestCommit && Ready && Selected is not null && Phase is SessionPhase.Town or SessionPhase.Dungeon or SessionPhase.Settlement &&
         formalDungeon?.HasPendingFatigue != true &&
@@ -57,7 +99,9 @@ internal sealed partial class GameSession
         ConsumableUseResult Reject(string reason) => new(ConsumableUseOutcome.Rejected, reason, Guard: captured.Guard);
         if (activityBlocked || captured.Character is not { } character) return Reject("invalid-state");
         int useItemId = character.Inventory.Find(request.Position)?.Core.ItemId ?? request.ItemId;
-        if (!service.TryDefinition(request.ItemId, out var definition)) return Reject("unsupported-template");
+        if (!service.TryDefinition(request.ItemId, out var definition))
+            return Reject(TreasureHunterPotionDefinition.FamilyItems.Contains(request.ItemId)
+                ? "treasure-hunter-invalid-definition" : "unsupported-template");
         bool requiresPcRoom = items?.Get(request.ItemId).RequiresPcRoom == true;
         if (requiresPcRoom && !owner.Execute(() => PremiumPcRoom)) return Reject("pcroom-required");
         if (!CanUseStackableItem(character, useItemId, places: definition.Places)) return Reject("usable-qualification");
@@ -65,6 +109,10 @@ internal sealed partial class GameSession
             return Reject("boss-potion-requires-town");
         if (definition.EpicDropBuff is not null && captured.Guard.Phase != SessionPhase.Town)
             return Reject("epic-potion-requires-town");
+        if (definition.DungeonEpicDropBuff is not null && captured.Guard.Phase != SessionPhase.Town)
+            return Reject("dungeon-epic-potion-requires-town");
+        if (definition.VariousBuff is not null && captured.Guard.Phase != SessionPhase.Town)
+            return Reject("various-buff-requires-town");
         if (definition.HellLegendEpicDropBuff is not null && captured.Guard.Phase != SessionPhase.Town)
             return Reject("hell-legend-epic-potion-requires-town");
         if (definition.VillageMoveSpeedBuff is not null && captured.Guard.Phase != SessionPhase.Town)
@@ -85,22 +133,26 @@ internal sealed partial class GameSession
                 return new ConsumableUseResult(ConsumableUseOutcome.CloseConnection, "state-changed");
             if (requiresPcRoom && !PremiumPcRoom) return Reject("pcroom-required");
             if (!CanUseStackableItem(character, useItemId, places: definition.Places)) return Reject("usable-qualification");
-            if (!CanUseDungeonItem(request.ItemId, definition.AllowedDungeons))
+            if (formalDungeon?.PotionUses?.CanUse(request.ItemId) == false)
+                return Reject("dungeon-potion-limit-exhausted");
+            if (!CanUseDungeonConsumableState(request.ItemId))
                 return Reject("grief-item-not-allowed-or-exhausted");
-            if (definition.AllowedDungeons is { } allowed &&
-                (Phase != SessionPhase.Dungeon || formalDungeon is not { } restricted || !allowed.Contains(restricted.Entry.DungeonId)))
-                return Reject("potion_dungeon_not_allowed");
             if ((definition.SummonsApc || definition.RequiresDungeon) && (formalDungeon?.CharacterDead != false ||
                 formalDungeon.Run.Phase != DfoServer.Game.Dungeons.SinglePlayerDungeonPhase.Dungeon))
                 return Reject(definition.SummonsApc ? "summon_requires_living_dungeon_character" : "projectile_requires_living_dungeon_character");
-            var previous = usedConsumables.GetValueOrDefault(definition.CoolGroup);
-            if (definition.RevivalBlessing && formalDungeon is { } instance && definition.ExcludedDungeons.Contains(instance.Entry.DungeonId))
+            bool preserve = PreservesDungeonConsumables;
+            bool nativeNoConsumption = preserve && !definition.EffectsAfterAcknowledgement;
+            var previous = preserve ? null : usedConsumables.GetValueOrDefault(definition.CoolGroup);
+            if (formalDungeon is { } instance && definition.ExcludedDungeons.Contains(instance.Entry.DungeonId))
                 return Reject("potion_dungeon_excluded");
+            if (definition.RaidUseForbidden && formalDungeon?.Entry.RaidEntry is not null)
+                return Reject("potion_raid_excluded");
             if (previous is { EnforceCooldown: true } && previous.Clock.GetElapsedTime(previous.Timestamp) < TimeSpan.FromMilliseconds(definition.CoolTime))
             {
                 return Reject("cooldown");
             }
-            if (character.Inventory.ConsumableStates.Any(row => row.Kind == ConsumableStateKind.Cooldown &&
+            var activeStates = preserve ? formalDungeon!.FreeConsumableEffects : character.Inventory.ConsumableStates;
+            if (activeStates.Any(row => row.Kind == ConsumableStateKind.Cooldown &&
                 row.CoolGroup == definition.CoolGroup && row.Active(service.Clock.GetUtcNow().ToUnixTimeMilliseconds())))
                 return Reject("cooldown");
             if (!preliminary.Accepted || preliminary.Plan is null) return Reject("source-or-qualification");
@@ -108,17 +160,20 @@ internal sealed partial class GameSession
             var source = character.Inventory.Find(request.Position)!;
             if (source.Core.IsExpired(service.Clock.GetUtcNow().ToUnixTimeSeconds()))
                 return Reject("source-expired");
-            bool preserve = PreservesDungeonConsumables;
             System.Collections.Immutable.ImmutableArray<ConsumableState>? freeEffects = null;
-            if (preserve && definition.EffectMilliseconds > 0 && formalDungeon is { } freeDungeon)
+            if (preserve && formalDungeon is { } freeDungeon)
             {
                 var ephemeral = ConsumableStatePolicy.Activate(character.Inventory with
-                    { ConsumableStates = freeDungeon.FreeConsumableEffects }, definition, service.Clock.GetUtcNow().ToUnixTimeMilliseconds());
+                    { ConsumableStates = freeDungeon.FreeConsumableEffects }, definition, service.Clock.GetUtcNow().ToUnixTimeMilliseconds(),
+                    sessionCooldown: true);
                 if (ephemeral is null) return Reject("effect-capacity");
                 freeEffects = ephemeral.ConsumableStates;
             }
             var actual = preserve ? new InventoryResult(true,0,new(character.Inventory,character.Inventory,
                 "free_dungeon_use_consumable",new(character, source.ExpireTime > 0 ? source.ExpireTime : null, service.Clock))) : preliminary;
+            var variousGrant = definition.VariousBuff is not null ? PlanVariousBuffGrant(definition, service.Clock.GetUtcNow()) :
+                PlanLegacyVariousCoverage(definition, service.Clock.GetUtcNow());
+            if (variousGrant is not null) actual = actual with { Plan = WithVariousBuffGrant(actual.Plan!, variousGrant) };
             if (definition.BossSelectionBuff is { } bossBuff)
             {
                 var now = service.Clock.GetUtcNow();
@@ -144,21 +199,56 @@ internal sealed partial class GameSession
             // 异常返回保留未决标记并由连接生命周期关闭，不自动重做SQL、重发ACK或宣称药效已回滚。
             pendingConsumableUse = null;
             if (!result.Accepted) return Reject(result.RejectReason ?? "source-expired");
+            if (variousGrant is not null)
+            {
+                transientVariousBuffs = variousGrant.Transient;
+                TrackVariousBuffRemovals(variousGrant, definition);
+            }
+            long effectAt = service.Clock.GetUtcNow().ToUnixTimeMilliseconds();
+            IEnumerable<ConsumableState> beforeEffects = character.Inventory.ConsumableStates;
+            if (preserve)
+                beforeEffects = beforeEffects.Where(row => !formalDungeon!.FreeEffectDefinitions.Values.Any(old =>
+                    ConsumableStatePolicy.ReplacesEffect(old, row.ItemId))).Concat(activeStates);
+            var afterStates = freeEffects ?? Selected!.Inventory.ConsumableStates;
+            var effectUpdates = ConsumableStatePolicy.RefreshEffects(definition, beforeEffects,
+                afterStates.FirstOrDefault(row => row.Kind == ConsumableStateKind.Effect && row.ItemId == definition.ItemId), effectAt,
+                explicitTimeRefresh: nativeNoConsumption);
             // 资格只来自实际成功提交；消耗最后一只猫头鹰后仍可访问本次实例的仓库。
             if (definition.OpensPortableCargo && Phase is SessionPhase.Dungeon or SessionPhase.Settlement &&
                 formalDungeon is { } cargoDungeon)
                 portableCargo = new(owner.Generation, SelectionEpoch, cargoDungeon.Run.Snapshot.Identity.InstanceId,
                     Selected!.Inventory.CargoCapacity, Selected.Inventory.AccountCargo.Capacity);
             CommitDungeonItemUse(request.ItemId);
-            if (freeEffects is { } effects) formalDungeon!.FreeConsumableEffects = effects;
-            usedConsumables[definition.CoolGroup] = new(request, source.Uid, service.Clock.GetTimestamp(), definition.CoolTime, service.Clock)
-                { Maintenance = preserve ? (byte)0 : definition.CooltimeMaintenance };
+            if (freeEffects is { } effects)
+            {
+                formalDungeon!.FreeConsumableEffects = effects;
+                foreach (var normal in character.Inventory.ConsumableStates.Where(row => row.Active(effectAt)))
+                {
+                    if (normal.Kind == ConsumableStateKind.Cooldown && normal.CoolGroup == definition.CoolGroup)
+                        formalDungeon.FreeTouchedNormalCooldowns.Add(normal.CoolGroup);
+                    if (normal.Kind == ConsumableStateKind.Effect && ConsumableStatePolicy.ReplacesEffect(definition, normal.ItemId))
+                        formalDungeon.FreeTouchedNormalEffects.Add(normal.ItemId);
+                }
+                foreach (int id in formalDungeon.FreeEffectDefinitions.Keys.ToArray())
+                    if (!effects.Any(row => row.Kind == ConsumableStateKind.Effect && row.ItemId == id))
+                        formalDungeon.FreeEffectDefinitions.Remove(id);
+                if (definition.EffectMilliseconds > 0) formalDungeon.FreeEffectDefinitions[definition.ItemId] = definition;
+            }
+            var uses = preserve ? freeConsumableUses : usedConsumables;
+            uses[definition.CoolGroup] = new(request, source.Uid, service.Clock.GetTimestamp(), definition.CoolTime, service.Clock)
+                { Maintenance = preserve ? (byte)0 : definition.CooltimeMaintenance, EnforceCooldown = !preserve };
             if (definition.Disguise is { } disguise)
                 pendingDisguise = new(disguise, request.ItemId, SelectionEpoch,
                     checked(service.Clock.GetUtcNow().ToUnixTimeMilliseconds() + disguise.Seconds * 1000L));
             return new ConsumableUseResult(ConsumableUseOutcome.Committed, preserve ? "dungeon-preserved" : "committed", result, UseGuard())
                 { SourceUid = source.Uid, PreserveSource = preserve,
-                    NativeNoConsumption = preserve && !definition.EffectsAfterAcknowledgement, TownGiftItem = definition.TownGiftItem };
+                    NativeNoConsumption = nativeNoConsumption, TownGiftItem = definition.TownGiftItem,
+                    EffectUpdates = effectUpdates,
+                    TreasureHunterBonus = definition.TreasureHunterPotion?.BonusRate,
+                    TreasureHunterFromExj = definition.TreasureHunterPotion?.FromExj,
+                    DungeonEpicBuffId = definition.DungeonEpicDropBuff?.BuffId,
+                    BossDropPercent = definition.DungeonEpicDropBuff?.BossDropPercent,
+                    VariousBuffIds = variousGrant?.Granted ?? [] };
         });
     }
 
@@ -168,7 +258,10 @@ internal sealed partial class GameSession
     {
         if (pendingConsumableUse is not null) return new(ConsumableUseOutcome.CloseConnection, "commit-unknown");
         // 成功token的歧义不因过房、活动门禁或模板变化消失，必须在任何普通拒绝ACK之前核对。
-        foreach (var previous in usedConsumables.Values)
+        foreach (var pair in freeConsumableUses.ToArray())
+            if (pair.Value.Clock.GetElapsedTime(pair.Value.Timestamp) >= TimeSpan.FromMilliseconds(pair.Value.DurationMilliseconds))
+                freeConsumableUses.Remove(pair.Key);
+        foreach (var previous in usedConsumables.Values.Concat(freeConsumableUses.Values))
             if (previous is not null && previous.Request == request &&
                 previous.Clock.GetElapsedTime(previous.Timestamp) < TimeSpan.FromMilliseconds(previous.DurationMilliseconds))
                 return new(ConsumableUseOutcome.CloseConnection, "ambiguous-repeat") { SourceUid = previous.SourceUid };
@@ -183,13 +276,46 @@ internal sealed partial class GameSession
                 usedConsumables[pair.Key] = pair.Value with { EnforceCooldown = false };
     }
 
+    (ImmutableArray<ConsumableStateUpdate> Cooldowns, ImmutableArray<ConsumableStateUpdate> Effects)
+        RestoreAfterFreeConsumables(FormalDungeon dungeon)
+    {
+        if (!dungeon.Entry.HasFreeCombatConsumption || Selected is not { } character) return ([], []);
+        long now = (timeProvider ?? TimeProvider.System).GetUtcNow().ToUnixTimeMilliseconds();
+        var freeCooldowns = dungeon.FreeConsumableEffects.Where(row => row.Kind == ConsumableStateKind.Cooldown).ToArray();
+        var restoreCooldowns = freeCooldowns.Concat(character.Inventory.ConsumableStates.Where(row =>
+            row.Kind == ConsumableStateKind.Cooldown && dungeon.FreeTouchedNormalCooldowns.Contains(row.CoolGroup) &&
+            !freeCooldowns.Any(free => free.CoolGroup == row.CoolGroup))).GroupBy(row => row.CoolGroup).Select(group => group.First());
+        var cooldowns = restoreCooldowns.Select(row =>
+        {
+            int seconds = character.Inventory.ConsumableStates.Where(real => real.Kind == ConsumableStateKind.Cooldown &&
+                    real.CoolGroup == row.CoolGroup).Select(real => ConsumableStatePolicy.RemainingSeconds(real.UntilMilliseconds, now))
+                .DefaultIfEmpty().Max();
+            if (usedConsumables.GetValueOrDefault(row.CoolGroup) is { EnforceCooldown: true } used)
+            {
+                double remaining = used.DurationMilliseconds - used.Clock.GetElapsedTime(used.Timestamp).TotalMilliseconds;
+                seconds = Math.Max(seconds, (int)Math.Clamp(Math.Ceiling(remaining / 1000), 0, int.MaxValue / 1000));
+            }
+            return new ConsumableStateUpdate(row.ItemId, seconds);
+        }).ToImmutableArray();
+        // 第四维护位的0秒有独立取消语义，不向不确定是否存在的特殊条目发送该操作。
+        var effects = dungeon.FreeConsumableEffects.Where(row => row.Kind == ConsumableStateKind.Effect && (row.Maintenance & 8) == 0)
+            .Select(row => new ConsumableStateUpdate(row.ItemId, 0)).ToImmutableArray();
+        effects = effects.AddRange(character.Inventory.ConsumableStates.Where(row => row.Kind == ConsumableStateKind.Effect &&
+            row.Active(now) && dungeon.FreeTouchedNormalEffects.Contains(row.ItemId))
+            .Select(row => new ConsumableStateUpdate(row.ItemId, ConsumableStatePolicy.RemainingSeconds(row.UntilMilliseconds, now))));
+        return (cooldowns, effects);
+    }
+
     void ClearConsumableUse()
     {
         portableCargo = null;
         usedConsumables.Clear();
+        freeConsumableUses.Clear();
         creatureFeedUses.Clear();
         levelUpCooldowns.Clear();
         pendingConsumableUse = null;
         pendingDisguise = null;
+        transientVariousBuffs = [];
+        pendingVariousBuffRemovals = ImmutableHashSet<int>.Empty;
     }
 }

@@ -38,6 +38,8 @@ internal static class PreyGuideTests
         That(raid.Script.Issues.IsEmpty, "普雷引导脚本完整：" + string.Join(';', raid.Script.Issues));
         That(raid.ResourcesReady, "普雷引导资源完整：" + string.Join(';', raid.Issues) + ";dgn=" + string.Join(',', raid.MissingFormalDungeons) + ";map=" + string.Join(',', raid.MissingFormalMaps) + ";item=" + string.Join(',', raid.MissingItems));
         That(raid.Script.EntryCost == new RaidCost(10309342, 1), "引导使用独立门票");
+        That(raid.Script.Headers.Single(row => row.Tag == "[movie end time]").Values.Select(value => value.Number)
+            .SequenceEqual(new[] { 0, 0, 24, 24 }), "引导保留共用真实演出时长，零列不回填且自动时钟可读");
         That(raid.Script.Phases.Length == 2 && raid.Script.Phases[1].Dungeons.Any(row => row.Id == 291100397), "引导两阶段包含真实终图");
         That(raid.EntryCatalog is { Ready: true }, "引导正式进图目录完整");
         if (!battlePass) DatabaseSchemaTests.PreyGuideUpgrade(Path.Combine(root, "prey-schema"));
@@ -48,6 +50,7 @@ internal static class PreyGuideTests
     {
         string path = Path.Combine(root, "prey-domain", "game.db");
         var repo = new CharacterRepository(path);
+        new DfoServer.Game.Auth.AuthenticationService(new AuthenticationRepository(path)).Create("prey-guide-domain", "fixture-password");
         var owners = new AccountOwners();
         using var owner = owners.Acquire("prey-guide-domain", () => { });
         var clock = new LukeRaidClockTests.Clock(battlePass ? DateTimeOffset.Parse("2026-11-03T00:00:00Z") : null);
@@ -59,7 +62,8 @@ internal static class PreyGuideTests
             with { Level = 95, AcceptedStoryLevel = 95, CompletedQuests = [8935] });
         var items = resources.ItemResources;
         var inventory = new InventoryService(items.Items, items.GoldLimits, items.EpicPieces);
-        InventoryService.Commit(repo, owner, created, inventory.Grant(created, [new(10309342, 2)]));
+        InventoryService.Commit(repo, owner, created, inventory.Grant(created,
+            [new(10309342, 2), new(definition.Resources!.PreyTeam!.Script.EntryCost!.ItemId, 4)]));
         var session = new GameSession(repo, resources.Towns, owner, entry: new(new(2, 42), 50, "[prey]"), timeProvider: clock);
         session.Select(0); session.MarkReady();
         try
@@ -70,30 +74,39 @@ internal static class PreyGuideTests
             var party = registry.Create(actor!, 3, "引导", "guide"u8.ToArray(), 1, 1, guide: true)!;
             That(party is { Guide: true, Capacity: 1 } && party.Members[0].Squad == 1, "引导单人团自动分队且不开放邀请容量");
             var parties = new PartyService(repo);
-            That(parties.SetInformation(session, 0, PartySettings.Default with { Title = "existing", Capacity = 1 }).Error == 0,
-                "已有普通单人队保持合法");
-            var existingParty = parties.Current(session);
             await using var timers = new LukeRaidClocks(clock, repo, (_, error) => throw new InvalidOperationException("Prey clock failed", error));
             var start = new AntonRaidStart(registry, parties, repo, resources.Towns, items.EpicPieces, clock,
-                timers: timers, preyRewards: new(definition.Resources!.Script, items.Items, items.Boosters));
+                timers: timers, preyRewards: new(definition.Resources!.Script, items.Items, items.Boosters),
+                preyTeamRewards: new(definition.Resources.PreyTeam!.Script, items.Items, items.Boosters),
+                incounts: DungeonIncountCatalog.Load(resources.Archive));
             using (var db = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path }.ToString()))
             {
                 db.Open();
                 using var command = db.CreateCommand();
-                command.CommandText = "INSERT INTO character_raid_runs(character_id,account,instance_id,raid_type,source,admitted_at,state) VALUES($id,$account,$instance,3,'daily-fixture',$at,1)";
+                command.CommandText = "INSERT INTO character_raid_runs(character_id,account,instance_id,raid_type,source,admitted_at,state) VALUES($id,$account,$instance,3,$source,$at,1)";
                 command.Parameters.AddWithValue("$id", session.Selected!.Id);
                 command.Parameters.AddWithValue("$account", owner.Account);
                 command.Parameters.AddWithValue("$at", clock.GetUtcNow().ToUnixTimeSeconds());
                 command.Parameters.Add("$instance", SqliteType.Text);
-                for (int i = 0; i < 10; i++)
-                { command.Parameters["$instance"].Value = Guid.NewGuid().ToString("N"); command.ExecuteNonQuery(); }
-                var before = session.Selected;
-                That(start.Start(actor!, party, definition) is { Error: 19, Reason: "prey-daily-account-enter-limit" } &&
-                    ReferenceEquals(before, session.Selected) && registry.Find(actor!)?.Started is null && session.CurrentRaidBattle(actor!) is null,
-                    "账号十次日上限拒绝不扣票、不安装队伍或战斗状态");
-                command.CommandText = "DELETE FROM character_raid_runs WHERE source='daily-fixture'";
-                command.ExecuteNonQuery();
+                command.Parameters.Add("$source", SqliteType.Text);
+                string[] seeded = Enumerable.Range(0, 10).Select(_ => Guid.NewGuid().ToString("N")).ToArray();
+                for (int i = 0; i < seeded.Length; i++)
+                {
+                    command.Parameters["$instance"].Value = seeded[i];
+                    command.Parameters["$source"].Value = i % 2 == 0 ? PreyGuideRewards.Source : PreyGuideRewards.TeamSource;
+                    command.ExecuteNonQuery();
+                }
+                RejectSharedLimit("prey-daily-account-enter-limit");
+#if DEBUG
+                VerifyDebugAdmission();
+#endif
+                command.CommandText = "DELETE FROM character_raid_runs WHERE instance_id=$instance";
+                foreach (string instance in seeded) { command.Parameters["$instance"].Value = instance; command.ExecuteNonQuery(); }
             }
+            SwitchMode(true);
+            That(parties.SetInformation(session, 0, PartySettings.Default with { Title = "existing", Capacity = 1 }).Error == 0,
+                "已有普通单人队保持合法");
+            var existingParty = parties.Current(session);
             var result = start.Start(actor!, party, definition);
             That(result.Error == 0 && result.Receipt?.Battle is not null, "普雷引导扣票与正式聚合原子启动：" + result.Reason);
             That(ReferenceEquals(existingParty, parties.Current(session)), "引导开战复用已有普通单人队，不重复建队");
@@ -122,6 +135,109 @@ internal static class PreyGuideTests
             That(PreyRewardPackets.Reward(0x1234, packetOffer).SequenceEqual(new byte[]
                 { 1, 1, 0x34, 0x12, 0, 1, 0, 0x78, 0x56, 0x34, 0x12, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }),
                 "普雷600独立字节预期：6字节表头与16字节物品");
+            using (var db = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path }.ToString()))
+            {
+                db.Open(); using var command = db.CreateCommand();
+                // 原引导已真实完成一次；仅增加另一来源的明确已完成夹具，复用同一业务周和额度世代。
+                string instance = Guid.NewGuid().ToString("N");
+                command.CommandText = """
+                    INSERT INTO character_raid_runs(character_id,account,instance_id,raid_type,source,admitted_at,state,
+                        phase0_event,phase0_anchor,phase0_receipt,phase1_event,phase1_anchor,phase1_receipt,clear_week,entry_epoch,reward_epoch)
+                    SELECT character_id,account,$instance,raid_type,$source,admitted_at,state,
+                        phase0_event,phase0_anchor,phase0_receipt,phase1_event,phase1_anchor,phase1_receipt,clear_week,entry_epoch,reward_epoch
+                    FROM character_raid_runs WHERE instance_id=$original;
+                    """;
+                command.Parameters.AddWithValue("$instance", instance);
+                command.Parameters.AddWithValue("$source", PreyGuideRewards.TeamSource);
+                command.Parameters.AddWithValue("$original", battle.Instance.ToString("N"));
+                That(command.ExecuteNonQuery() == 1, "共享周限额仅增加一份明确普通来源夹具，保留原真实引导通关");
+                RejectSharedLimit("prey-weekly-clear-limit");
+#if DEBUG
+                VerifyDebugAdmission(rewardQuotaFull: true);
+#endif
+                command.CommandText = "DELETE FROM character_raid_runs WHERE instance_id=$instance";
+                That(command.ExecuteNonQuery() == 1, "验证后只移除本次普通周额度夹具");
+            }
+            SwitchMode(true);
+
+            void SwitchMode(bool guide)
+            {
+                That(start.Leave(actor!, actor!.Character) is not null, "沿原退出入口解除当前攻坚及战斗绑定");
+                party = registry.Create(actor, 3, guide ? "引导" : "普通", "quota"u8.ToArray(), guide ? 1 : 12, guide: guide)!;
+                if (!guide) That(party.Members[0] is { Squad: 1, PreyPosition: 11 } &&
+                    ReferenceEquals(registry.AssignPrey(actor, actor.Character, 11)!.After, party),
+                    "普通创建者默认编队，重复指定11幂等且不绕过下方共享额度验证");
+                That(party.Guide == guide && party.Started is null, "共享额度验证使用实际模式及未开战名册");
+            }
+            void RejectSharedLimit(string reason)
+            {
+                foreach (bool guide in new[] { true, false })
+                {
+                    SwitchMode(guide);
+                    var before = session.Selected;
+                    string saved = ClientSettingsSnapshots.Capture(path, true);
+                    That(start.Start(actor!, party, definition) is { Error: 19 } rejected && rejected.Reason == reason &&
+                        ReferenceEquals(before, session.Selected) && ReferenceEquals(registry.Find(actor!), party) &&
+                        session.CurrentRaidBattle(actor!) is null && parties.Current(session) is null &&
+                        saved == ClientSettingsSnapshots.Capture(path, true),
+                        $"{(guide ? "引导" : "普通")}不能绕过另一模式已占用的共享额度，拒绝不扣票、不改库或安装战斗");
+                }
+            }
+
+#if DEBUG
+            void VerifyDebugAdmission(bool rewardQuotaFull = false)
+            {
+                using var db = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path }.ToString());
+                db.Open();
+                using var count = db.CreateCommand();
+                (bool Guide, bool IgnoreRewards)[] scenarios = rewardQuotaFull
+                    ? [(false, false), (false, true), (true, true)] : [(false, true)];
+                foreach (var scenario in scenarios)
+                {
+                    SwitchMode(scenario.Guide);
+                    string historical = RunsSnapshot("");
+                    count.CommandText = "SELECT count(*) FROM character_raid_runs";
+                    int beforeRuns = Convert.ToInt32(count.ExecuteScalar());
+                    int ticket = (scenario.Guide ? definition.Resources!.Script : definition.Resources!.PreyTeam!.Script).EntryCost!.ItemId;
+                    int beforeTickets = session.Selected!.Inventory.Items.Where(item => item.Core.ItemId == ticket).Sum(item => item.Core.Count);
+                    var debugStart = new AntonRaidStart(registry, parties, repo, resources.Towns, items.EpicPieces, clock,
+                        preyRewards: new(definition.Resources.Script, items.Items, items.Boosters),
+                        preyTeamRewards: new(definition.Resources.PreyTeam!.Script, items.Items, items.Boosters))
+                        { DebugIgnorePreyEntryLimits = true, DebugIgnorePreyRewardLimits = scenario.IgnoreRewards };
+                    var admitted = debugStart.Start(actor!, party, definition);
+                    That(admitted is { Error: 0, Receipt.Reservations.Length: 1 } &&
+                        admitted.Receipt.Reservations[0].Lifecycle is { Week: null, WeeklyLimit: null, DailyAccountLimit: null },
+                        "Debug开团在真实配额已满时仍提交原生命周期，仅省略日周次数门禁");
+                    That(Convert.ToInt32(count.ExecuteScalar()) == beforeRuns + 1 &&
+                        session.Selected.Inventory.Items.Where(item => item.Core.ItemId == ticket).Sum(item => item.Core.Count) == beforeTickets - 1,
+                        "Debug不限开团仍保存一个新入场并扣一次原门票，不删除旧次数记录");
+                    party = registry.Find(actor!)!;
+                    string committed = ClientSettingsSnapshots.Capture(path, true);
+                    That(debugStart.Start(actor!, party, definition) is { Error: 0, Replay: true } &&
+                        ClientSettingsSnapshots.Capture(path, true) == committed,
+                        "Debug重复开始仍回放原实例，不重复扣票或记录入场");
+                    var debugBattle = session.CurrentRaidBattle(actor!)!;
+                    if (rewardQuotaFull)
+                        PreyDebugRewardTests.Run(debugBattle, actor!, session, repo, resources,
+                            scenario.Guide ? definition.Resources.Script : definition.Resources.PreyTeam!.Script,
+                            clock.GetUtcNow(), scenario.IgnoreRewards);
+                    That(RunsSnapshot(debugBattle.Instance.ToString("N")) == historical,
+                        "Debug豁免保留全部旧入场、阶段回执、来源及额度世代，不删除或重置已有记录");
+                }
+
+                string RunsSnapshot(string excluded)
+                {
+                    using var snapshot = db.CreateCommand();
+                    snapshot.CommandText = """
+                        SELECT json_group_array(json_array(character_id,account,instance_id,raid_type,source,admitted_at,state,
+                          phase0_event,phase0_anchor,phase0_receipt,phase1_event,phase1_anchor,phase1_receipt,clear_week,entry_epoch,reward_epoch))
+                        FROM (SELECT * FROM character_raid_runs WHERE instance_id<>$excluded ORDER BY instance_id)
+                        """;
+                    snapshot.Parameters.AddWithValue("$excluded", excluded);
+                    return (string)snapshot.ExecuteScalar()!;
+                }
+            }
+#endif
 
             void Clear(int dungeon)
             {
@@ -176,6 +292,21 @@ internal static class PreyGuideTests
                         "旧owner generation不能继续读取攻坚投影");
                     return;
                 }
+                var movieView = battle.View;
+                var beforeMovie = session.Selected;
+                string beforeMovieSaved = ClientSettingsSnapshots.Capture(path, true);
+                That(!battle.CompletePreyMovie(actor! with { Epoch = actor!.Epoch + 1 }, movieView) &&
+                    !battle.CompletePreyMovie(actor!, movieView with { Revision = movieView.Revision + 1 }),
+                    "旧选角及非当前view不能确认引导真实阶段演出");
+                foreach (byte kind in new byte[] { 1, 0 })
+                    That(session.ClaimRaidReward(kind, 0, repo, items.Items, items.GoldLimits, items.EpicPieces, clock.GetUtcNow()) is null,
+                        "引导电影完成前拒绝手动领取每类奖励");
+                That(ReferenceEquals(beforeMovie, session.Selected) &&
+                    ClientSettingsSnapshots.Capture(path, true) == beforeMovieSaved && !battle.PreyMovieCardsReady(actor!, movieView),
+                    "电影前拒领不改SQL或在线资产，也不伪造结果窗就绪");
+                That(battle.CompletePreyMovie(actor!, movieView) && !battle.CompletePreyMovie(actor!, movieView) &&
+                    battle.PreyMovieCardsReady(actor!, movieView), "引导真实phase演出只确认一次并放行电影后手动领取");
+                var eligibility = battle.LukeEligibility(actor!.Character, phase)!;
                 foreach (byte kind in new byte[] { 1, 0 })
                 {
                     var receipt = session.ClaimRaidReward(kind, 0, repo, items.Items, items.GoldLimits, items.EpicPieces, clock.GetUtcNow());
@@ -184,7 +315,15 @@ internal static class PreyGuideTests
                     var replay = session.ClaimRaidReward(kind, 0, repo, items.Items, items.GoldLimits, items.EpicPieces, clock.GetUtcNow());
                     That(replay is { Commit.Duplicate: true } && session.Selected!.Revision == revision,
                         "重复领取回放原收据且不再次发放资产");
+                    Reject<InvalidOperationException>(() => battle.ConfirmAutomaticLukeReward(
+                        eligibility with { Source = PreyGuideRewards.TeamSource }, receipt!.Prepared),
+                        "自动确认不能把引导原资格换成普通来源");
+                    That(!battle.HasConfirmedLukeReward(actor.Character, phase, kind), "错来源确认不消费当前引导领奖义务");
                     session.ConfirmRaidRewardPublished(receipt!);
+                    var confirmedView = battle.View;
+                    session.ConfirmRaidRewardPublished(receipt!);
+                    That(battle.HasConfirmedLukeReward(actor.Character, phase, kind) && ReferenceEquals(confirmedView, battle.View) &&
+                        session.Selected!.Revision == revision, "手动到账后重复确认不重复推进阶段或改变资产");
                 }
             }
         }
@@ -207,6 +346,11 @@ internal static class PreyGuideTests
             That(Enumerable.Range(1, 16).Count(slot => battle.View.Symbols[$"[area_{slot}_dgn_type]"] == 5) == 3 &&
                 Enumerable.Range(1, 16).Count(slot => battle.View.Symbols[$"[area_{slot}_dgn_type]"] == 4) == 2,
                 "战略地图具有真实防御及圣地区域类型");
+            That(Enumerable.Range(1, 20).All(slot => battle.View.Symbols[$"[area_{slot}]"] is var id &&
+                (id == 0 ? battle.View.Symbols[$"[area_{slot}_dgn_type]"] == 7 :
+                    script.Phases[0].Dungeons.Any(row => row.Id == id &&
+                        !row.Declarations.Any(field => field.Tag == "[single type]" && field.Values[0].Number != branch)))),
+                "引导战略图只发布当前single分支，全部空格使用原生隐藏类型7，不画团队普通据点");
             That(battle.Join(actor, [new("ship", [new(0, 0, [new(1, 1)], [])], new(0, 0, 0, 0, 0, 0)),
                 new("ship", [new(0, 0, [new(1, 1)], [])], new(0, 1, 0, 0, 0, 0))]), "船体用例登记原角色");
             Expire(new(9000, 0));
@@ -221,7 +365,8 @@ internal static class PreyGuideTests
             Expire(new(1, 1000));
             That(battle.View.Symbols["[slenikon hp]"] == 9983, "正在防御的Run不按漏守重复扣船体");
             battle.ReleaseDungeon(actor, identity.InstanceId);
-            That(battle.View.Symbols["[slenikon hp]"] == 7983 && battle.View.Symbols["[area_2]"] == 0,
+            That(battle.View.Symbols["[slenikon hp]"] == 7983 && battle.View.Symbols["[area_2]"] == 0 &&
+                battle.View.Symbols["[area_2_dgn_type]"] == 7,
                 "放弃防御只损失资源2000点并移除区域");
             while (battle.View.Symbols["[slenikon hp]"] > 2000) Expire(new(9001, 0));
             Expire(new(1, 1000));

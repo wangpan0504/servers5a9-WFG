@@ -35,7 +35,7 @@ internal static class PvpArenaProjection
         if (notice.Kind is PvpArenaNoticeKind.Room or PvpArenaNoticeKind.Seats or PvpArenaNoticeKind.Matching)
             foreach (var identity in characters)
                 Post(NotiPacketType.USERINFO, TownPackets.Actor(identity.SkillCharacter, identity.PvpGrade, identity.Channel,
-                    adventureName: identity.AdventureName, premiumPcRoom: identity.PremiumPcRoom), "pvp_arena_actor");
+                    adventureName: identity.AdventureName, premiumPcRoom: identity.PremiumPcRoom, returningAdventurerType: identity.ReturningAdventurerType, marriage: context.MarriageAppearance), "pvp_arena_actor");
         switch (notice.Kind)
         {
             case PvpArenaNoticeKind.Matching:

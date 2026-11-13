@@ -12,6 +12,7 @@ internal sealed record PartyCardTemplate(DfoServer.Game.Dungeons.PartyDungeonIns
 internal sealed class GameConnectionContext(ConnectionContext connection, AccountOwners.Lease owner, GameSession session, GameConnectionSender sender,
     IGameConnectionActivity? activity = null, ChannelIdentity channel = default)
 {
+    internal MarriageAppearance? MarriageAppearance { get; init; }
     // 仅记录本连接已写出的任务期段；账号任务状态仍由原Session和仓储持有。
     internal (long Epoch, long Period)? BattlePassMissionDisplay { get; set; }
     // 本连接当前目录的账号材料显示槽；余额仍只取Selected的钱包，不进入实体库存。
@@ -22,10 +23,23 @@ internal sealed class GameConnectionContext(ConnectionContext connection, Accoun
     internal Func<Task>? AfterDispatch { get; set; }
     internal DfoServer.Network.Projection.ServerEventProjection? ServerEvents { get; set; }
     internal DfoServer.Network.Projection.DailyAttendanceProjection? DailyAttendance { get; set; }
+    internal DfoServer.Network.Projection.MonsterMockBattleProjection? MonsterMockBattle { get; set; }
     internal DfoServer.Network.Projection.Strongway2019Projection? Strongway2019 { get; set; }
     public DfoServer.Network.Projection.PartyDirectoryProjection? PartyDirectory { get; set; }
     // 仅记录本连接实际写出的攻坚展示，不拥有玩法状态；断线/新连接自然失效。
     internal DfoServer.Network.Projection.RaidCombatDisplayIdentity? RaidDisplay { get; set; }
+    // 仅记录本连接已写出的开局飞鸟及登船场景，不改变原Battle准备时钟或准入。
+    internal (long Epoch, ushort Character, Guid Instance)? PreyFlightDisplay { get; set; }
+    internal (long Epoch, ushort Character, Guid Instance)? PreyBoardingDisplay { get; set; }
+    // 重返已绑定但落位尚未完成时，原668重试必须继续位置提交与初始化。
+    internal (long Epoch, ushort Character, Guid Instance)? PreyRejoinPending { get; set; }
+    // 失败601和结束587各自按实际写帧去重；不保存业务终态或奖励资格。
+    // 失败展示只记录本连接已写出的601、587演出、587终态，不拥有团本业务状态。
+    internal (long Epoch, ushort Character, Guid Instance, int Phase, byte Stage)? PreyFailureDisplay { get; set; }
+    internal (Guid Instance, long Event)? PreyWarningDisplay { get; set; }
+    internal bool PreyBoardingPending(Guid instance) => Session.Selected is { } character &&
+        Session.StartedRaid?.InstanceId == instance &&
+        PreyBoardingDisplay != (Session.SelectionEpoch, character.Id, instance);
     internal byte[]? RaidRosterDisplay { get; set; }
     internal DfoServer.Game.Raids.RaidWeeklyCycle? RaidClearLukeCycle { get; init; }
     internal (long Epoch, byte[] Body)? RaidClearDisplay { get; set; }
@@ -39,6 +53,8 @@ internal sealed class GameConnectionContext(ConnectionContext connection, Accoun
     internal Dictionary<int, bool> LukeNamedDisplays { get; } = [];
     internal DfoServer.Network.Projection.RaidCombatDisplayIdentity? RaidMoviePrompt { get; set; }
     internal DfoServer.Network.Projection.RaidCombatDisplayIdentity? RaidMovieCards { get; set; }
+    // 同一实例/阶段一份合并个人结果及一张完整团队表，按实际写帧位图去重。
+    internal (DfoServer.Network.Projection.RaidCombatDisplayIdentity Identity, byte Mask)? PreyResultDisplay { get; set; }
     internal DfoServer.Network.Projection.RaidCombatDisplayIdentity? AntonCardsDisplay { get; set; }
     internal HashSet<DfoServer.GameWorld.Raids.RaidTimer> AntonTimerDisplays { get; } = [];
     // 最多保留当前团本的节点展示；只在写帧成功后记录，避免重复Clear触发原生横幅。
@@ -48,6 +64,7 @@ internal sealed class GameConnectionContext(ConnectionContext connection, Accoun
     internal (Guid Instance, int Value)? AntonMeteoDisplay { get; set; }
     // 当前连接、当前实例最多6个影片符号；发送FIFO确认后更新。
     internal Guid AntonMovieDisplayInstance { get; set; }
+    internal (Guid Instance, long Event) AntonKillAllDisplay { get; set; }
     internal Dictionary<int, long> AntonMovieDisplays { get; } = [];
     internal System.Collections.Immutable.ImmutableDictionary<ushort, int> FiendwarUsers { get; set; } = System.Collections.Immutable.ImmutableDictionary<ushort, int>.Empty;
     internal System.Collections.Immutable.ImmutableDictionary<int, DfoServer.Game.Raids.FiendwarUnit> FiendwarEnemies { get; set; } = System.Collections.Immutable.ImmutableDictionary<int, DfoServer.Game.Raids.FiendwarUnit>.Empty;
@@ -62,7 +79,11 @@ internal sealed class GameConnectionContext(ConnectionContext connection, Accoun
     internal Dictionary<int, long> FiendwarWarningDisplays { get; } = [];
     internal Dictionary<int, DfoServer.GameWorld.Raids.RaidDungeonState> AntonDungeonDisplays { get; } = [];
     internal Dictionary<DfoServer.GameWorld.Raids.RaidTimer, DfoServer.Network.Projection.LukeTimerDisplay> LukeTimerDisplays { get; } = [];
+    internal Dictionary<byte, (Guid Instance, int Phase, int Target)> PreyMarkerDisplays { get; } = [];
+    internal DfoServer.Network.Projection.PreyBoardingProjection? PreyBoarding { get; set; }
     internal DfoServer.Network.Projection.LukePhaseExitProjection? LukePhaseExit { get; set; }
+    // 只重试本连接已经开过窗的引导终局回候战。断线后的新连接没有这份槽。
+    internal DfoServer.Network.Projection.PreyGuideWaitingRetry PreyGuideWaiting { get; } = new();
     public int Id => connection.Id;
     public IPAddress Peer => connection.Peer;
     public CancellationToken Stop => connection.Stop;

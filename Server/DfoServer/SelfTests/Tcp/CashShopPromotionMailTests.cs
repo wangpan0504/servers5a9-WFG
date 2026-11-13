@@ -69,7 +69,8 @@ internal static class CashShopPromotionMailTests
             var rules = Inventory.CashShopPromotionTests.PilotRules();
             var clock = new Inventory.DailyBoosterTestClock(DateTimeOffset.Parse("2035-12-31T23:59:59Z"));
             var catalog = ServerRuntime.LoadCashShopPromotions(resources,
-                JsonSerializer.Serialize(new[] { new PromotionConfiguration(rules, true) }));
+                JsonSerializer.Serialize(new[] { new PromotionConfiguration(rules, true) }),
+                DfoServer.Game.Dungeons.HellPartyTicketConsumers.From(towns, testResources.Dungeons));
             var database = Path.Combine(testRoot, "game.db");
             var repository = new CharacterRepository(database, testResources.Quests, promotions: () => catalog, promotionClock: clock);
             var owners = new AccountOwners();

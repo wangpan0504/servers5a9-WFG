@@ -23,10 +23,14 @@ internal static class CharacterRenameCard
         var position = new InventorySlot(InventoryListType.Main, checked((short)slot));
         var source = character.Inventory.Find(position);
         var definition = source is null ? null : items.ActionConsumable(source.Core.ItemId);
-        if (definition is not { Label: "[character name change]", Parameters.Length: 0 } || !AllowsMarriage(character.Marriage))
+        if (!Eligible(character, definition))
             return InventoryResult.Reject(19);
-        var result = InventoryActionConsumableService.Plan(character, position, definition, place, clock);
+        var result = InventoryActionConsumableService.Plan(character, position, definition!, place, clock);
         return result.Plan is { } plan ? result with { Plan = new(plan.Before, plan.After, "character_rename_card", plan.CharacterPrecondition)
             { UsedItems = plan.UsedItems } } : result;
     }
+
+    internal static bool Eligible(Character character, ActionConsumableDefinition? definition) =>
+        definition is { Label: "[character name change]", Parameters.Length: 0 } &&
+        definition.Item.AllowsUse(character.Level, character.Job) && AllowsMarriage(character.Marriage);
 }

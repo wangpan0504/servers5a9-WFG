@@ -72,7 +72,7 @@ internal sealed class InventoryCargoService(ItemCatalog catalog, CargoCatalog ca
             tier.Capacity <= before.AccountCargo.Capacity)
             return InventoryResult.Reject(17);
         var template = catalog.Get(tier.ToolItemId);
-        if (!template.AllowsUse(character.Level, character.Job) || !InventoryMoveService.RequiredSkillSatisfied(character, template))
+        if (!template.AllowsActivation(character.Level, character.Job) || !InventoryMoveService.RequiredSkillSatisfied(character, template))
             return InventoryResult.Reject(17);
         tool = before.Items.Where(item => item.Position.List == InventoryListType.Main && item.Core.ItemId == tier.ToolItemId &&
             item.Core.Kind == template.Kind && item.Core.IsStackable && item.Core.EquipmentLockId == 0 && !item.IsExpired(now.ToUnixTimeSeconds()))
@@ -88,6 +88,29 @@ internal sealed class InventoryCargoService(ItemCatalog catalog, CargoCatalog ca
         }
         after = after with { AccountCargo = before.AccountCargo with { Capacity = tier.Capacity } };
         return new(true, 0, new(before, after, "account_cargo_upgrade", new(character, tool?.ExpireTime > 0 ? tool.ExpireTime : null, clock)));
+    }
+
+    public InventoryResult AccountUpgradeTool(Character character, short slot)
+    {
+        var before = character.Inventory;
+        var item = before.Find(new(InventoryListType.Main, slot));
+        if (item is null || !item.Core.IsStackable || item.Core.EquipmentLockId != 0 ||
+            item.IsExpired(Clock.GetUtcNow().ToUnixTimeSeconds()) || before.AccountCargo.Capacity == 0)
+            return InventoryResult.Reject(0);
+        var template = catalog.Get(item.Core.ItemId);
+        if (!template.AdvancesAccountCargo || item.Core.Kind != template.Kind ||
+            !template.AllowsActivation(character.Level, character.Job) || !InventoryMoveService.RequiredSkillSatisfied(character, template))
+            return InventoryResult.Reject(0);
+        var tier = cargo.Next(before.AccountCargo.Capacity);
+        if (tier is null)
+            return InventoryResult.Reject(0);
+        // 逐档券以请求源槽的一张代替该档费用，不按商城工具或个人金库解释。
+        var consumed = InventoryDeleteService.Plan(before, item.Position, item.Core.Value, 1);
+        if (!consumed.Accepted)
+            return InventoryResult.Reject(0);
+        var after = consumed.Plan!.After with { AccountCargo = before.AccountCargo with { Capacity = tier.Capacity } };
+        return new(true, 0, new(before, after, "account_cargo_upgrade_tool",
+            new(character, item.ExpireTime > 0 ? item.ExpireTime : null, Clock)));
     }
 
     public InventoryResult Gold(Character character, int amount, bool deposit)
@@ -112,7 +135,7 @@ internal sealed class InventoryCargoService(ItemCatalog catalog, CargoCatalog ca
         if (item is null || !item.Core.IsStackable || item.Core.EquipmentLockId != 0 || item.Core.IsExpired(Clock.GetUtcNow().ToUnixTimeSeconds()))
             return InventoryResult.Reject(17);
         var template = catalog.Get(item.Core.ItemId);
-        if (!template.AllowsUse(character.Level, character.Job) || !InventoryMoveService.RequiredSkillSatisfied(character, template))
+        if (!template.AllowsActivation(character.Level, character.Job) || !InventoryMoveService.RequiredSkillSatisfied(character, template))
             return InventoryResult.Reject(17);
         ushort target = template.PersonalCargoUpgradeTarget;
         if (template.AdvancesPersonalCargo)
@@ -130,5 +153,20 @@ internal sealed class InventoryCargoService(ItemCatalog catalog, CargoCatalog ca
         var after = consumed.Plan!.After with { CargoCapacity = target };
         return new(true, 0, new(before, after, "personal_cargo_upgrade",
             new(character, item.ExpireTime > 0 ? item.ExpireTime : null, Clock)));
+    }
+
+    public InventoryResult MoveToAccountCargo(Character character, InventoryListType sourceList, short sourceSlot, int count = 0)
+    {
+        var before = character.Inventory;
+        if (before.AccountCargo.Capacity == 0 || sourceList == InventoryListType.AccountCargo)
+            return InventoryResult.Reject(23);
+        var source = before.Find(new(sourceList, sourceSlot));
+        if (source is null)
+            return InventoryResult.Reject(23);
+        int moveCount = count <= 0 ? source.Core.Count : count;
+        var request = new InventoryMoveRequest(
+            source.Position, source.Core.ItemId, moveCount,
+            new(InventoryListType.AccountCargo, 0), 0, 0, 0, 0, 0);
+        return InventoryMoveService.Plan(character, request, catalog, Clock.GetUtcNow().ToUnixTimeSeconds());
     }
 }

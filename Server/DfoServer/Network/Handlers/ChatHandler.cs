@@ -38,8 +38,13 @@ internal sealed class ChatHandler(ChatService chat, InventoryProjection? invento
     NamedWhisperService? named = null, GuildContributionProjection? guildContribution = null,
     SelfCharacterScoreProjection? selfScore = null, DfoServer.GameWorld.Characters.ChatEmoticonCatalog? emoticons = null,
     PromotionPageProjection? promotionPage = null,
-    DfoServer.GameWorld.Characters.SkillLearningCatalog? learning = null) : IGameCommandModule
+    DfoServer.GameWorld.Characters.SkillLearningCatalog? learning = null,
+    Func<GameSession, bool>? isChatBlocked = null) : IGameCommandModule
 {
+#if DEBUG
+    internal Func<GameConnectionContext, Task>? DebugDungeonKill { get; init; }
+#endif
+
     // 日志里的文本上限：单条聊天不能把热点日志撑大。
     const int LogTextLimit = 64;
 
@@ -57,7 +62,7 @@ internal sealed class ChatHandler(ChatService chat, InventoryProjection? invento
         // 助手机器命名空间在解码/具名私聊/正文日志之前隔离，畸形或跨频道请求也不广播。
         if (HelperRequests.Reserved(packet.Body))
         {
-            if (!context.Session.AllowChatSend() || IsChatBlocked(context.Session)) return CommandResult.Handled;
+            if (!context.Session.AllowChatSend() || (isChatBlocked ?? IsChatBlocked)(context.Session)) return CommandResult.Handled;
             var helper = HelperRequests.Parse(packet.Body);
             if (helper is null) return CommandResult.Handled;
             if (helper.DirectPickup is { } pickupEnabled)
@@ -161,6 +166,13 @@ internal sealed class ChatHandler(ChatService chat, InventoryProjection? invento
             return CommandResult.Handled;
         }
 
+        // 静音/封禁预留钩子：玩家管理模块尚未接入，默认恒不拦截；接入后在这里读取真实状态并记 chat_blocked（覆盖具名私聊与常规广播）。
+        if ((isChatBlocked ?? IsChatBlocked)(context.Session))
+        {
+            log.Write("chat_blocked", new { Connection = context.Id, send.Type });
+            return CommandResult.Handled;
+        }
+
         if (send.TargetName is not null && named is not null)
         {
             if (emoticons is not null && send.Text.Contains('\x1e'))
@@ -174,14 +186,15 @@ internal sealed class ChatHandler(ChatService chat, InventoryProjection? invento
             return CommandResult.Handled;
         }
 
-        // 静音/封禁预留钩子：玩家管理模块尚未接入，恒不拦截；接入后在这里读取真实状态并记 chat_blocked。
-        if (IsChatBlocked(context.Session))
+        // 页面机器请求沿用限流和封禁；能力关闭仍吞掉其保留空间，不广播或泄漏机器文本。
+#if DEBUG
+        if (DebugDungeonKill is not null && DungeonHandler.IsDebugKillCommand(send))
         {
-            log.Write("chat_blocked", new { Connection = context.Id, send.Type });
+            await DebugDungeonKill(context);
             return CommandResult.Handled;
         }
+#endif
 
-        // 页面机器请求沿用限流和封禁；能力关闭仍吞掉其保留空间，不广播或泄漏机器文本。
         if (PromotionPageProjection.MachineNamespace(send))
         {
             string? nonce = PromotionPageProjection.MachineNonce(send);
@@ -211,7 +224,7 @@ internal sealed class ChatHandler(ChatService chat, InventoryProjection? invento
             send = send with { Text = context.Session.PrepareChatEmoticons(emoticons, send.Text) };
         string text = ChatText.Truncate(send.Text, out bool truncated);
         bool known = ChatService.TryKind(send.Type, out var kind);
-        uint target = kind is ChatKind.Whisper or ChatKind.ServerMegaphone or ChatKind.ChannelMegaphone ? send.Arg : 0;
+        uint target = kind is ChatKind.Whisper or ChatKind.ServerMegaphone or ChatKind.ChannelMegaphone or ChatKind.OfficialMegaphone ? send.Arg : 0;
         log.Write("chat_send", new
         {
             Connection = context.Id, send.Type, Target = target, send.Layer,
@@ -223,7 +236,8 @@ internal sealed class ChatHandler(ChatService chat, InventoryProjection? invento
             return CommandResult.Handled;
         }
 
-        var origin = context.Session.ChatOrigin();
+        var origin = context.Session.ChatOrigin(includeAdventureName: kind is
+            ChatKind.ServerMegaphone or ChatKind.ChannelMegaphone or ChatKind.OfficialMegaphone);
         if (origin is null)
         {
             log.Write("chat_rejected", new { Connection = context.Id, Reason = "no-character", send.Type });
@@ -232,7 +246,7 @@ internal sealed class ChatHandler(ChatService chat, InventoryProjection? invento
 
         if (kind == ChatKind.Guild) origin = origin with { AdventureName = context.Session.ReadAdventureName() };
 
-        // 两种喇叭：先校验槽位/道具并走既有背包提交路径扣 1 个；扣减失败不广播，避免"没扣钱也喊话"。
+        // 普通喇叭先扣1，1120只读验证无限道具及频道资格；失败均不广播。
         if (!TryConsumeMegaphone(context, send, kind, out var deduction)) return CommandResult.Handled;
 
         var dispatch = chat.Broadcast(send, origin, context.Session);
@@ -249,13 +263,13 @@ internal sealed class ChatHandler(ChatService chat, InventoryProjection? invento
             if (kind == ChatKind.Guild && guildContribution is not null) await guildContribution.ChatAsync(context);
             // 喇叭：记种类、类型字节与编码后的段落长度，便于定位"客户端的喇叭页签为什么没这一行"；
             // 不写正文（正文可能很长，且热点日志不应复制玩家文本）。
-            if (kind is ChatKind.ServerMegaphone or ChatKind.ChannelMegaphone)
+            if (kind is ChatKind.ServerMegaphone or ChatKind.ChannelMegaphone or ChatKind.OfficialMegaphone)
             {
                 var megaphone = MegaphonePackets.Measure(kind, origin.Name, send.Text);
                 log.Write("chat_megaphone", new
                 {
                     Connection = context.Id,
-                    Variant = kind == ChatKind.ServerMegaphone ? "server" : "channel",
+                    Variant = kind == ChatKind.OfficialMegaphone ? "official" : kind == ChatKind.ServerMegaphone ? "server" : "channel",
                     SourceServer = origin.Scene.Channel.ServerIndex, SourceChannel = origin.ChannelNumber, Actor = origin.CharacterId,
                     megaphone.Type, megaphone.SpeakerBytes, megaphone.TextBytes, dispatch.Recipients
                 });
@@ -292,7 +306,7 @@ internal sealed class ChatHandler(ChatService chat, InventoryProjection? invento
             return CommandResult.Handled;
         }
 
-        if (IsChatBlocked(context.Session))
+        if ((isChatBlocked ?? IsChatBlocked)(context.Session))
         {
             log.Write("chat_blocked", new { Connection = context.Id, link.Kind });
             return CommandResult.Handled;
@@ -307,7 +321,8 @@ internal sealed class ChatHandler(ChatService chat, InventoryProjection? invento
             return CommandResult.Handled;
         }
 
-        var origin = context.Session.ChatOrigin();
+        var origin = context.Session.ChatOrigin(includeAdventureName: kind is
+            ChatKind.ServerMegaphone or ChatKind.ChannelMegaphone or ChatKind.OfficialMegaphone);
         if (origin is null)
         {
             log.Write("chat_rejected", new { Connection = context.Id, Reason = "no-character", link.Kind });
@@ -337,9 +352,9 @@ internal sealed class ChatHandler(ChatService chat, InventoryProjection? invento
             var plan = isNamed || kind == ChatKind.Guild
                 ? ItemLinkPackets.DesignNamed(new(namedType ?? ChatMessageType.Guild, 0, origin.Name,
                     origin.Scene.Channel.ServerIndex, ""), link.Text, link.Records)
-                : kind is ChatKind.ServerMegaphone or ChatKind.ChannelMegaphone
+                : kind is ChatKind.ServerMegaphone or ChatKind.ChannelMegaphone or ChatKind.OfficialMegaphone
                     ? ItemLinkPackets.DesignMegaphone(kind, new(origin.Name, "")
-                        { Channel = origin.Scene.Channel, Actor = origin.CharacterId }, link.Text, link.Records)
+                        { Channel = origin.Scene.Channel, Actor = origin.CharacterId, AdventureName = origin.AdventureName }, link.Text, link.Records)
                     : ItemLinkPackets.Design(kind, origin.CharacterId, origin.Name, link.Text, link.Records,
                         origin.Scene.Channel.ServerIndex);
             log.Write("item_hyperlink", new
@@ -359,11 +374,17 @@ internal sealed class ChatHandler(ChatService chat, InventoryProjection? invento
     bool TryConsumeMegaphone(GameConnectionContext context, ChatSend request, ChatKind kind, out InventoryResult? deduction)
     {
         deduction = null;
-        if (kind is not (ChatKind.ServerMegaphone or ChatKind.ChannelMegaphone)) return true;
+        if (kind is not (ChatKind.ServerMegaphone or ChatKind.ChannelMegaphone or ChatKind.OfficialMegaphone)) return true;
         int itemId = ChatService.MegaphoneItemId(kind);
         if (request.Arg > short.MaxValue)
         {
             log.Write("chat_megaphone_rejected", new { Connection = context.Id, Slot = request.Arg, Item = itemId, Reason = "slot-range" });
+            return false;
+        }
+        if (kind == ChatKind.OfficialMegaphone)
+        {
+            if (context.Session.CanUseOfficialChatMegaphone((ushort)request.Arg)) return true;
+            log.Write("chat_megaphone_rejected", new { Connection = context.Id, Slot = request.Arg, Item = itemId, Reason = "qualification-failed" });
             return false;
         }
         deduction = context.Session.UseChatMegaphone((ushort)request.Arg, itemId);

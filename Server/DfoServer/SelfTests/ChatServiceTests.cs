@@ -25,7 +25,7 @@ namespace DfoServer;
 /// <summary>
 /// 聊天 Phase 1 的单元覆盖（不启动网络、不需要 PVF）：
 /// 入站 0x0011 解析口径、CP936 200 字节截断、每连接节流、显示 type 映射（普通/队伍/悄悄话=3、公会/攻坚队=6）、
-/// 0x0C 正文（含文本与 255 字节截断）、0x76 喇叭整帧/三条串非空/29-511-16 字节截断、0x06AD 公告整帧与 24/600 字节截断，
+/// 0x0C 正文（含文本与 255 字节截断）、0x76喇叭整帧/29-511字节正文截断/完整冒险团邀请目标、0x06AD 公告整帧与 24/600 字节截断，
 /// 以及 ChatService 的四类投递规则（同场景/同公会/只投目标/全服与同频道）、
 /// 物品链接 0x01A8 的 179 字节实测包解析/原样转发/非法长度容错，
 /// 和 GM <c>notice</c> 的 all/定向投递、GM <c>chat-inject</c>/<c>inject-raw</c> 的诊断投递。
@@ -89,6 +89,7 @@ internal static class ChatServiceTests
         Truncation();
         RunRateRules();
         ChannelMapping();
+        OfficialMegaphoneRules();
         Wire();
         MegaphoneWire();
         ItemLinkWire();
@@ -125,7 +126,7 @@ internal static class ChatServiceTests
             }
             w.Write((uint)text.Length);w.Write(text);
             if(linked) { w.Write((byte)2);foreach(var record in records)w.Write(record); }
-            Name(w,megaphone?"X":"TeamA");
+            Name(w,megaphone?"":"TeamA");
             if(!linked && type==36) Name(w,"QuoteRole");
         });
         foreach(byte type in new byte[]{1,36,40,41})
@@ -315,10 +316,9 @@ internal static class ChatServiceTests
     }
 
     /// <summary>
-    /// 喇叭通道 <c>NOTI 0x0076 MEGAPHONE_MSG</c>：实测整帧逐字节、三条串必须非空（len=0 会让客户端整帧丢弃）、
-    /// 29/511/16 字节按字符边界截断，以及服务器/频道喇叭的 <c>type</c> 分别是 <c>0x0E</c>/<c>0x0B</c>。
+    /// 喇叭逐字节、29/511字节正文截断及完整CP936冒险团邀请目标；无名不回退合法占位。
     /// </summary>
-    static void MegaphoneWire()
+    internal static void MegaphoneWire()
     {
         // 2026-10-20 23:5x 实机截图确认的整帧（type=0x0B、str1=AAA、str2=MEGA-11-WHITELIST、str3=BBB）：
         // [0B][B=00][C=00][D=00][E=0000] + [03000000 AAA] + [11000000 MEGA-11-WHITELIST] + [03000000 BBB]
@@ -326,17 +326,17 @@ internal static class ChatServiceTests
             Convert.FromHexString("0B000000000003000000414141110000004D4547412D31312D57484954454C49535403000000424242"),
             "历史type11显示样本保持完整三条DSTR，不据此把道具37误映射到11");
 
-        // 两种喇叭的确切整帧（角色名「测试2」5 字节、正文「喇叭测试」8 字节、占位 X 1 字节），用于实机验收对照。
+        // 无账号名的底层构包保留第三串长度头0，不伪造可命中账号的X。
         Bytes(MegaphonePackets.Build(ChatKind.ServerMegaphone, "测试2", "喇叭测试"),
-            Convert.FromHexString("0B000000000005000000B2E2CAD43208000000C0AEB0C8B2E2CAD40100000058"),
-            "服务器喇叭整帧：type11、角色名5B、正文8B、兼容尾串1B");
+            Convert.FromHexString("0B000000000005000000B2E2CAD43208000000C0AEB0C8B2E2CAD400000000"),
+            "服务器喇叭整帧：type11、角色名5B、正文8B、无账号目标长度0");
         Bytes(MegaphonePackets.Build(ChatKind.ChannelMegaphone, "测试2", "喇叭测试"),
-            Convert.FromHexString("0D000000000005000000B2E2CAD43208000000C0AEB0C8B2E2CAD40100000058"),
+            Convert.FromHexString("0D000000000005000000B2E2CAD43208000000C0AEB0C8B2E2CAD400000000"),
             "频道喇叭整帧：type13，其余三串与服务器喇叭相同");
 
         That(MegaphonePackets.HeaderLength == 6 && MegaphonePackets.SpeakerMaxBytes == 29 &&
-            MegaphonePackets.TextMaxBytes == 511 && MegaphonePackets.TagMaxBytes == 16,
-            "0x76 头 6 字节；三条串上限分别是 29/511/16 字节（客户端要求 len < 0x1E/0x200/0x11）");
+            MegaphonePackets.TextMaxBytes == 511 && MegaphonePackets.TagMaxBytes == 32,
+            "0x76头6字节；正文29/511字节，完整目标最多32B且不超过16UTF16");
         That(MegaphonePackets.TypeOf(ChatKind.ServerMegaphone) == 11 &&
             MegaphonePackets.TypeOf(ChatKind.ChannelMegaphone) == 13,
             "玩家服务器喇叭type11，频道喇叭type13，不混入官方type14");
@@ -344,21 +344,21 @@ internal static class ChatServiceTests
             "非喇叭种类没有 0x76 类型，直接抛出而不是静默按频道喇叭发出去");
         var source = new MegaphoneText("测试2","喇叭测试") { Channel = new(2,31), Actor = 0x1234 };
         Bytes(MegaphonePackets.Build(ChatKind.ServerMegaphone,source),
-            Convert.FromHexString("0B02001F341205000000B2E2CAD43208000000C0AEB0C8B2E2CAD40100000058"),
+            Convert.FromHexString("0B02001F341205000000B2E2CAD43208000000C0AEB0C8B2E2CAD400000000"),
             "服务器喇叭携带真实来源分组、频道及小端角色编号");
         Bytes(MegaphonePackets.Build(ChatKind.ChannelMegaphone,source),
-            Convert.FromHexString("0D02001F341205000000B2E2CAD43208000000C0AEB0C8B2E2CAD40100000058"),
+            Convert.FromHexString("0D02001F341205000000B2E2CAD43208000000C0AEB0C8B2E2CAD400000000"),
             "频道喇叭不能用全0或接收者频道代替来源身份");
 
-        // 空发言人 / 空正文 / 空占位都回退成单字节：client 在任一条 len=0 时丢弃整帧。
+        // 发言人/正文保留旧回退；目标无真实名必须为空，不能回退另一账号键。
         var empty = MegaphoneFields(MegaphonePackets.Build(ChatKind.ChannelMegaphone, "", ""));
         That(empty.Speaker == "?" && empty.SpeakerBytes == 1 && empty.Text == " " && empty.TextBytes == 1 &&
-            empty.Tag == "X" && empty.TagBytes == 1,
-            "空发言人/空正文/空 str3 都回退成单字节（? / 空格 / X），三条串长度都 ≥ 1");
+            empty.Tag == "" && empty.TagBytes == 0,
+            "空发言人/正文回退问号/空格，空账号目标保持长度0");
         var nulls = MegaphoneFields(MegaphonePackets.Build(ChatKind.ServerMegaphone, null!, null!));
-        That(nulls.SpeakerBytes >= 1 && nulls.TextBytes >= 1 && nulls.TagBytes >= 1, "null 输入同样不会生成 len=0");
-        That(MegaphoneFields(MegaphonePackets.Build(ChatKind.ChannelMegaphone, "AAA", "MEGA", "")).Tag == "X",
-            "显式传空 str3 也回退成占位 X，保证非空");
+        That(nulls.SpeakerBytes >= 1 && nulls.TextBytes >= 1 && nulls.TagBytes == 0, "null正文不空且目标不伪造占位");
+        That(MegaphoneFields(MegaphonePackets.Build(ChatKind.ChannelMegaphone, "AAA", "MEGA", "")).TagBytes == 0,
+            "显式空目标保持0，不形成可邀请别名");
 
         // 截断：str1 20 个汉字 = 40 字节 ⇒ 14 个完整汉字（28 字节）；str2 300 个汉字 = 600 字节 ⇒ 255 个（510 字节）。
         var clipped = MegaphoneFields(MegaphonePackets.Build(ChatKind.ChannelMegaphone,
@@ -367,8 +367,8 @@ internal static class ChatServiceTests
             clipped.Text == new string('汉', 255) && clipped.TextBytes == 510,
             "超长发言人/正文按字符边界截断到 28/510 字节，不产生半个汉字");
         That(clipped.SpeakerBytes <= MegaphonePackets.SpeakerMaxBytes &&
-            clipped.TextBytes <= MegaphonePackets.TextMaxBytes && clipped.TagBytes >= 1,
-            "截断后长度不超过 29/511 字节上限，且三条串仍非空");
+            clipped.TextBytes <= MegaphonePackets.TextMaxBytes && clipped.TagBytes == 0,
+            "正文截断不超过29/511B，不把缺失账号名替成合法占位");
 
         // 边界对照：29/511 字节整好不截断，30/512 字节各让出一字节。
         var exact = MegaphoneFields(MegaphonePackets.Build(ChatKind.ChannelMegaphone,
@@ -382,23 +382,48 @@ internal static class ChatServiceTests
         That(MegaphoneFields(MegaphonePackets.Build(ChatKind.ChannelMegaphone, "测", "汉")).SpeakerBytes == 2,
             "单个汉字发言人整段保留（2 字节），不会被切成半个字");
 
-        // 服务器喇叭 0x0E / 频道喇叭 0x0B：str3 由 Builder 保证非空，正文与发言人各自编码。
+        // 服务器11/频道13保持角色名与正文；无账号名的诊断构包不造邀请目标。
         var server = MegaphoneFields(MegaphonePackets.Build(ChatKind.ServerMegaphone, "测试2", "喇叭测试"));
         var channel = MegaphoneFields(MegaphonePackets.Build(ChatKind.ChannelMegaphone, "测试2", "喇叭测试"));
         That(server.Type == 11 && channel.Type == 13, "服务器喇叭发11、频道喇叭发13");
         That(server.Speaker == "测试2" && server.Text == "喇叭测试" && server.SpeakerBytes == 5 && server.TextBytes == 8,
             "服务器喇叭 str1=发言人、str2=正文，长度按 CP936 字节数");
         That(channel.Speaker == "测试2" && channel.Text == "喇叭测试" &&
-            server.TagBytes >= 1 && channel.TagBytes >= 1,
-            "频道喇叭同样带发言人与正文，两种喇叭的 str3 都非空");
+            server.TagBytes == 0 && channel.TagBytes == 0,
+            "两种喇叭保留发言人与正文，未提供账号名时目标长度0");
         That(server.B == 0 && server.C == 0 && server.D == 0 && server.E == 0,
             "未指定来源的底层诊断构包保留0，正式投递使用MegaphoneText来源身份");
         var measured = MegaphonePackets.Measure(ChatKind.ServerMegaphone, "测试2", "喇叭测试");
         That(measured.Type == 11 && measured.SpeakerBytes == 5 && measured.TextBytes == 8,
             "Measure 与真实帧一致（投递日志用它记类型与段落长度，不写正文）");
+        foreach (string target in new[] { "A", new string('a', 16), new string('测', 8) + "A", new string('测', 16) })
+            foreach (var kind in new[] { ChatKind.ServerMegaphone, ChatKind.ChannelMegaphone, ChatKind.OfficialMegaphone })
+            {
+                var message = source with { AdventureName = target };
+                var fields = MegaphoneFields(MegaphonePackets.Build(kind, message));
+                That(fields.Tag == target && fields.TagBytes == CharacterName.Encoding.GetByteCount(target),
+                    "完整目标保持原账号名，不以16B截断产生别名：" + target);
+                byte[] text = ChatText.Encoding.GetBytes("body");
+                Bytes(MegaphonePackets.BuildBytes(kind, message, text), MegaphonePackets.Build(kind, message with { Text = "body" }),
+                    "118原字节降级与普通文字共享完整目标");
+                byte[] record = MeasuredLinkRecord();
+                byte[] quoted = ChatText.Encoding.GetBytes("\u007f\u007f[item]\u007f");
+                var linked = ItemLinkPackets.DesignMegaphone(kind, message, quoted, record);
+                byte[] targetBytes = CharacterName.Encoding.GetBytes(target);
+                That((ushort)linked.Opcode == 372 && linked.Body.AsSpan(linked.Body.Length - targetBytes.Length).SequenceEqual(targetBytes) &&
+                    BinaryPrimitives.ReadUInt32LittleEndian(linked.Body.AsSpan(linked.Body.Length - targetBytes.Length - 4)) == targetBytes.Length,
+                    "372记录后目标完整，不改变三type或丢失32B长名");
+                var fallback = ItemLinkPackets.DesignMegaphone(kind, message, quoted, null);
+                Bytes(fallback.Body, MegaphonePackets.BuildBytes(kind, message, quoted), "372缺记录降级118不丢目标");
+            }
+        foreach (string? target in new string?[] { null, "", "A\0B", "A B", new string('a', 17), new string('测', 17), "A😀", new string('a', 33) })
+        {
+            var fields = MegaphoneFields(MegaphonePackets.Build(ChatKind.ServerMegaphone, "source", "body", target));
+            That(fields.TagBytes == 0 && fields.Tag == "", "非法/空旧账号数据只产生空目标，不前缀匹配或替代");
+        }
     }
 
-    /// <summary>按 <c>Docs/协议/聊天.md</c> 的布局解析一帧 <c>NOTI 0x0076</c> 正文，并校验三段长度自洽且都非空。</summary>
+    /// <summary>按协议独立解析三条长度；目标允许0，发言人/正文保留非空合同。</summary>
     static (byte Type, byte B, byte C, byte D, ushort E, string Speaker, string Text, string Tag,
         int SpeakerBytes, int TextBytes, int TagBytes) MegaphoneFields(byte[] body)
     {
@@ -406,7 +431,7 @@ internal static class ChatServiceTests
         int ReadLength(out string value)
         {
             int bytes = (int)BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(offset));
-            That(bytes >= 1, "喇叭每条串都必须 len ≥ 1（len=0 会让客户端丢弃整帧）");
+            That(bytes >= 0 && bytes <= body.Length - offset - 4, "喇叭字符串长度不超实际帧尾");
             value = ChatText.Encoding.GetString(body, offset + 4, bytes);
             offset += 4 + bytes;
             return bytes;
@@ -415,6 +440,7 @@ internal static class ChatServiceTests
         int speakerBytes = ReadLength(out string speaker);
         int textBytes = ReadLength(out string text);
         int tagBytes = ReadLength(out string tag);
+        That(speakerBytes >= 1 && textBytes >= 1, "发言人与正文保持非空回退，目标单独允许0");
         That(offset == body.Length, "喇叭三段长度字段与整帧长度一致");
         return (body[0], body[1], body[2], body[3], BinaryPrimitives.ReadUInt16LittleEndian(body.AsSpan(4)),
             speaker, text, tag, speakerBytes, textBytes, tagBytes);
@@ -653,6 +679,46 @@ internal static class ChatServiceTests
             strict.GetString(packet, 4, (int)titleBytes),
             strict.GetString(packet, 8 + (int)titleBytes, (int)bodyBytes),
             packet[^1]);
+    }
+
+    // chat定向组复用这组无网络规则，不调用整套核心自测。
+    internal static void OfficialMegaphoneRules()
+    {
+        int[] retained = [4, 5, 8, 13, 22, 23, 24, 32, 39, 40, 45, 50, 53, 54, 55, 64];
+        int[] allowed = [22, 23, 32, 39, 40, 45, 50, 53, 54, 55, 64];
+        foreach (int type in Enumerable.Range(0, 256))
+        {
+            var channel = new ChannelEntry(new(2, 10), type, "[test]");
+            byte expected = retained.Contains(type) ? (byte)type : (byte)0;
+            That(channel.LoginType == expected && ChannelPackets.LoginChannelType(channel) == expected &&
+                ChannelPackets.Endpoint("127.0.0.1", 10011, channelType: channel.LoginType)[3] == expected,
+                $"共享频道类型映射保持原LOGIN保留/fallback输出：{type}");
+            That(ChatService.AllowsOfficialMegaphone(channel) == allowed.Contains(type),
+                $"GM喇叭使用客户端实际模式，包含raw25回退0及4/5拒绝：{type}");
+        }
+        That(!ChatService.AllowsOfficialMegaphone(null), "缺少真实频道不能使用GM喇叭");
+        That(ChatService.TryKind(14, out var kind) && kind == ChatKind.OfficialMegaphone &&
+            ChatService.MegaphoneItemId(kind) == 1120 && MegaphonePackets.TypeOf(kind) == 14,
+            "1120使用独立业务种类和原生14，不借普通36/37");
+        That(!ChatService.TryKind(53, out _), "同心53资格未闭合，保留未接入拒绝");
+        ChatRecipient[] recipients =
+        [
+            Recipient("same", 100, null, Scene(10)),
+            Recipient("other-channel", 101, null, Scene(11)),
+            Recipient("other-server", 102, null, Scene(10) with { Channel = new(3, 10) })
+        ];
+        var delivery = new Delivery(recipients);
+        var origin = new ChatOrigin(100, "GMHolder", null, Scene(10));
+        var dispatch = new ChatService(new Store(), delivery).Broadcast(new(14, 9999, 71, 2, "hi"), origin);
+        That(dispatch.Accepted && dispatch.Recipients == 2 && delivery.Filter!(recipients[1]) && !delivery.Filter(recipients[2]) &&
+            delivery.Notice is { Kind: ChatKind.OfficialMegaphone, Megaphone.Actor: 100, Megaphone.Speaker: "GMHolder" },
+            "GM喇叭同分组跨频道投递，跨分组隔离且保留真实发言人");
+        byte[] expectedBody = MegaphoneBody(14, "GMHolder", "hi");
+        expectedBody[1] = 2;
+        expectedBody[3] = 10;
+        BinaryPrimitives.WriteUInt16LittleEndian(expectedBody.AsSpan(4), 100);
+        Bytes(MegaphonePackets.Build(kind, delivery.Notice!.Megaphone!), expectedBody,
+            "GM14的118保留6B来源头、真实名字与三串，不在服务端伪造官方显示名");
     }
 
     static void Routing()
@@ -943,6 +1009,8 @@ internal static class ChatServiceTests
             That(!heldMegaphone!.Guard!(),"初筛误放行时，发送前仍拒绝非本频道的频道喇叭");
             session.TryDeliverChat(_=>true,foreignHorn with { Kind = ChatKind.ServerMegaphone });
             That(heldMegaphone!.Guard!(),"服务器喇叭在相同分组内不按接收者频道限制");
+            session.TryDeliverChat(_=>true,foreignHorn with { Kind = ChatKind.OfficialMegaphone });
+            That(heldMegaphone!.Guard!(),"GM喇叭同样复用服务器范围的出队身份门禁");
             var queuedMegaphone = heldMegaphone;
             session.TryDeliverChat(_=>true,foreignHorn with { Kind = ChatKind.ServerMegaphone,
                 Megaphone = foreignHorn.Megaphone! with { Channel = new(2,10) } });
@@ -1140,6 +1208,30 @@ internal static class ChatServiceTests
                 var current=broadcast.Broadcast(new(3,9999,0,2,"hi"),session.ChatOrigin()!,session);
                 await heldSender.DrainAsync(); await sender.DrainAsync();
                 That(current.Recipients==2 && heldMessages==1,"重选完成的新消息恢复接收，不遗留禁收状态");
+
+                int receivedBeforeBlocked = received.Count;
+                int framesBeforeBlocked = frames.Count;
+                var blockedHandler = new ChatHandler(broadcast, null, log, named: new NamedWhisperService(online, repository), isChatBlocked: _ => true);
+                var blockedCommands = new GameCommandRegistry();
+                blockedHandler.Register(blockedCommands);
+                blockedCommands.Seal();
+                byte[] targetNameBytes = ChatText.Encoding.GetBytes("ChatA");
+                byte[] whisperHead = SendBody(1, 4, 0, "blocked-whisper");
+                byte[] whisperBody = new byte[whisperHead.Length + 4 + targetNameBytes.Length + 1];
+                whisperHead.CopyTo(whisperBody, 0);
+                BinaryPrimitives.WriteInt32LittleEndian(whisperBody.AsSpan(whisperHead.Length), targetNameBytes.Length);
+                targetNameBytes.CopyTo(whisperBody, whisperHead.Length + 4);
+                var blockedWhisper = await blockedCommands.DispatchAsync(receivingContext, new Packet(1, (ushort)CmdPacketType.SEND_MESSAGE, whisperBody));
+                var blockedNormal = await blockedCommands.DispatchAsync(receivingContext, new Packet(1, (ushort)CmdPacketType.SEND_MESSAGE, SendBody(3, 4, 0, "blocked-normal")));
+                await receivingSender.DrainAsync(); await sender.DrainAsync();
+                log.Flush();
+                using var blockedLogFile = new FileStream(Path.Combine(root, "Logs", "server.jsonl"), FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                using var blockedLogReader = new StreamReader(blockedLogFile);
+                string blockedEvents = blockedLogReader.ReadToEnd();
+                That(blockedWhisper == CommandResult.Handled && blockedNormal == CommandResult.Handled &&
+                    received.Count == receivedBeforeBlocked && frames.Count == framesBeforeBlocked &&
+                    blockedEvents.Split('\n').Count(line => line.Contains("\"Kind\":\"chat_blocked\"", StringComparison.Ordinal)) == 2,
+                    "禁言拦截在具名私聊与常规广播前生效，记chat_blocked且不向目标投递");
             }
             finally { session.ChatNoticeArrived=null; receiving.ChatNoticeArrived=null; }
         }
@@ -1660,9 +1752,9 @@ internal static class ChatServiceTests
     /// <summary>
     /// <c>NOTI 0x0076</c> 正文 = <c>[u8 type][u8 B][u8 C][u8 D][u16 E]</c> +
     /// 三段 <c>[u32 CP936 字节数][CP936 字节]</c>。测试侧按文档布局自行编码，不调用服务端 Builder；
-    /// <paramref name="tag"/> 用生产占位 <c>X</c>。
+    /// <paramref name="tag"/> 为账号冒险团目标，未提供时为空，不生成合法占位。
     /// </summary>
-    static byte[] MegaphoneBody(byte type, string speaker, string text, string tag = "X")
+    static byte[] MegaphoneBody(byte type, string speaker, string text, string tag = "")
     {
         byte[] speakerBytes = ChatText.Encoding.GetBytes(speaker);
         byte[] textBytes = ChatText.Encoding.GetBytes(text);

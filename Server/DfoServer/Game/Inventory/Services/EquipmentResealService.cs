@@ -50,7 +50,7 @@ internal sealed class EquipmentResealService(ItemCatalog items, EquipmentResealC
                 source.Core.EquipmentLockId != 0 || !source.Core.IsStackable ||
                 !ItemSlotBoundService.Allows(before, sourceSlot, source.Core.Kind)) return InventoryResult.Reject(17);
             var material = items.Get(source.Core.ItemId);
-            if (material.ResealConsumable is not { } wax || !wax.Allows(template) || !material.AllowsUse(character.Level, character.Job) ||
+            if (material.ResealConsumable is not { } wax || !wax.Allows(template) || !material.AllowsActivation(character.Level, character.Job) ||
                 !InventoryMoveService.RequiredSkillSatisfied(character, material)) return InventoryResult.Reject(19);
             oneShot = wax.OneShot;
             int amount = oneShot ? 1 : catalog.WaxCost(template, count);
@@ -60,7 +60,7 @@ internal sealed class EquipmentResealService(ItemCatalog items, EquipmentResealC
             after = paid.Plan!.After;
         }
         if (!oneShot && count >= 7) return InventoryResult.Reject(19);
-        var core = target.Core with { SealFlag = 1, Attr = checked((byte)((target.Core.Attr & 31) | (oneShot ? count : count + 1) << 5)) };
+        var core = target.Core with { SealFlag = 1, Rune = 0, Attr = checked((byte)((target.Core.Attr & 31) | (oneShot ? count : count + 1) << 5)) };
         after = after with { Items = after.Items.Replace(target, target with { Core = core }) };
         long? deadline = before.Items.Where(item => item.ExpireTime > 0 && (item == target || after.Find(item.Position) != item))
             .Select(item => (long?)item.ExpireTime).Min();

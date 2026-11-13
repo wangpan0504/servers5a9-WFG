@@ -111,7 +111,7 @@ internal static class RaidChannelTypeTcpTests
             That(before == fixture.Snapshot("SELECT item_core FROM character_inventory_items WHERE character_id=$p0 ORDER BY item_uid", peer.Id),
                 "658的0和1都只查询，不扣票或修改期限");
         }
-        // 在名册发布后改库，证明权威门禁不信任旧资格位；同时覆盖直接C2S4与先C2S8的入口。
+        // 在名册发布后改库，覆盖直接C2S4权威准入、入城后换频道及新登录先8的936分流。
         foreach (var (channel, label, level, entryQuest, prerequisite) in new[]
             { ((byte)19, "anton", 85, 12829, 3779), ((byte)20, "luke", 90, 2903, 4872) })
         foreach (int scenario in Enumerable.Range(0, 4))

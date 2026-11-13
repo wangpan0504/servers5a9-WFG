@@ -5,7 +5,8 @@ namespace DfoServer.Persistence;
 
 internal sealed partial class CharacterRepository
 {
-    public Character ConsumeOperationHopeAreaFatigue(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run, TimeProvider? battlePassClock = null) => owner.Execute(() =>
+    public Character ConsumeOperationHopeAreaFatigue(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run, TimeProvider? battlePassClock = null,
+        DfoServer.Game.Inventory.Models.InventoryItem? energySource = null) => owner.Execute(() =>
     {
         var snapshot = run.Snapshot;
         var identity = snapshot.Identity;
@@ -46,18 +47,26 @@ internal sealed partial class CharacterRepository
         if (current.Revision != expected.Revision || current.Fatigue != state)
             throw new InvalidOperationException("扣点的原revision或疲劳owner已变化");
         var target = state.ConsumeOrdinaryRoom(amount);
-        command.Parameters.AddWithValue("$revision", expected.Revision);
-        command.CommandText = "UPDATE characters SET revision=revision+1 WHERE id=$id AND account=$account AND revision=$revision";
-        if (command.ExecuteNonQuery() != 1)
-            throw new InvalidOperationException("首次房间扣点revision冲突");
+        var energy = DfoServer.Game.Inventory.Services.QuickSlotEquipmentEnergy.Plan(expected, expected.Inventory,
+            energySource, state.Remaining - target.Remaining);
+        if (energy is not null)
+            current = CommitInventoryInTransaction(db, tx, owner, current, expected, energy);
+        else
+        {
+            command.Parameters.AddWithValue("$revision", expected.Revision);
+            command.CommandText = "UPDATE characters SET revision=revision+1 WHERE id=$id AND account=$account AND revision=$revision";
+            if (command.ExecuteNonQuery() != 1)
+                throw new InvalidOperationException("首次房间扣点revision冲突");
+        }
         command.Parameters.AddWithValue("$used", target.Used);
         command.Parameters.AddWithValue("$remaining", target.Remaining);
         command.CommandText = "UPDATE character_fatigue SET used=$used,remaining=$remaining WHERE character_id=$id AND account=$account";
         if (command.ExecuteNonQuery() != 1)
             throw new InvalidOperationException("首次房间扣点缺少原疲劳owner");
+        WriteFatigueBattery(db, tx, owner.Account, expected.Id, target);
         ApplyBattlePassDungeonActivity(db,tx,owner.Account,DfoServer.Game.BattlePass.BattlePassDungeonActivity.PrepareFatigue(
             identity,"hope_area",area,state,target,battlePassClock ?? TimeProvider.System));
-        var committed = Require(db, tx, owner.Account, expected.Name);
+        var committed = Require(db, tx, owner.Account, expected.Name, current.Inventory);
         var cached = new DungeonTransientFatigue(rule, expected.Revision, state, target);
         receipts.HopeAreaFatigue[area] = cached;
         tx.Commit();

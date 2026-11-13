@@ -87,7 +87,6 @@ internal static class CeraPackageAvatarTests
         [
             sourceTemplate with { UseForbidden = true },
             sourceTemplate with { MinimumLevel = checked((byte)(level + 1)) },
-            sourceTemplate with { Jobs = (ushort)(sourceTemplate.Jobs & ~(1 << job)) },
             sourceTemplate with { RequiredSkill = missingSkill }
         ];
         try
@@ -98,8 +97,12 @@ internal static class CeraPackageAvatarTests
                 var result = service.OpenCeraPackage(role, new(65, choices), out var receipt);
                 That(!result.Accepted && result.Plan is null && receipt is null &&
                     role.Inventory.Find(SourceSlot)?.Core.ItemId == PackageId,
-                    "518非空选择仍校验源礼包的禁用、等级、职业和技能资格");
+                    "518非空选择仍校验源礼包的禁用、等级和技能资格");
             }
+            resources.Items.PrefillTemplates([KeyValuePair.Create(PackageId,
+                sourceTemplate with { Jobs = (ushort)(sourceTemplate.Jobs & ~(1 << job)) })]);
+            That(service.OpenCeraPackage(role, new(65, choices), out _).Accepted,
+                "518源STK的职业匹配交给客户端，不影响合法装扮选择");
         }
         finally
         {

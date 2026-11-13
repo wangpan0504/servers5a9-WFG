@@ -15,6 +15,7 @@ internal static class TalismanTcpTests
 {
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
+        TalismanInventoryTests.RunUnequipChecks();
         var catalog = resources.ItemResources.Items;
         var costs = catalog.TalismanRefineCosts();
         var (stone, legacyStone, campRunes, legacyRune) = Pick(catalog, resources.Archive, costs);
@@ -66,6 +67,21 @@ internal static class TalismanTcpTests
             That(Rows("list_type=0 AND slot_index IN (9,65)") == 0 && Kinds() == "11,11,14,14,14,14,14,14",
                 "登录迁移提交后普通格清空且旧分类改写为护石/符文");
 
+            var stoneRow = Occupied(stone);
+            var legacyRow = Occupied(legacyStone);
+            That(stoneRow.List == 46 && legacyRow.List == 46 &&
+                stoneRow.Slot is >= 0 and < 70 && legacyRow.Slot is >= 0 and < 70 && stoneRow.Slot != legacyRow.Slot &&
+                stoneRow.Id != legacyRow.Id && stoneRow.Uid != legacyRow.Uid,
+                "夹具固定两枚不同护石占用护石页，两边都有物品");
+            SwapOccupied(stoneRow, legacyRow, 1, "护石");
+            var runeRow = Occupied(campRunes[0]);
+            var otherRune = Occupied(campRunes[1]);
+            That(runeRow.List == 46 && otherRune.List == 46 &&
+                runeRow.Slot is >= 70 and < 210 && otherRune.Slot is >= 70 and < 210 && runeRow.Slot != otherRune.Slot &&
+                runeRow.Id != otherRune.Id && runeRow.Count == 3 && otherRune.Count == 3 && runeRow.Uid != otherRune.Uid,
+                "夹具固定两枚不同符文整堆占用符文页，互换不并堆");
+            SwapOccupied(runeRow, otherRune, runeRow.Count, "符文");
+
             (short List, short Slot) stoneSlot = SlotOf(stone), materialSlot = SlotOf(costs.MaterialId);
             That(stoneSlot.List == 46 && materialSlot.List == 0, "夹具槽位分布在护石页与普通背包");
 
@@ -84,8 +100,8 @@ internal static class TalismanTcpTests
             colors = SocketColors();
             var face = new[] { (byte)colors, (byte)(colors >> 8), (byte)(colors >> 16) };
             That(MaterialCount() == materialBefore - perRefine && (colors >> 24) == (colorsBefore >> 24) &&
-                face.All(color => color is >= 1 and <= 5) && face.Distinct().Count() == 3,
-                "重锻按品级扣料并生成三种不重复的孔色，扩展高字节保留");
+                face[0] < face[1] && face[1] < face[2] && face.All(color => color is >= 1 and <= 5),
+                "重锻按品级扣料并按阵营编号升序生成三种孔色，扩展高字节保留");
             // 重锻孔色随机；五种阵营符文都在背包，挑与 210 孔同色的那枚验证装载，211 必然错色。
             var rune = campRunes.First(id => catalog.Rune(id)!.SocketColor == (byte)colors);
             That(catalog.Rune(rune)!.SkillIndex != catalog.Talisman(stone)!.SkillIndex,
@@ -151,9 +167,34 @@ internal static class TalismanTcpTests
                 "重放装载不重复扣除符文");
 
             peer.Send(19, Move(3, (short)ItemSlotBoundService.TalismanEquipmentStart, stone, 1, 46, stoneSlot.Slot, 0));
-            peer.Expect(1, 19, Rejected(3, 46));
+            peer.Expect(1, 19, Ack(3, (short)ItemSlotBoundService.TalismanEquipmentStart, 1, 46, stoneSlot.Slot));
+            peer.Expect(0, 14);
+            peer.Expect(0, 2);
+            peer.Expect(0, 2);
             peer.Barrier();
-            That(Rows("list_type=3 AND slot_index=34") == 1, "带已装符文的护石卸下被拒绝，穿戴槽保持不变");
+            That(Rows("list_type=3 AND slot_index=34") == 0 &&
+                Rows($"list_type=46 AND slot_index={stoneSlot.Slot}") == 1 &&
+                Rows("list_type=46 AND slot_index=210") == 0 && StackCount(rune) == 3,
+                "带已装符文的护石直接卸下并原子归还符文");
+
+            // 直接卸下后重新穿戴，后续 TCP 用例继续覆盖孔位拒绝与专用卸除回包。
+            peer.Send(19, Move(46, stoneSlot.Slot, stone, 1, 3, 34, 0));
+            peer.Expect(1, 19, Ack(46, stoneSlot.Slot, 1, 3, 34));
+            peer.Expect(0, 14);
+            peer.Expect(0, 2);
+            peer.Expect(0, 2);
+            peer.Barrier();
+            That(Rows("list_type=3 AND slot_index=34") == 1 &&
+                Rows($"list_type=46 AND slot_index={stoneSlot.Slot}") == 0,
+                "直接卸下后的护石可重新穿戴");
+            peer.Send(1659, Equip(210, (ushort)runeSlot.Slot, rune));
+            peer.Expect(0, 14);
+            peer.Expect(1, 1659, Equipped(210, rune));
+            peer.Expect(0, 14);
+            peer.Expect(0, 14);
+            peer.Barrier();
+            That(Rows("list_type=46 AND slot_index=210") == 1 && StackCount(rune) == 2,
+                "重新穿戴后可再次装载符文");
 
             peer.Send(1659, Equip(211, (ushort)runeSlot.Slot, rune));
             peer.Expect(1, 1659, Failure(23));
@@ -198,21 +239,70 @@ internal static class TalismanTcpTests
             peer.Expect(1, 1659, Failure(23));
             peer.Barrier();
 
-            // 护石窗口整理：分类18=符文页。回执后先用1681清空重载槽再载入新顺序，最后补发容器46全量。
+            var parkedRune = fixture.Query("""
+                SELECT json_extract(i.item_core,'$.ItemId'), json_extract(i.item_core,'$.Value')
+                FROM character_inventory_slots s JOIN character_inventory_items i USING(item_uid)
+                WHERE s.character_id=$p0 AND s.list_type=46 AND s.slot_index=160
+                """, peer.Id).Single();
+            int parkedId = Convert.ToInt32(parkedRune[0]);
+            int parkedCount = Convert.ToInt32(parkedRune[1]);
+            peer.Send(19, Move(46, 160, parkedId, parkedCount, 46, 180, 0));
+            peer.Expect(1, 19, Ack(46, 160, parkedCount, 46, 180));
+            peer.Barrier(packet => That(packet.Opcode is not (13 or 14 or 1681),
+                "符文同容器整堆移位只回ACK，不重置符文页也不标记新物品"));
+            var spareStone = fixture.Query("""
+                SELECT s.slot_index, json_extract(i.item_core,'$.ItemId')
+                FROM character_inventory_slots s JOIN character_inventory_items i USING(item_uid)
+                WHERE s.character_id=$p0 AND s.list_type=46 AND s.slot_index BETWEEN 0 AND 69
+                """, peer.Id).Single();
+            peer.Send(19, Move(46, Convert.ToInt16(spareStone[0]), Convert.ToInt32(spareStone[1]), 1, 46, 20, 0));
+            peer.Expect(1, 19, Ack(46, Convert.ToInt16(spareStone[0]), 1, 46, 20));
+            peer.Barrier(packet => That(packet.Opcode is not (13 or 14 or 1681),
+                "护石同容器移位只回ACK，不发NOTI13以免重置图鉴筛选，也不标记新物品"));
+            // 护石窗口整理：分类18=符文页。只发一次容器46全量，不再先用1681把已有符文标成新物品。
             peer.Send(20, Convert.FromHexString("06000000102E18122000"));
             peer.Expect(1, 20, [1, 4, 0, 0, 0, 8, 46, 16, 0]);
-            var sortClear = peer.Expect(0, 1681).Body;
-            That(sortClear[0] == 46 && U16(sortClear, 1) >= 1 && U32(sortClear, 5) == uint.MaxValue,
-                "护石窗口整理先用1681清空将重新载入的符文槽");
-            var sortDelta = peer.Expect(0, 1681).Body;
-            That(sortDelta[0] == 46 && U16(sortDelta, 1) >= 1 && sortDelta.Length == 3 + U16(sortDelta, 1) * 123,
-                "整理后以1681载入符文页新顺序");
             var sortList = peer.Expect(0, 13).Body;
             That(sortList[0] == 46 && U16(sortList, 1) == 7 && sortList.Length == 3 + 7 * 123,
-                "整理成功后补发容器46全量，客户端按新槽位重绘护石与符文");
+                "整理成功后只发一次容器46全量，客户端按新槽位重绘且不标记新物品");
+            peer.Barrier(packet => That(packet.Opcode is not (14 or 1681), "护石整理之后不再补差量"));
             peer.Barrier();
             That(Rows("list_type=46 AND slot_index=160") == 0 && Rows("list_type=46 AND slot_index BETWEEN 70 AND 79") == 6,
                 "符文页整理把六枚符文连续回填到页首，高位空槽被收回");
+
+            (short List, short Slot, long Uid, int Id, int Count) Occupied(int itemId)
+            {
+                var row = fixture.Query("""
+                    SELECT s.list_type, s.slot_index, s.item_uid, json_extract(i.item_core,'$.ItemId'), json_extract(i.item_core,'$.Value')
+                    FROM character_inventory_slots s JOIN character_inventory_items i USING(item_uid)
+                    WHERE s.character_id=$p0 AND json_extract(i.item_core,'$.ItemId')=$p1
+                    """, character, itemId).Single();
+                return (Convert.ToInt16(row[0]), Convert.ToInt16(row[1]), Convert.ToInt64(row[2]),
+                    Convert.ToInt32(row[3]), Convert.ToInt32(row[4]));
+            }
+            // 双占用互换的 ACK 数量固定为 1：同容器分支不读 movedCount。请求仍须带整堆数量，否则服务端拒绝并不会交换。
+            void SwapOccupied((short List, short Slot, long Uid, int Id, int Count) left,
+                (short List, short Slot, long Uid, int Id, int Count) right, int requestCount, string name)
+            {
+                peer.Send(19, Move(46, left.Slot, left.Id, requestCount, 46, right.Slot, right.Id));
+                peer.Expect(1, 19, Ack(46, left.Slot, 1, 46, right.Slot));
+                peer.Barrier(packet => That(packet.Opcode is not (13 or 14 or 1681),
+                    $"{name}双占用互换只回ACK，不发13/14/1681"));
+                var movedLeft = Occupied(left.Id);
+                var movedRight = Occupied(right.Id);
+                That(movedLeft.Slot == right.Slot && movedLeft.Uid == left.Uid && movedLeft.Count == left.Count &&
+                    movedRight.Slot == left.Slot && movedRight.Uid == right.Uid && movedRight.Count == right.Count,
+                    $"{name}互换后槽位对调，UID与数量不变");
+                peer.Send(19, Move(46, right.Slot, left.Id, requestCount, 46, left.Slot, right.Id));
+                peer.Expect(1, 19, Ack(46, right.Slot, 1, 46, left.Slot));
+                peer.Barrier(packet => That(packet.Opcode is not (13 or 14 or 1681),
+                    $"{name}换回原槽只回ACK，不发13/14/1681"));
+                var backLeft = Occupied(left.Id);
+                var backRight = Occupied(right.Id);
+                That(backLeft.Slot == left.Slot && backLeft.Uid == left.Uid && backLeft.Count == left.Count &&
+                    backRight.Slot == right.Slot && backRight.Uid == right.Uid && backRight.Count == right.Count,
+                    $"{name}换回后UID与数量仍在原槽");
+            }
         }
         using (var peer = Open(fixture))
         {

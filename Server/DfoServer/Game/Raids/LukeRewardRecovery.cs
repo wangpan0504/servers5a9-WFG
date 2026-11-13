@@ -14,8 +14,9 @@ internal sealed record LukeRewardRecoveryTarget(ushort Character, Guid Instance,
 
     public void Validate()
     {
-        if (Instance == Guid.Empty || Phase is not (0 or 1) || RaidType is not (RaidKind.Luke or RaidKind.Fiendwar) ||
-            RaidType == RaidKind.Fiendwar && (Phase != 0 || Card > 3))
+        if (Instance == Guid.Empty || Phase is not (0 or 1) || RaidType is not (RaidKind.Luke or RaidKind.Fiendwar or RaidKind.Prey) ||
+            RaidType == RaidKind.Fiendwar && (Phase != 0 || Card > 3) ||
+            RaidType == RaidKind.Prey && (Kind is not (0 or 1) || Card != 0))
             throw new InvalidDataException("历史攻坚身份无效");
     }
 }

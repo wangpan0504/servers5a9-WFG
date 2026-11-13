@@ -173,6 +173,11 @@ internal static class PreyGuideScript
             Required("[max hp]", 1), Required("[hp decrease]", 2), Required("[single defence fail]", 1),
             Required("[armor level hp boundary]", 2) }.ToImmutableArray();
         if (headers.Any(row => row.Values.Any(value => value.Number <= 0))) Issue("guide-header-range", 0, Path);
+        // 普通与引导共用原演出声明；前两列允许0，不能因只选择single业务字段丢掉时钟输入。
+        var movie = Required("[movie end time]", 4);
+        if (movie.Values.Length == 4 && (movie.Values.Any(value => value.Number is < 0 or > 86400) ||
+            movie.Values.All(value => value.Number == 0))) Issue("guide-movie-time-invalid", movie.TokenIndex, movie.Tag);
+        headers = headers.Add(movie);
         return new(Path, waiting.Values.Length == 2 ? new(waiting.Values[0].Number, waiting.Values[1].Number) : null,
             cost.Values.Length == 2 ? new(cost.Values[0].Number, cost.Values[1].Number) : null,
             retry.Values.Length == 2 ? new(retry.Values[0].Number, retry.Values[1].Number) : null,

@@ -6,6 +6,12 @@ namespace DfoServer.GameWorld.Dungeons;
 // 档次与整套外观由配套 AIC 资源定义；服务端只选择真实注册模板，不在通知中伪造技能或属性。
 internal sealed record SupportCompanionProfile(int BaseId, string Tier, int TemplateId, string SetName, string Path, int Level);
 
+// 四类配套基础编号；5409人偶和相邻剧情演员不属于专用支援兵。
+internal static class SupportCompanionResources
+{
+    public static bool IsSupportedBase(int id) => id is 20900 or 9986 or 74990 or 19973;
+}
+
 internal sealed class SupportCompanionCatalog
 {
     public const string ResourcePath = "etc/support_companion_profiles.etc";
@@ -37,7 +43,8 @@ internal sealed class SupportCompanionCatalog
                 throw new InvalidDataException("支援兵档次资源行须为基础编号、档次、实际模板编号和套装名称");
             int baseId = row[0].Value, templateId = row[2].Value;
             string tier = archive.ResolveString(row[1].Value), setName = archive.ResolveString(row[3].Value);
-            if (baseId is not (20900 or 9986 or 74990 or 19973) || tier is not ("entry" or "graduate" or "huge") ||
+            if (!SupportCompanionResources.IsSupportedBase(baseId) ||
+                tier is not ("entry" or "graduate" or "huge") ||
                 baseId == 9986 && tier != "entry" || templateId / 10000 != baseId / 10000 || string.IsNullOrWhiteSpace(setName) || setName.Length > 80 ||
                 !used.Add(templateId) || !registry.TryGetValue(baseId, out string? basePath) || !archive.Contains(basePath) ||
                 !registry.TryGetValue(templateId, out string? path) || !archive.Contains(path))
@@ -55,12 +62,13 @@ internal sealed class SupportCompanionCatalog
         return new(entries.ToImmutable(), equality.Length != 0);
     }
 
-    public bool HasProfile(int baseId, string tier) => Profiles.Any(profile => profile.BaseId == baseId && profile.Tier == tier);
+    public bool HasProfile(int baseId, string tier) => SupportCompanionResources.IsSupportedBase(baseId) &&
+        Profiles.Any(profile => profile.BaseId == baseId && profile.Tier == tier);
     public SupportCompanionProfile? Pick(int baseId, string tier, Func<int, int> draw)
     {
         if (!HasProfile(baseId, tier)) return null;
-        // 只有配套资源明确统一强度才跨档抽装备；旧资源仍保留原来的档次边界。
-        var candidates = Profiles.Where(profile => profile.BaseId == baseId && (EqualTiers || profile.Tier == tier)).ToArray();
+        // 兼容解析旧统一标记，但请求档次始终限定真实模板池。
+        var candidates = Profiles.Where(profile => profile.BaseId == baseId && profile.Tier == tier).ToArray();
         return candidates.Length == 0 ? null : candidates[draw(candidates.Length)];
     }
 }

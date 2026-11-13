@@ -71,7 +71,12 @@ internal sealed class FiendwarBattlefield(FiendwarScript script, FiendwarPacing 
         if (script.Guide)
         {
             state = state with { Symbols = state.Symbols.SetItem("[single raid type]", guideRoute) };
-            return Apply(state, new(FiendwarOp.SymbolChanged, Key: "[single raid type]"), now);
+            var initialized = Apply(state, new(FiendwarOp.SymbolChanged, Key: "[single raid type]"), now);
+            // 原引导初始化把不在本路线的另一设施直接置1；本服只在真实通关后开放增益，
+            // 两条原路线、遭遇和后续设施电影规则保持，不能把缺席设施冒充已通关。
+            return initialized with { State = initialized.State with {
+                Symbols = initialized.State.Symbols.SetItem("[radar state]", 0).SetItem("[battery state]", 0),
+                FacilitiesDestroyed = false } };
         }
         return Apply(state, new(), now);
     }

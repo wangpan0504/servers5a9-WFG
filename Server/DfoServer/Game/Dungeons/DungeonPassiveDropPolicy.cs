@@ -10,16 +10,29 @@ internal sealed record DungeonPassiveDropPreparation(DungeonPlannedSpecialObject
 
 // 规则与物品创建在入场owner锁外完成；一个MAP父对象的多个[item]共享关联槽，而不是使用掉落组号。
 internal sealed class DungeonPassiveDropPolicy(Func<int, DungeonDefinition> resolveDungeon, Func<int, ItemTemplate> resolveItem,
-    DungeonDropRuleCatalog? objectRules = null, DungeonItemDropCatalog? candidates = null, EquipmentAmplificationDropPolicy? amplification = null)
+    DungeonDropRuleCatalog? objectRules = null, DungeonItemDropCatalog? candidates = null, EquipmentAmplificationDropPolicy? amplification = null,
+    DungeonDropControlSettings? dropControl = null)
 {
     public const string Rule = "pvf-special-passive-item-v1";
-    public IReadOnlyList<DungeonPassiveDropPreparation> Prepare(DungeonEntryPlan entry, DungeonMonsterPlan room,
-        Func<int, int> draw, DateTimeOffset now)
+    public Func<DungeonMonsterPlan, Func<int, int>, DateTimeOffset, IReadOnlyList<DungeonPassiveDropPreparation>> PrepareEntry(
+        DungeonEntryPlan entry, DungeonDropGenerationPlan? monsterPlan = null)
     {
-        if (entry.IsTutorial || entry.IsClassExperience || entry.IsTrainingRoom || entry.IsPractice)
+        // 正式入场复用怪物计划的同次快照；无怪物的地图在此单次读取，所有房间共用。
+        var rates = monsterPlan is null ? (entry.DropControlCaptured ? entry.DropMultipliers : dropControl?.Current.Resolve(entry)) : monsterPlan.DropMultipliers;
+        return (room, draw, now) => Prepare(entry, room, draw, now, rates);
+    }
+
+    public IReadOnlyList<DungeonPassiveDropPreparation> Prepare(DungeonEntryPlan entry, DungeonMonsterPlan room,
+        Func<int, int> draw, DateTimeOffset now) => PrepareEntry(entry)(room, draw, now);
+
+    IReadOnlyList<DungeonPassiveDropPreparation> Prepare(DungeonEntryPlan entry, DungeonMonsterPlan room,
+        Func<int, int> draw, DateTimeOffset now, DungeonDropMultipliers? rates)
+    {
+        if (entry.IsTutorial || entry.IsClassExperience || entry.IsTrainingRoom || entry.IsPractice ||
+            entry.DisableItemDrops || entry.IsTayberrs || entry.IsTayberrsStory)
             return [];
         var definition = resolveDungeon(checked((int)entry.DungeonId));
-        if (definition.RawSections.Any(section => section.Tag == "disable drop item" && section.Tokens.Count == 0))
+        if (definition.DisableItemDrops)
             return [];
         var groups = DungeonPassiveItemGroup.Parse(definition.RawSections);
         var result = new List<DungeonPassiveDropPreparation>();
@@ -44,7 +57,27 @@ internal sealed class DungeonPassiveDropPolicy(Func<int, DungeonDefinition> reso
                     .Select(item => new DungeonWeightedDropItem(resolveItem(item.ItemId), item.Weight)));
                 if (pool.Entries.Any(item => !DungeonDropCreation.Supports(item.Template.Kind)))
                     throw new NotSupportedException("特殊对象掉落尚未绑定该物品类别的创建合同");
-                var random = values[2] > 0 ? RandomPlan(group.Level == -1 ? entry.BasisLevel ?? 0 : group.Level, entry.Difficulty) : null;
+                // 物件旧金币/材料规则保持；装备通道及指定池史诗接入同一个Equipment倍率。
+                var equipmentRates = rates is null ? null : new DungeonDropMultipliers(Equipment: rates.Equipment);
+                var random = values[2] > 0 ? DungeonDropControlSnapshot.Apply(
+                    RandomPlan(group.Level == -1 ? entry.BasisLevel ?? 0 : group.Level, entry.Difficulty), equipmentRates)
+                    .WithDisjointRestrictions(entry.DisjointForbiddenDropRarities) : null;
+                DungeonDropGenerationPlan? specified = null;
+                if (rates is { Equipment: not 1 } && pool.Entries.Any(row => DungeonEpicDropAdjustment.IsEpic(row.Template)))
+                {
+                    int previous = 0;
+                    var reachable = new List<DungeonWeightedDropItem>();
+                    foreach (var row in pool.Entries)
+                    {
+                        int end = Math.Min(10001, row.CumulativeWeight);
+                        if (end > previous) reachable.Add(new(row.Template, end - previous));
+                        previous = end;
+                    }
+                    var reachablePool = new DungeonItemDropPool(reachable);
+                    specified = DungeonDropControlSnapshot.Apply(new(Rule + ":specified", [new(reachablePool.TotalWeight,
+                        reachablePool, 1, 1, ProbabilityDenominator: 10001)], referenceQuality: true, amplification), equipmentRates)
+                        .WithDisjointRestrictions(entry.DisjointForbiddenDropRarities);
+                }
                 maximum = checked(maximum + (pool.TotalWeight == 0 ? 0 : Math.Max(0, values[1])) +
                     Math.Max(0, values[2]) * (random?.MaximumObjects ?? 0));
                 if (maximum > byte.MaxValue)
@@ -55,11 +88,22 @@ internal sealed class DungeonPassiveDropPolicy(Func<int, DungeonDefinition> reso
                     contents.AddRange(random!.Generate(draw, now));
                 for (int i = 0; i < values[1]; i++)
                 {
+                    if (specified is not null)
+                    {
+                        contents.AddRange(specified.Generate(draw, now));
+                        continue;
+                    }
                     int roll = draw(10001);
                     if (roll is < 0 or > 10000)
                         throw new InvalidDataException("特殊指定掉落随机数越界");
                     if (roll < pool.TotalWeight)
-                        contents.Add(new(DungeonDropCreation.Create(pool.Select(roll), 1, draw, now, referenceQuality: true, amplification)));
+                    {
+                        var template = pool.Select(roll);
+                        var core = DungeonDropCreation.Create(template, 1, draw, now, referenceQuality: true, amplification);
+                        if (template.Kind == ItemKind.Equipment && entry.DisjointForbiddenDropRarities.Contains(template.Rarity))
+                            core = core with { DisjointForbidden = true };
+                        contents.Add(new(core));
+                    }
                 }
                 result.Add(new(parent, new(parent.Source.SourceOrdinal, checked((byte)association), action.SourceOrdinal, group.Index),
                     room.Room.Map, contents.ToImmutable(), Rule + ":" + definition.Path));
@@ -96,7 +140,8 @@ internal sealed class DungeonPassiveDropPolicy(Func<int, DungeonDefinition> reso
                 var pools = Enumerable.Range(0, 7).Select(rarity => new DungeonDropRarityPool(
                     objectRules.RarityDecision[(channel - 1) * 7 + rarity], candidates.ReferencePool(channel == 2,
                         level - reference.Value0, level + reference.Value1 - 1, rarity))).ToImmutableArray();
-                trials.Add(new(threshold, null, 1, 1, RarityPools: pools));
+                trials.Add(new(threshold, null, 1, 1, RarityPools: pools,
+                    Category: channel == 2 ? DungeonDropCategory.Equipment : DungeonDropCategory.Special));
             }
         }
         return new(Rule + ":etc/itemdropinfo_object.etc", trials, referenceQuality: true, amplification);

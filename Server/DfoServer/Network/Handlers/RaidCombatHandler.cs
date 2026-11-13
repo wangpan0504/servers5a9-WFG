@@ -10,7 +10,8 @@ using DfoServer.Network.Protocol;
 namespace DfoServer.Network.Handlers;
 
 internal sealed class RaidCombatHandler(IRaidRewardStore rewards, ItemCatalog items, GoldLimitCatalog gold,
-    EpicPieceCatalog pieces, InventoryProjection inventory, ServerLog log, TimeProvider? clock = null, ILukeRaidLifecycleStore? lifecycle = null) : IGameCommandModule
+    EpicPieceCatalog pieces, InventoryProjection inventory, ServerLog log, TimeProvider? clock = null, ILukeRaidLifecycleStore? lifecycle = null,
+    TownProjection? town = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -18,6 +19,21 @@ internal sealed class RaidCombatHandler(IRaidRewardStore rewards, ItemCatalog it
         commands.Register(CmdPacketType.RAID_MOVIE_SKIP, MovieAsync, nameof(RaidCombatHandler), Game.Session.UserStateRequirement.WorldReady);
         commands.Register(CmdPacketType.RAID_SET_SYMBOL, FacilityAsync, nameof(RaidCombatHandler), Game.Session.UserStateRequirement.DungeonContext);
         commands.Register(CmdPacketType.RAID_MONSTER_HP, HpAsync, nameof(RaidCombatHandler), Game.Session.UserStateRequirement.DungeonContext);
+        commands.Register(CmdPacketType.PREY_RAID_MONSTER_HP, PreyHpAsync, nameof(RaidCombatHandler), Game.Session.UserStateRequirement.DungeonContext);
+        commands.Register(CmdPacketType.RAID_SET_BOSS_HP_ALARM, PreyAlarmAsync, nameof(RaidCombatHandler), Game.Session.UserStateRequirement.WorldReady);
+        commands.Register(CmdPacketType.RAID_MANAGER_COMMAND, PreyMarkerAsync, nameof(RaidCombatHandler), Game.Session.UserStateRequirement.WorldReady);
+    }
+
+    Task<CommandResult> PreyMarkerAsync(GameConnectionContext context, Packet request)
+    {
+        PreyMarkerRequest marker;
+        try { marker = RaidRequests.PreyMarker(request.Body); }
+        catch (InvalidDataException) { return Task.FromResult(CommandResult.Unhandled); }
+        var change = context.Session.SetPreyMarker(checked((byte)marker.Group), checked((int)(marker.Operation == 2 ? 0 : marker.Target)));
+        if (change is null) return Task.FromResult(CommandResult.Handled);
+        context.Session.PublishRaidCombat(change);
+        log.Write("prey_marker_changed", new { Connection = context.Id, Group = marker.Group, Target = marker.Operation == 2 ? 0 : marker.Target });
+        return Task.FromResult(CommandResult.Handled);
     }
 
     Task<CommandResult> MovieAsync(GameConnectionContext context, Packet request)
@@ -25,12 +41,25 @@ internal sealed class RaidCombatHandler(IRaidRewardStore rewards, ItemCatalog it
         if (request.Body.Length != 1 || request.Body[0] > 1) return Task.FromResult(CommandResult.Unhandled);
         if (lifecycle is not null) context.Session.CommitPendingLukePhase(lifecycle);
         if (context.Session.RaidMovieSnapshot() is not { } movie) return Task.FromResult(CommandResult.Unhandled);
-        return Task.FromResult(RaidCombatProjection.Movie(context, movie.Actor, movie.Battle, movie.View, request.Body[0] == 1)
-            ? CommandResult.Handled : CommandResult.CloseConnection);
+        bool completed = request.Body[0] == 1;
+        bool accepted = RaidCombatProjection.Movie(context, movie.Actor, movie.Battle, movie.View, movie.Event, completed);
+        var eligibility = movie.Battle.LukeEligibility(movie.Actor.Character, movie.View.Phase);
+        log.Write("raid_movie_request", new { Connection = context.Id, RaidType = movie.Battle.Kind, movie.Battle.Instance,
+            movie.View.Phase, CompletionRequested = completed, Handled = accepted, Eligible = eligibility?.Eligible, EligibilityReason = eligibility?.Reason });
+        return Task.FromResult(accepted ? CommandResult.Handled : CommandResult.CloseConnection);
     }
 
     async Task<CommandResult> FacilityAsync(GameConnectionContext context, Packet request)
     {
+        if (context.Session.RaidCombatKind() == RaidKind.Prey && RaidRequests.PreyBossHpUnits(request.Body) is { } units)
+        {
+            if (units is < 0 or > 10000 || context.Session.ReportPreyBossHpUnits(units) is not { } report)
+                return CommandResult.Unhandled;
+            context.Session.PublishRaidCombat(report.Change);
+            log.Write("prey_boss_hp_synchronized", new { Connection = context.Id, report.Battle.Instance, report.Actor.Character, Units = units });
+            // 212赋值仅同步当前本体；不把客户端报告签发为死亡，也不猜未闭合ACK。
+            return CommandResult.Handled;
+        }
         if (context.Session.RaidCombatKind() == RaidKind.Anton && RaidRequests.AntonConstructorLast(request.Body) is { } constructor &&
             context.Session.PartyDungeon is { } constructorParty)
         {
@@ -53,6 +82,7 @@ internal sealed class RaidCombatHandler(IRaidRewardStore rewards, ItemCatalog it
                 Contract = "anton-cleared-run-last-v1" });
             context.Session.PublishRaidCombat();
             // Anton成功ACK的消费合同未闭合，只发布已提交583，不猜回包。
+            DfoServer.Network.Projection.RaidCombatProjection.CorrectAntonEnergy(context);
             return CommandResult.Handled;
         }
         if (!context.Session.AcceptsLukeFacilityReports || RaidRequests.LukeFacilitySymbol(request.Body) is not { } symbol || context.Session.PartyDungeon is not { } party)
@@ -84,6 +114,31 @@ internal sealed class RaidCombatHandler(IRaidRewardStore rewards, ItemCatalog it
             else await DfoServer.Network.Projection.PartyDungeonProjection.PublishAsync(notices);
         }
         return context.Session.RaidCombatView() is null ? CommandResult.Unhandled : CommandResult.Handled;
+    }
+
+    Task<CommandResult> PreyHpAsync(GameConnectionContext context, Packet request)
+    {
+        int percent;
+        try { percent = RaidRequests.PreyMonsterHp(request.Body); }
+        catch (InvalidDataException) { return Task.FromResult(CommandResult.Unhandled); }
+        if (percent is < 0 or > 100 || context.Session.ReportPreyBossHp(percent) is not { } report)
+            return Task.FromResult(CommandResult.Unhandled);
+        context.Session.PublishRaidCombat(report.Change);
+        log.Write("prey_boss_hp_report", new { Connection = context.Id, report.Battle.Instance, report.Actor.Character, Percent = percent });
+        // 阈值报告不签发死亡，客户端ACK消费者尚未闭合，不补造成功正文。
+        return Task.FromResult(CommandResult.Handled);
+    }
+
+    Task<CommandResult> PreyAlarmAsync(GameConnectionContext context, Packet request)
+    {
+        int percent;
+        try { percent = RaidRequests.PreyBossHpAlarm(request.Body); }
+        catch (InvalidDataException) { return Task.FromResult(CommandResult.Unhandled); }
+        if (percent is < -1 or > 100 || !context.Session.SetPreyBossHpAlarm(percent))
+            return Task.FromResult(CommandResult.Unhandled);
+        context.Session.PublishRaidCombat();
+        log.Write("prey_boss_hp_alarm", new { Connection = context.Id, Percent = percent });
+        return Task.FromResult(CommandResult.Handled);
     }
 
     async Task<CommandResult> RewardAsync(GameConnectionContext context, Packet request)
@@ -171,7 +226,13 @@ internal sealed class RaidCombatHandler(IRaidRewardStore rewards, ItemCatalog it
                 log.Write("raid_reward_display_rejected", new { Connection = context.Id, receipt.Prepared.Phase,
                     receipt.Prepared.Kind, Reason = missing });
         }
-        if (receipt.Prepared.RaidType is RaidKind.Prey or RaidKind.Fiendwar && DisplayGuard())
+        if (receipt.Prepared is { RaidType: RaidKind.Prey, Source: PreyGuideRewards.Source })
+        {
+            await RaidCombatProjection.PublishPreyGuideResultsAsync(context, receipt);
+            if (town is not null)
+                await RaidCombatProjection.ReturnCompletedPreyGuideWaitingAsync(context, town, receipt);
+        }
+        else if (receipt.Prepared.RaidType is RaidKind.Prey or RaidKind.Fiendwar && DisplayGuard())
             await context.Notify(NotiPacketType.RAID_REWARD_LIST, PreyRewardPackets.Reward(receipt.Prepared.Character, receipt.Offer, receipt.Prepared.RaidType),
                 "prey_reward_display", DisplayGuard);
         bool sent = false;

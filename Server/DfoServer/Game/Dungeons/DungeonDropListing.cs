@@ -9,14 +9,16 @@ internal sealed record DungeonDropListingRow(int Channel, string Category, int I
 
 internal static class DungeonDropListing
 {
-    // Apply 只改各通道的触发阈值，保留通道、分支及候选顺序；原概率不能从封顶后的结果倒推。
+    // 保留通道、分支及候选顺序；原概率不能从封顶后的结果倒推。
     public static IEnumerable<DungeonDropListingRow> ComparisonRows(DungeonDropGenerationPlan original, DungeonDropMultipliers? rates)
     {
         var adjusted = DungeonDropControlSnapshot.Apply(original, rates);
         return Rows(original).Zip(Rows(adjusted), (before, after) => after with
         {
             OriginalProbability = before.Probability,
-            Multiplier = rates?.For(original.Trials[before.Channel - 1].Category) ?? 1,
+            Multiplier = rates is null ? 1 : original.Trials[before.Channel - 1].Items?.Entries.Any(
+                row => row.Template.Id == before.ItemId && DungeonEpicDropAdjustment.IsEpic(row.Template)) == true
+                ? rates.Equipment : rates.For(original.Trials[before.Channel - 1].Category),
         });
     }
 
@@ -33,7 +35,13 @@ internal static class DungeonDropListing
                 continue;
             }
             if (trial.Items is { } direct)
-                foreach (var row in Pool(direct, 1)) yield return row;
+            {
+                var rows = Pool(direct, 1);
+                if (trial.EpicAdjustment is { } adjustment)
+                    rows = rows.Zip(adjustment.Widths(trial), (row, width) => row with
+                    { Probability = (decimal)width / trial.ProbabilityDenominator / direct.TotalWeight });
+                foreach (var row in rows) yield return row;
+            }
             int previous = 0;
             foreach (var rarity in trial.RarityPools.IsDefault ? [] : trial.RarityPools)
             {

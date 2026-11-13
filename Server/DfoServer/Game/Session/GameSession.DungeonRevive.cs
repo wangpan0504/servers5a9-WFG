@@ -30,9 +30,9 @@ internal sealed partial class GameSession
         long now = (timeProvider ?? TimeProvider.System).GetUtcNow().ToUnixTimeMilliseconds();
         bool blessing = formalDungeon!.Entry.RaidEntry?.Kind is not (Raids.RaidKind.Luke or Raids.RaidKind.Fiendwar) && !formalDungeon.Entry.Maze.IsGriefTower && character.Inventory.ConsumableStates.Concat(formalDungeon.FreeConsumableEffects).Any(row => row.Kind == ConsumableStateKind.Effect &&
             GameWorld.Items.ConsumableSpecialItems.IsRevivalBlessing(row.ItemId) && row.Active(now));
-        var after = ConsumableStatePolicy.CrossBoundary(character.Inventory, ConsumableMaintenance.Death,
-            now);
-        if (blessing)
+        bool free = PreservesDungeonConsumables;
+        var after = free ? character.Inventory : ConsumableStatePolicy.CrossBoundary(character.Inventory, ConsumableMaintenance.Death, now);
+        if (blessing && !free)
             after = after with { ConsumableStates = after.ConsumableStates.Where(row => row.Kind != ConsumableStateKind.Effect ||
                 !GameWorld.Items.ConsumableSpecialItems.IsRevivalBlessing(row.ItemId)).ToImmutableArray() };
         if (after != character.Inventory)
@@ -42,10 +42,12 @@ internal sealed partial class GameSession
         if (blessing)
             formalDungeon.FreeConsumableEffects = formalDungeon.FreeConsumableEffects.Where(row => row.Kind != ConsumableStateKind.Effect ||
                 !GameWorld.Items.ConsumableSpecialItems.IsRevivalBlessing(row.ItemId)).ToImmutableArray();
-        CrossConsumableCooldownBoundary(ConsumableMaintenance.Death);
+        if (!free) CrossConsumableCooldownBoundary(ConsumableMaintenance.Death);
         formalDungeon!.Run.CancelRidable();
         formalDungeon!.CharacterDead = !blessing;
         formalDungeon.DeathSerial++;
+        formalDungeon.RevisedBeastDeathDue = formalDungeon.Entry.IsRevisedBeast && !blessing
+            ? checked(now + formalDungeon.Entry.RevisedBeastEncounter!.CoinTimeoutMilliseconds) : null;
         if (formalDungeon.Entry.RaidEntry?.Kind == Raids.RaidKind.Anton &&
             raidCombat is { Battle.Kind: Raids.RaidKind.Anton } raid)
             raid.Battle.RecordAntonDeath(raid.Actor);
@@ -61,7 +63,7 @@ internal sealed partial class GameSession
     public TownTravelReceipt? ReturnFromFormalDungeonOnDeath(DungeonDeathReturnReceipt scheduled) => owner.Execute(() =>
         Ready && Selected?.Id == scheduled.CharacterId && owner.Generation == scheduled.Generation &&
         SelectionEpoch == scheduled.SelectionEpoch && formalDungeon is { CharacterDead: true } dungeon &&
-        dungeon.Run.TagEvildomLife is null && dungeon.DeathSerial == scheduled.DeathSerial && dungeon.Run.Snapshot.Identity.InstanceId == scheduled.InstanceId
+        dungeon.Run.RevisedBeastTerminal is null && dungeon.Run.TagEvildomLife is null && dungeon.DeathSerial == scheduled.DeathSerial && dungeon.Run.Snapshot.Identity.InstanceId == scheduled.InstanceId
             ? ReturnFromFormalDungeon() : null);
 
     // 扣币提交失败时保留死亡状态；只有实际提交结果才能发布复活。
@@ -76,11 +78,13 @@ internal sealed partial class GameSession
             {
                 if (AntonRejoinPresentationPending || !CanChangeDungeonLife() || formalDungeon!.Run.TagEvildomLife is not null || !formalDungeon.CharacterDead || Selected!.Id != targetKey ||
                     formalDungeon.Entry.Maze.IsGriefTower) return null;
-                bool luke = formalDungeon.Entry.RaidEntry?.Kind is Raids.RaidKind.Luke or Raids.RaidKind.Fiendwar;
+                bool shared = formalDungeon.Entry.RaidEntry is { Kind: Raids.RaidKind.Luke or Raids.RaidKind.Fiendwar } or
+                    { Kind: Raids.RaidKind.Prey, PreyGuide: false };
                 bool anton = formalDungeon.Entry.RaidEntry?.Kind == Raids.RaidKind.Anton;
-                if (luke)
+                if (shared)
                 {
-                    if (raidCombat is not { Actor.IsCurrent: true, Battle.Kind: Raids.RaidKind.Luke or Raids.RaidKind.Fiendwar } raid ||
+                    if (raidCombat is not { Actor.IsCurrent: true, Battle.SupportsLukeRevival: true } raid ||
+                        formalDungeon.Entry.RaidEntry!.Kind != raid.Battle.Kind ||
                         formalDungeon.Entry.RaidEntry!.InstanceId != raid.Battle.Instance || PreservesDungeonConsumables)
                         return InventoryResult.Reject();
                     reservation = raid.Battle.ReserveLukeRevival(raid.Actor, formalDungeon.Run.Snapshot.Identity, formalDungeon.DeathSerial);
@@ -109,6 +113,7 @@ internal sealed partial class GameSession
                         antonReservation?.Commit();
                         formalDungeon.CharacterDead = false;
                         formalDungeon.AltarRevivalDue = null;
+                        formalDungeon.RevisedBeastDeathDue = null;
                         formalDungeon.ReviveCount++;
                         formalDungeon.Run.QuestFacts.Revived();
                     }
@@ -135,7 +140,7 @@ internal sealed partial class GameSession
         !HasPendingTownQuestCommit && !HasPendingFormalCard &&
         Ready && Selected is not null && Phase is SessionPhase.Dungeon or SessionPhase.Settlement &&
         formalDungeon is { } dungeon && dungeon.Run.Phase is SinglePlayerDungeonPhase.Dungeon or SinglePlayerDungeonPhase.Settlement &&
-        !dungeon.Run.HasPendingDeath && !dungeon.Run.HasPendingSettlement && !dungeon.HasPendingFatigue &&
+        dungeon.Run.RevisedBeastTerminal is null && !dungeon.Run.HasPendingDeath && !dungeon.Run.HasPendingSettlement && !dungeon.HasPendingFatigue &&
         !dungeon.Ground.HasPendingOperation && dungeon.PendingTutorialClear is null &&
         dungeon.PendingInventoryDiscard is null && dungeon.AltarSettlement is not { Stage: < 2 } && !HasPendingQuestScene;
 }

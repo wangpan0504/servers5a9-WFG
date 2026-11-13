@@ -250,6 +250,105 @@ internal static class InventoryCoreGrantTests
         That(!blockedGem.Accepted && blockedGem.Error == 17 && blockedGem.Plan is null,
             "快捷栏首兼容堆已满时不绕到专用页或新格突破原堆叠合同");
 
+        // 溢出邮件放置：已满首堆不能挡住后面仍有容量的兼容堆。默认发放合同不变。
+        var catalog = new ItemCatalog(null!, new Dictionary<int, string>(), new Dictionary<int, string>(), 0);
+        var ticket = Template(1001, ItemKind.Consumable, 1);
+        var runeTemplate = Template(2002, ItemKind.Rune, 999);
+        catalog.PrefillTemplates(new Dictionary<int, ItemTemplate>
+        {
+            [stackTemplate.Id] = stackTemplate,
+            [ticket.Id] = ticket,
+            [runeTemplate.Id] = runeTemplate
+        });
+        var limits = new GoldLimitCatalog("[gold limit from level]\n0 1000000\n[/gold limit from level]");
+        var seed = InventoryRewardGrantService.Create(stackTemplate, utcNow: Now);
+        var fullQuick = new InventoryItem(21, new(InventoryListType.Main, 3), seed with { Value = stackTemplate.StackLimit, SortLockFlag = 1 });
+        var laterRoom = new InventoryItem(22, new(InventoryListType.Main, 65), seed with { Value = 4 });
+        var strictBlocked = InventoryRewardGrantService.TryGrantBatch(CharacterWith([fullQuick, laterRoom]),
+            [new InventoryReward(stackTemplate.Id, 1)], catalog, limits, Pieces, Now);
+        That(!strictBlocked.Accepted && strictBlocked.Error == 17 && strictBlocked.Plan is null,
+            "默认发放在首个兼容堆已满时仍整笔拒绝，不改去后堆");
+        var skippedFull = Overflow(CharacterWith([fullQuick, laterRoom]), new InventoryReward(stackTemplate.Id, 1));
+        That(skippedFull.Accepted && skippedFull.Plan!.OverflowItems.IsEmpty && skippedFull.Plan.After.Items.Length == 2 &&
+            skippedFull.Plan.After.Find(fullQuick.Position) == fullQuick &&
+            skippedFull.Plan.After.Find(laterRoom.Position) == laterRoom with { Core = laterRoom.Core with { Value = 5 } },
+            "溢出发放跳过已满首堆并补入后堆，不新开格");
+        var low = new InventoryItem(31, new(InventoryListType.Main, 70), seed with { Value = stackTemplate.StackLimit - 2, SortLockFlag = 1 });
+        var mid = new InventoryItem(32, new(InventoryListType.Main, 66), seed with { Value = stackTemplate.StackLimit - 3 });
+        var high = new InventoryItem(33, new(InventoryListType.Main, 90), seed with { Value = stackTemplate.StackLimit - 10 });
+        var ordered = Overflow(CharacterWith([low, mid, high]), new InventoryReward(stackTemplate.Id, 6));
+        That(ordered.Accepted && ordered.Plan!.OverflowItems.IsEmpty && ordered.Plan.After.Items.Length == 3 &&
+            ordered.Plan.After.Find(mid.Position) is { Uid: 32, Core.Count: var midCount } && midCount == stackTemplate.StackLimit &&
+            ordered.Plan.After.Find(low.Position) is { Uid: 31, Core.SortLockFlag: 1, Core.Count: var lowCount } && lowCount == stackTemplate.StackLimit &&
+            ordered.Plan.After.Find(high.Position) is { Uid: 33, Core.Count: var highCount } && highCount == stackTemplate.StackLimit - 9,
+            "溢出发放按槽号依次补满未满堆，并保留目标UID与排序锁");
+        var head = new InventoryItem(41, new(InventoryListType.Main, 66), seed with { Value = stackTemplate.StackLimit - 1 });
+        var tail = new InventoryItem(42, new(InventoryListType.Main, 70), seed with { Value = stackTemplate.StackLimit - 1 });
+        var opened = Overflow(CharacterWith([head, tail]), new InventoryReward(stackTemplate.Id, 5));
+        var created = opened.Plan!.After.Items.Single(item => item.Uid == 0);
+        That(opened.Accepted && opened.Plan.OverflowItems.IsEmpty &&
+            opened.Plan.After.Find(head.Position)!.Core.Count == stackTemplate.StackLimit &&
+            opened.Plan.After.Find(tail.Position)!.Core.Count == stackTemplate.StackLimit &&
+            created.Position.Index == 65 && created.Core.Count == 3,
+            "已有堆补满后，余量才占第一个空格");
+        var overflowPage = Enumerable.Range(65, 56).Select(slot => new InventoryItem(1000 + slot,
+            new(InventoryListType.Main, (short)slot), seed with { Value = stackTemplate.StackLimit })).ToImmutableArray();
+        var mailed = Overflow(CharacterWith(overflowPage), new InventoryReward(stackTemplate.Id, 1));
+        That(mailed.Accepted && mailed.Plan!.After.Items.Length == overflowPage.Length && mailed.Plan.OverflowItems.Length == 1 &&
+            mailed.Plan.OverflowItems[0].Core.ItemId == stackTemplate.Id && mailed.Plan.OverflowItems[0].Core.Count == 1 &&
+            overflowPage.All(item => mailed.Plan.After.Find(item.Position) == item),
+            "消耗品页与兼容堆都满时，溢出发放整份进邮件");
+        var roomPage = overflowPage.Replace(overflowPage[^1], overflowPage[^1] with { Core = overflowPage[^1].Core with { Value = stackTemplate.StackLimit - 1 } });
+        var absorbed = Overflow(CharacterWith(roomPage), new InventoryReward(stackTemplate.Id, 1));
+        That(absorbed.Accepted && absorbed.Plan!.OverflowItems.IsEmpty && absorbed.Plan.After.Items.Length == roomPage.Length &&
+            absorbed.Plan.After.Find(overflowPage[^1].Position)!.Core.Count == stackTemplate.StackLimit,
+            "页已满时仍先补最后一格剩余容量，不进邮件");
+        var spilledMail = Overflow(CharacterWith(roomPage), new InventoryReward(stackTemplate.Id, 3));
+        That(spilledMail.Accepted && spilledMail.Plan!.After.Find(overflowPage[^1].Position)!.Core.Count == stackTemplate.StackLimit &&
+            spilledMail.Plan.OverflowItems.Length == 1 && spilledMail.Plan.OverflowItems[0].Core.Count == 2 &&
+            spilledMail.Plan.After.Items.Length == roomPage.Length,
+            "末堆只吸收剩余容量，超出部分进邮件且不新开已满页");
+        int foreignTime = checked((int)Now.AddDays(30).ToUnixTimeSeconds());
+        var foreign = new InventoryItem(51, new(InventoryListType.Main, 65), seed with { Value = 1, ExpireTime = foreignTime });
+        var same = new InventoryItem(52, new(InventoryListType.Main, 80), seed with { Value = 6 });
+        var splitExpiry = Overflow(CharacterWith([foreign, same]), new InventoryReward(stackTemplate.Id, 1));
+        That(splitExpiry.Accepted && splitExpiry.Plan!.OverflowItems.IsEmpty && splitExpiry.Plan.After.Items.Length == 2 &&
+            splitExpiry.Plan.After.Find(foreign.Position) == foreign &&
+            splitExpiry.Plan.After.Find(same.Position)!.Core.Count == 7,
+            "不同到期时间在溢出发放下仍然不合堆");
+        var ticketSeed = InventoryRewardGrantService.Create(ticket, utcNow: Now);
+        var ticketStack = new InventoryItem(61, new(InventoryListType.Main, 65), ticketSeed);
+        var anotherTicket = Overflow(CharacterWith([ticketStack]), new InventoryReward(ticket.Id, 1));
+        var ticketCopy = anotherTicket.Plan!.After.Items.Single(item => item.Uid == 0);
+        That(ticket.StackLimit == 1 && anotherTicket.Accepted && anotherTicket.Plan.OverflowItems.IsEmpty &&
+            anotherTicket.Plan.After.Find(ticketStack.Position) == ticketStack &&
+            ticketCopy.Core.Count == 1 && ticketCopy.Position.Index == 66,
+            "上限1在溢出发放下仍一格一件");
+        var twoTickets = Overflow(CharacterWith([]), new InventoryReward(ticket.Id, 2));
+        That(twoTickets.Accepted && twoTickets.Plan!.OverflowItems.IsEmpty && twoTickets.Plan.After.Items.Length == 2 &&
+            twoTickets.Plan.After.Items.All(item => item.Core.Count == 1) &&
+            twoTickets.Plan.After.Items.Select(item => item.Position.Index).Order().SequenceEqual(new short[] { 65, 66 }),
+            "一次发放两张上限1仍占两格");
+        var runeSeed = InventoryRewardGrantService.Create(runeTemplate, utcNow: Now);
+        var equippedRune = new InventoryItem(71, new(InventoryListType.Talisman, 210), runeSeed);
+        var runeGrant = Overflow(CharacterWith([equippedRune]), new InventoryReward(runeTemplate.Id, 2));
+        That(runeGrant.Accepted && runeGrant.Plan!.OverflowItems.IsEmpty &&
+            runeGrant.Plan.After.Find(equippedRune.Position) == equippedRune &&
+            runeGrant.Plan.After.Items.Single(item => item.Position.Index != 210) is { Uid: 0, Position.Index: 70, Core.Count: 2 },
+            "溢出发放不把数量补进list46装载槽");
+        var incoming = new InventoryItem(88, new(InventoryListType.Main, 0), seed with { Value = 5 });
+        var firstSpace = new InventoryItem(81, new(InventoryListType.Main, 66), seed with { Value = stackTemplate.StackLimit - 2 });
+        var secondSpace = new InventoryItem(82, new(InventoryListType.Main, 70), seed with { Value = stackTemplate.StackLimit - 1 });
+        var movedUid = InventoryRewardGrantService.TryGrantItems(CharacterWith([firstSpace, secondSpace]), [incoming],
+            catalog, limits, Pieces, Now, allowOverflowMail: true);
+        That(movedUid.Accepted && movedUid.Plan!.OverflowItems.IsEmpty &&
+            movedUid.Plan.After.Find(firstSpace.Position) is { Uid: 81, Core.Count: var firstCount } && firstCount == stackTemplate.StackLimit &&
+            movedUid.Plan.After.Find(secondSpace.Position) is { Uid: 82, Core.Count: var secondCount } && secondCount == stackTemplate.StackLimit &&
+            movedUid.Plan.After.Items.Single(item => item.Uid == 88) is { Position.Index: 65, Core.Count: 2 },
+            "外部实例先补已有堆，第一份新格才沿用原UID");
+
+        InventoryResult Overflow(Character character, params InventoryReward[] rewards) =>
+            InventoryRewardGrantService.TryGrantBatch(character, rewards, catalog, limits, Pieces, Now, allowOverflowMail: true);
         InventoryResult Pickup(Character character, ItemCore input, ItemTemplate template) =>
             InventoryRewardGrantService.TryGrantCore(character, input, template, Pieces, Now, usePickupSlotPolicy: true);
         Console.WriteLine($"PASS {Count - checks} 完整核心发放纯规则断言");

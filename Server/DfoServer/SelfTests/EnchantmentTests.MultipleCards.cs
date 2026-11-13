@@ -54,6 +54,10 @@ internal static partial class EnchantmentTests
             Catalog(body, alter).Get(beadId);
 
         var definition = Load(bead) ?? throw new InvalidDataException("合法多卡宝珠定义缺失");
+        var instanceDefinition = Catalog(bead).Get(beadId, 1)!;
+        That(!instanceDefinition.UsesInstanceUpgrade && instanceDefinition.Upgrade == definition.Upgrade &&
+            instanceDefinition.RandomCards!.Positions.SequenceEqual(definition.RandomCards!.Positions),
+            "多卡随机珠忽略实例升级字段，保留完整原奖池和模板等级");
         That(definition.RandomTitle is null && definition.CardItemId == 0,
             "普通多卡列表是随机卡池，不把首卡冒充固定卡，也不当97扩展技能池");
         var beadTemplate = new ItemTemplate(beadId, ItemKind.Consumable, 0, 1, 0, 1000, 1, 2, 1, "[free]", ushort.MaxValue, 0, "Bead");
@@ -286,7 +290,7 @@ internal static partial class EnchantmentTests
             int expectedExperience = role.ExpertJobExperience + resources.ExpertJobs.MonsterCardExp(1,
                 resources.ExpertJobs.Level(1, role.ExpertJobExperience)).Min;
             That(ExpertJobCraft.TryPlanEnchant(role, service, resources.ExpertJobs, 0, 9, 0, 82, 2_000_000_000,
-                out var shared, out int experience, out _) && sharedDraws == 1 &&
+                out var shared, out int experience, out _, next: _ => 0) && sharedDraws == 1 &&
                 shared.After.Find(target.Position)!.Core == target.Core with { EnchantCardId = expected[^1], EnchantUpgrade = 0 } &&
                 shared.After.Find(source.Position)!.Core.Count == 1 && experience == expectedExperience,
                 "CMD601本人宝珠fallback复用同一随机计划，完整扣源并保留副职业结算：" + beadId);

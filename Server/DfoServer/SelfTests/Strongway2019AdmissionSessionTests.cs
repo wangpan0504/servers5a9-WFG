@@ -283,6 +283,7 @@ internal static class Strongway2019AdmissionSessionTests
             var owners = new AccountOwners();
             using var owner = owners.Acquire("sw-formal-session", () => { });
             var events = new ServerEventService(new ServerEventRepository(path));
+            events.Override(ServerEventService.Strongway2019Id, false);
             var growth = CharacterGrowthCatalog.Load(pvf);
             var role = repository.Create(owner, new("SWFormal", new(65, 1, 450, 234), towns.InitialReturn)
                 { Level = 95, InitialLearning = new(growth.GetLevelStartExperience(95),
@@ -401,7 +402,8 @@ internal static class Strongway2019AdmissionSessionTests
                 }, serverEvents: events);
             session.Select(role.Slot, resumeTown: true); session.MarkReady();
             sessionActor = session.Selected;
-            That(session.PrepareStrongway2019Admission(5359) is null, "312默认关闭时正式Session不授予准入");
+            events.Override(312, false);
+            That(session.PrepareStrongway2019Admission(5359) is null, "312显式关闭时正式Session不授予准入");
             var enabled = events.Override(312, true).Schedule;
             var admission = session.PrepareStrongway2019Admission(5359);
             That(admission is { Mode: Strongway2019Mode.Simple, MemberCount: 1, AntiEvil: 4000 } &&
@@ -410,11 +412,18 @@ internal static class Strongway2019AdmissionSessionTests
             antiEvil = 3999;
             That(session.PrepareStrongway2019Admission(5359) is null, "穿戴抗魔不足不能沿用此前准入");
             antiEvil = 9999;
+            That(session.PrepareStrongway2019Admission(5363) is { Mode: Strongway2019Mode.Hero, MemberCount: 1 },
+                "未组队英雄按本人一人准入，不要求创建Party");
+            antiEvil = 3999;
+            That(session.PrepareStrongway2019Admission(5363) is null, "未组队英雄低于4000抗魔仍拒绝");
+            antiEvil = 4000;
+            That(session.PrepareStrongway2019Admission(5363) is { AntiEvil: 4000 }, "未组队英雄4000抗魔边界准入");
+            antiEvil = 4415;
+            That(session.PrepareStrongway2019Admission(5363) is { AntiEvil: 4415 }, "未组队英雄4415抗魔正常准入");
             That(session.PrepareStrongway2019Admission(5360) is null &&
                 session.PrepareStrongway2019Admission(5360, matched: true) is null &&
-                session.PrepareStrongway2019Admission(5363) is null &&
                 session.PrepareStrongway2019Admission(5364) is null,
-                "未组队角色无法借直接调用获得匹配、英雄或隐藏图资格");
+                "未组队角色无法借直接调用获得匹配或隐藏图资格");
             events.Override(312, false);
             That(session.PrepareStrongway2019Admission(5359) is null, "关活动后不再生成新准入");
             session.ReturnToRoster();

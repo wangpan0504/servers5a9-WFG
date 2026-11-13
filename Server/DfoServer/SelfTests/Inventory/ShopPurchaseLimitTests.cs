@@ -100,6 +100,43 @@ internal static partial class ShopPurchaseLimitTests
             "合法声明后的赛季及空声明按原顺序共同保留，不能静默覆盖成可购买");
         That(ItemShopPrice.Parse(new("[price]\n10"), false, 0).PeriodicLimit is null,
             "没有周期声明的普通商品不新增限购");
+        var legacyRepeat = ItemShopPrice.Parse(new(
+            "[daily purchase limit]\n`account` 10\n[/daily purchase limit]\n[daily purchase limit]\n`account` 2\n[/daily purchase limit]\n[reset daily purchase item]"), false, 0);
+        That(legacyRepeat.Limit is { AccountWide: true, Count: 2, ResetDaily: true } && legacyRepeat.UnresolvedPurchaseLimits.IsEmpty,
+            "旧式daily purchase limit重复段按原生末次覆盖保留后一段上限");
+        bool legacyMalformed = false;
+        try
+        {
+            _ = ItemShopPrice.Parse(new("[daily purchase limit]\n`account` 0\n[/daily purchase limit]\n[daily purchase limit]\n`account` 2\n[/daily purchase limit]"), false, 0);
+        }
+        catch (InvalidDataException) { legacyMalformed = true; }
+        That(legacyMalformed, "旧式daily purchase limit首段畸形时不能被后段掩盖");
+        var legacyEmpty = ItemShopPrice.Parse(new("[daily purchase limit]\n[/daily purchase limit]"), false, 0);
+        That(legacyEmpty.Limit is null && legacyEmpty.UnresolvedPurchaseLimits.Length == 1 &&
+            !ShopPurchaseLimitService.TryPlan(InventorySnapshot.Empty, legacyEmpty, 70, 490000394, 1, beforeReset, out _, out _),
+            "空daily purchase limit记入未决限购并在购买端拒绝，不能退化为不限购");
+        var legacyMonthly = ItemShopPrice.Parse(new("[daily purchase limit]\n`character` 1\n[/daily purchase limit]\n[reset monthly purchase item]\n1"), false, 0);
+        That(legacyMonthly.Limit is null && legacyMonthly.PeriodicLimit is { AccountWide: false, Count: 1, Period: ItemPurchasePeriod.Monthly } &&
+            ShopPurchaseLimitService.TryPlan(InventorySnapshot.Empty, legacyMonthly, 1, 10157236, 1, monthEnd, out var legacyMonthCap, out var legacyMonthDeadline) &&
+            legacyMonthDeadline == monthEnd.AddSeconds(1).ToUnixTimeSeconds() &&
+            !ShopPurchaseLimitService.TryPlan(legacyMonthCap, legacyMonthly, 2, 10157236, 1, monthEnd, out _, out _) &&
+            ShopPurchaseLimitService.TryPlan(legacyMonthCap, legacyMonthly, 2, 10157236, 1, monthEnd.AddSeconds(1), out _, out _),
+            "reset monthly purchase item将daily purchase limit映射为月度重置限购");
+        bool conflictingReset = false;
+        try
+        {
+            _ = ItemShopPrice.Parse(new("[daily purchase limit]\n`account` 1\n[/daily purchase limit]\n[reset daily purchase item]\n[reset monthly purchase item]"), false, 0);
+        }
+        catch (InvalidDataException) { conflictingReset = true; }
+        That(conflictingReset, "日重置与月重置标签冲突时拒绝解析");
+        var sharedLegacy = new ItemShopPrice(0, 0, [], new(true, 3, true));
+        That(ShopPurchaseLimitService.TryPlan(InventorySnapshot.Empty, sharedLegacy, 59, 10099865, 1, beforeReset, out var firstNpc, out _) &&
+            ShopPurchaseLimitService.TryPlan(firstNpc, sharedLegacy, 45, 10099865, 2, beforeReset, out var secondNpc, out _) &&
+            secondNpc.ShopPurchases.Length == 2 &&
+            !ShopPurchaseLimitService.TryPlan(secondNpc, sharedLegacy, 59, 10099865, 1, beforeReset, out _, out _) &&
+            !ShopPurchaseLimitService.TryPlan(secondNpc, sharedLegacy, 460, 10099865, 1, beforeReset, out _, out _) &&
+            ShopPurchaseLimitService.TryPlan(secondNpc, sharedLegacy, 460, 10099865, 1, beforeReset.AddSeconds(1), out _, out _),
+            "旧式限购按商人分行保存，但跨商人及攻坚商店共享同一商品额度并在06:00重置");
     }
 
     static void PurchaseCountWireContract()

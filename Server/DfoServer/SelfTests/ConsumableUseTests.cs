@@ -11,7 +11,7 @@ using static DfoServer.Testing.TestCheck;
 
 namespace DfoServer;
 
-internal static class ConsumableUseTests
+internal static partial class ConsumableUseTests
 {
     internal static RecoveryConsumableDefinition Hp { get; } = new(1108, 16, 10000, 0);
     internal static RecoveryConsumableDefinition Mp { get; } = new(1114, 16, 10000, 1);
@@ -19,9 +19,16 @@ internal static class ConsumableUseTests
     public static void RunCore()
     {
         RandomDisguiseRepeatedStackLimit();
+        DisguiseKinds();
         BossSelectionMappings();
         EpicDropMappings();
         HellLegendMappings();
+        var hellDisplay = DfoServer.Network.Projection.HellLegendBuffProjection.AddedBody(2_000_000_300);
+        That(hellDisplay.Length == 17 && hellDisplay[0] == 1 && BitConverter.ToInt32(hellDisplay, 1) == 1271 &&
+            BitConverter.ToInt32(hellDisplay, 5) == 2_000_000_300 && hellDisplay.AsSpan(9).SequenceEqual(new byte[8]),
+            "星空状态487携带1271与绝对截止秒，不将剩余时长误写入截止字段");
+        Reject<InvalidDataException>(() => DfoServer.Network.Projection.HellLegendBuffProjection.AddedBody(0),
+            "过期星空状态只能移除，不创建永久图标");
         VillageMoveSpeedMappings();
         var bossBuff = new BossSelectionBuff(490705256, 5, 2000,
             new(300, 7191, 5, [new(92689, 40), new(92690, 40), new(92697, 20)]));
@@ -79,7 +86,7 @@ internal static class ConsumableUseTests
             ActionUsableDungeons = [291100339, 5350] };
         That(RecoveryConsumableCatalog.Read(dungeonRestricted)?.AllowedDungeons is { } allowed &&
             allowed.SetEquals(new uint[] { 291100339, 5350 }) && RecoveryConsumableCatalog.Read(raw)?.AllowedDungeons is null,
-            "可用地下城名单独立进入使用资格，未声明的普通药不受新增限制");
+            "保留资源副本名单元数据；实际匹配由原生客户端完成，不为普通药另建资格分支");
         That(RecoveryConsumableCatalog.Read(dungeonRestricted with { ActionUsableDungeons = null }) is null,
             "存在但解析失败的可用地下城声明不能回退成任意场景使用");
         var nativeStat = dungeonRestricted with
@@ -159,10 +166,17 @@ internal static class ConsumableUseTests
                 DeclaredActionUsablePlaces = ["[village]", "[seria room]"] },
             StatChangeDuration = new(600000, "myself", null), EffectMaintenance = 15 };
         var epic = new EpicDropBuffDefinition(1136, 100) { ItemIds = ImmutableHashSet.Create(1108, 490000413) };
+        var durationBinding = VariousBuffAssociationTests.Binding(epicRaw.TemplateId, [VariousBuffAssociationTests.Definition(90010, count: 10)]);
+        That(RecoveryConsumableCatalog.Read(epicRaw, variousBuff: durationBinding) is { VariousDurationMilliseconds: 600000 } &&
+            RecoveryConsumableCatalog.Read(epicRaw with { StatChangeDuration = null,
+                DeclaredFields = epicRaw.DeclaredFields.Remove("stat change duration") }, variousBuff: durationBinding) is { VariousDurationMilliseconds: null } &&
+            RecoveryConsumableCatalog.Read(epicRaw with { StatChangeDuration = new(0, "myself", null),
+                DeclaredFields = epicRaw.DeclaredFields.Add("stat change duration") }, variousBuff: durationBinding) is { VariousDurationMilliseconds: 0 },
+            "通用Buff资源装配保留STK声明时长、缺失和显式0的区别");
         That(RecoveryConsumableCatalog.Read(epicRaw, epicBuff: epic) is { EpicDropBuff.Percent: 100, EffectMilliseconds: 600000, EffectMaintenance: 15 },
             "已核固定史诗效果才允许城镇药剂0并沿资源持续时间/维护位");
-        That(RecoveryConsumableCatalog.Read(epicRaw, epicBuff: epic with { Percent = 150 }) is null,
-            "随机中级倍率不借固定百分百合同放行");
+        That(RecoveryConsumableCatalog.Read(epicRaw, epicBuff: epic with { Percent = 150 }) is { EpicDropBuff.Percent: 150 },
+            "效果百分比来自元数据，合法150参数不被固定编号合同拒绝");
         foreach (var invalid in new[] { epicRaw with { EffectMaintenance = null }, epicRaw with { EffectMaintenance = 0 },
             epicRaw with { StatChangeDuration = new(600000, "party", null) }, epicRaw with { StatChangeDuration = null },
             epicRaw with { Diagnostics = ["invalid field"] } })
@@ -189,8 +203,8 @@ internal static class ConsumableUseTests
             "星空1271城镇药剂缺 effect maintenance 时沿 cooltime maintenance 7 保留死亡/回城/重选");
         That(RecoveryConsumableCatalog.Read(hellRaw with { EffectMaintenance = 7 }, hellLegendBuff: hell) is { EffectMaintenance: 7 } &&
             RecoveryConsumableCatalog.Read(hellRaw, epicBuff: epic, hellLegendBuff: hell) is null &&
-            RecoveryConsumableCatalog.Read(hellRaw, hellLegendBuff: hell with { Param = 100 }) is null,
-            "显式维护位沿用资源值；1136 与 1271 不能挂在同一瓶上，错误参数拒绝");
+            RecoveryConsumableCatalog.Read(hellRaw, hellLegendBuff: hell with { Param = 100 }) is { HellLegendEpicDropBuff.Param: 100 },
+            "显式维护位和任意非负百分比沿用资源值，单项旧视图不能重复挂在一瓶上");
         foreach (var invalid in new[] { hellRaw with { CooltimeMaintenance = null }, hellRaw with { EffectMaintenance = 0 },
             hellRaw with { StatChangeDuration = new(300000, "party", null) }, hellRaw with { Diagnostics = ["invalid field"] } })
             That(RecoveryConsumableCatalog.Read(invalid, hellLegendBuff: hell) is null, "星空药剂拒绝坏持续时间、维护位或声明");
@@ -242,8 +256,8 @@ internal static class ConsumableUseTests
             Stackable = declaration with
             { HasMaximumLevel = true, DeclaredMaximumLevel = 20, DeclaredUsableJobs = ["[mage]"] }
         })!;
-        That(limited.Allows(16, 3) && !limited.Allows(21, 3) && !limited.Allows(16, 0),
-            "物品等级与职业仍是服务端使用资格，不与客户端恢复效果混为一谈");
+        That(limited.Allows(16) && !limited.Allows(21) && limited.Jobs == 1 << 3,
+            "保留等级上下限和职业元数据，使用流程不重复客户端的职业匹配");
         var core = new ItemCore(1108, ItemKind.Consumable, 2) { SortLockFlag = 1, Marker16 = 44, ExpireTime = 2000 };
         Character character = new(1, 0, "Potion", 7, new(1, 0, 10, 10), null)
         {
@@ -274,6 +288,7 @@ internal static class ConsumableUseTests
 
     public static void RunResources(ItemResources resources)
     {
+        AllDisguiseResources(resources);
         uint[] fiendwarDungeons = [..Enumerable.Range(291100339, 26).Select(id => checked((uint)id)),
             ..Enumerable.Range(5350, 9).Select(id => checked((uint)id))];
         foreach (int id in new[] { 10312384, 10312387 })
@@ -321,15 +336,24 @@ internal static class ConsumableUseTests
             (490010213, 600000, EnhancementPotionMode.Amplify, 500),
             (490012609, 600000, EnhancementPotionMode.Amplify, 500),
             (2600025, 1800000, EnhancementPotionMode.Reinforce, 1000),
-            (2749959, 1800000, EnhancementPotionMode.Reinforce, 1000),
-            (490012267, 1800000, EnhancementPotionMode.Reinforce, 1000),
-            (490012268, 1800000, EnhancementPotionMode.Reinforce, 1000)
+            (2749959, 1800000, EnhancementPotionMode.Reinforce, 10000),
+            (490012267, 1800000, EnhancementPotionMode.Reinforce, 10000),
+            (490012268, 1800000, EnhancementPotionMode.Reinforce, 10000)
         })
             That(resources.RecoveryConsumables.TryGet(id, out var potion) && potion.EnhancementPotion is { } effect &&
                 effect.Mode == mode && effect.SuccessBonusWeight == bonus && potion.EffectMilliseconds == duration &&
                 potion.CoolTime == duration && potion.EffectMaintenance == 7 && potion.CooltimeMaintenance == 7 &&
                 ReferenceEquals(effect, resources.RecoveryConsumables.EnhancementPotions[id]),
                 "升级药剂消费目录复用同一个已核效果实例，期限与保留位取各自正式STK：" + id);
+        var amplifySource = new InventoryItem(1, new(InventoryListType.Main, 65),
+            InventoryRewardGrantService.Create(resources.Items.Get(10004688), 2));
+        Character amplifyUser = new(1, 0, "Amplify", 0, new(1, 0, 10, 10), null)
+            { Level = 95, Inventory = new([amplifySource]) };
+        var amplifyUse = mentalUse.Plan(amplifyUser, new(amplifySource.Position, 0, 10004688, 0), 0);
+        That(amplifyUse.Accepted && amplifyUse.Plan!.After.Items.Length == 1 &&
+            amplifyUse.Plan.After.Find(amplifySource.Position) is { Core.Count: 1 } used && used.Uid == amplifySource.Uid &&
+            amplifyUse.Plan.After.AccountWallet == amplifyUser.Inventory.AccountWallet,
+            "实际增幅秘笈无商店材料仍可使用，只扣原UID一瓶且不改账号钱包");
         RunStaminaResources(resources);
         foreach (int orphan in new[] { 490001355,490001358,490001356,490001359 })
             That(!resources.RecoveryConsumables.TryGet(orphan, out _),
@@ -340,30 +364,40 @@ internal static class ConsumableUseTests
         int[] fixedPeers = [490000413, 490002458, 490003224, 490003595, 490003686, 490004407, 490004506, 490005308,
             490005491, 490005778, 490701639, 490006699, 490006963, 490007961, 490008359, 490008470, 490008903,
             490009005, 490703161, 490009334, 490009727, 490702974];
-        That(fixedEpic!.EpicDropBuff!.ItemIds!.SetEquals(fixedPeers) &&
-            resources.RecoveryConsumables.EpicDropBuffs.Keys.Order().SequenceEqual(fixedPeers.Order()),
+        int[] allEpicPeers = [.. fixedPeers, 490005358, 490005359];
+        DungeonEpicDropBuffTests.RunResources(resources);
+        VariousBuffAssociationTests.RunResources(resources);
+        That(allEpicPeers.All(fixedEpic!.EpicDropBuff!.ItemIds!.Contains) &&
+            allEpicPeers.All(resources.RecoveryConsumables.EpicDropBuffs.ContainsKey),
             "十九条闭合固定映射、两条已核缺尾修复和唯一缺映射兼容完整装配，不吞下条");
         foreach (int id in fixedPeers)
             That(resources.RecoveryConsumables.TryGet(id, out var peer) && peer.EpicDropBuff is { BuffId: 1136, Percent: 100 } &&
                 peer.EpicDropBuff.IsFamilyItem(490000413) && peer.EffectMilliseconds == (id == 490005778 ? 1800000 : 600000) &&
-                peer.EffectMaintenance > 0 && !peer.RequiresDungeon && peer.Allows(95, 0),
+                peer.EffectMaintenance > 0 && !peer.RequiresDungeon && peer.Allows(95),
                 "全部固定1136同类真实药剂沿各自时长与资格，旧版不强求可选事件标签：" + id);
-        That(!resources.RecoveryConsumables.TryGet(10008219, out _),
-            "随机倍率药剂不借固定1136或缺尾修复取得使用资格");
+        foreach (var (id, buff, percent) in new[] { (490005358, 1239, 10), (490005359, 1240, 5) })
+            That(resources.RecoveryConsumables.TryGet(id, out var lantern) && lantern is
+                { EpicDropBuff.HellRewardOnly: true, EffectMilliseconds: 600000, CoolTime: 600000,
+                    CoolGroup: 251, EffectMaintenance: 15, CooltimeMaintenance: 7 } &&
+                lantern.EpicDropBuff.BuffId == buff && lantern.EpicDropBuff.Percent == percent &&
+                lantern.EpicDropBuff.ItemIds!.SetEquals(allEpicPeers),
+                "小灯笼按真实映射绑定深渊专用10/5参数、十分钟持续及共享冷却，同固定史诗药互斥：" + id);
+        That(resources.RecoveryConsumables.TryGet(10008219, out var randomEpic) && randomEpic.VariousBuff is { Association.Random: true },
+            "随机倍率来源按通用概率关联接入，不冒充单项固定视图");
         That(resources.RecoveryConsumables.TryGet(490703675, out var starrySample) && starrySample is
             { HellLegendEpicDropBuff: { BuffId: 1271, Param: 6520 }, EpicDropBuff: null, EffectMilliseconds: 300000,
                 CoolTime: 300000, CoolGroup: 253, EffectMaintenance: 7, CooltimeMaintenance: 7 },
             "星空裂缝史诗Buff药剂走已核1271合同，不冒充固定1136");
         int[] starryPeers = [490703675, 490703918, 490703948, 490011680, 490011769, 490011665, 490012202, 490704393, 490011326];
-        That(starrySample!.HellLegendEpicDropBuff!.ItemIds!.SetEquals(starryPeers) &&
+        That(starryPeers.All(starrySample!.HellLegendEpicDropBuff!.ItemIds!.Contains) &&
             resources.RecoveryConsumables.HellLegendEpicDropBuffs.Keys.Order().SequenceEqual(starryPeers.Order()),
             "八条闭合1271映射（含两份相同的490703948）和唯一缺映射兼容完整装配");
         foreach (int id in starryPeers)
             That(resources.RecoveryConsumables.TryGet(id, out var peer) && peer.HellLegendEpicDropBuff is { BuffId: 1271, Param: 6520 } &&
                 peer.HellLegendEpicDropBuff.IsFamilyItem(490704393) && peer.EpicDropBuff is null &&
                 peer.EffectMilliseconds == 300000 && peer.EffectMaintenance == 7 && peer.CooltimeMaintenance == 7 &&
-                peer.CoolGroup == 253 && !peer.RequiresDungeon && peer.Allows(95, 0) &&
-                (id != 490704393 || peer.MinimumLevel == 95 && !peer.Allows(94, 0)),
+                peer.CoolGroup == 253 && !peer.RequiresDungeon && peer.Allows(95) &&
+                (id != 490704393 || peer.MinimumLevel == 95 && !peer.Allows(94)),
                 "全部星空1271同类真实药剂沿五分钟、组253和资格，截图490704393保留95级门槛：" + id);
         That(resources.RecoveryConsumables.TryGet(490006630, out var villageSample) && villageSample is
             { VillageMoveSpeedBuff: { BuffId: 1244, Percent: 20 }, EpicDropBuff: null, HellLegendEpicDropBuff: null,
@@ -380,18 +414,17 @@ internal static class ConsumableUseTests
             That(resources.RecoveryConsumables.TryGet(id, out var peer) && peer.VillageMoveSpeedBuff is { } speed &&
                 speed.BuffId == buff && speed.Percent == percent && speed.IsFamilyItem(490006630) &&
                 peer.EffectMilliseconds == duration && peer.CoolGroup == group && peer.EffectMaintenance == 7 &&
-                !peer.RequiresDungeon && peer.Allows(1, 0),
+                !peer.RequiresDungeon && peer.Allows(1),
                 "全部已核STK时长的城镇移速药剂沿各自时长、组和资格：" + id);
         int[] villagePeers = [490006630, 490007529, 490008899, 10306776, 10309246, 490010229, 490011339, 490703721];
         That(villageSample!.VillageMoveSpeedBuff!.ItemIds!.SetEquals(villagePeers) &&
             resources.RecoveryConsumables.VillageMoveSpeedBuffs.Keys.Order().SequenceEqual(villagePeers.Order()),
             "五条已核STK时长、两条缺时长1245与一条scale胶囊映射同族装配，随机0秒expire与空buff不进表");
-        That(!resources.RecoveryConsumables.TryGet(490010229, out _) &&
-            !resources.RecoveryConsumables.TryGet(490011339, out _) &&
-            !resources.RecoveryConsumables.TryGet(10008221, out _) &&
-            !resources.RecoveryConsumables.TryGet(490003403, out _) &&
-            !resources.RecoveryConsumables.TryGet(490703721, out _),
-            "缺STK时长的1245、赛丽亚随机城镇药、空buff 1231和scale胶囊不取得CMD44资格");
+        foreach (int id in new[] { 490010229, 490011339, 10008221 })
+            That(resources.RecoveryConsumables.TryGet(id, out var associated) && associated.VariousBuff is { Ready: true },
+                "缺STK计时或概率来源自动由Buff元数据接入，无需补该编号：" + id);
+        That(!resources.RecoveryConsumables.TryGet(490003403, out _) && !resources.RecoveryConsumables.TryGet(490703721, out _),
+            "空Buff和其它生产者类型不伪造为已执行的通用资格");
         That(resources.Items.Get(490705256) is { Name: "白斯追击药水", MinimumLevel: 95 } &&
             resources.RecoveryConsumables.TryGet(490705256, out var bossPotion) && bossPotion is
             { MinimumLevel: 95, CoolTime: 60000, BossSelectionBuff: { BuffId: 300, DungeonId: 7191, Entries: 5 } } &&
@@ -414,7 +447,7 @@ internal static class ConsumableUseTests
                     new(92689, strong ? 0 : 40), new(92690, strong ? 0 : 40), new(92697, strong ? 100 : 20) }),
                 "19款实际来源逐项保留普通、强力和一次药型的完整权重、次数、等级及冷却 " + id);
             That(template.Kind == ItemKind.Consumable, "已绑定白斯药剂保留消耗品类型 " + id);
-            That(Enumerable.Range(0, 16).All(job => extra!.Allows(95, (byte)job)), "已绑定白斯药剂允许正常95级角色使用 " + id);
+            That(extra!.Allows(95), "已绑定白斯药剂允许正常95级角色使用 " + id);
             var position = new InventorySlot(InventoryListType.Main, 3);
             // 本用例只验证正常使用和完整实例保留，不把历史活动截止日期当作药剂识别条件。
             var core = new ItemCore(id, ItemKind.Consumable, 2)
@@ -559,6 +592,22 @@ internal static class ConsumableUseTests
 
     static void EpicDropMappings()
     {
+        var names = new[] { "random_box_buff", "epic_rarity_item_drop_rate", "expire_time", "all" };
+        PvfTokenSection Text(string name, int value) => new(name, [new(6, value)], []);
+        PvfTokenSection Numbers(string name, params int[] values) => new(name, [.. values.Select(value => new PvfToken(0, value))], []);
+        PvfTokenSection Definition(int id, int percent, int overlap = 0, int duration = 10) => new("index", [new(0, id)],
+            [Text("system group", 0), new("effect", [], [Text("name", 1), Numbers("param", percent)], true),
+                new("apply type", [], [Text("type", 2), Numbers("param", duration, 0)], true), Numbers("overlap", overlap)], true);
+        var lanterns = EpicDropBuffDefinition.ReadDefinitions([Definition(1239, 10), Definition(1240, 5)], id => names[id]);
+        That(lanterns.Count == 2 && lanterns[1239] is { Percent: 10, HellRewardOnly: false } &&
+            lanterns[1240] is { Percent: 5, HellRewardOnly: false }, "资源定义只解释effect，单看编号或计时参数不猜特殊范围");
+        That(EpicDropBuffDefinition.ReadDefinitions([Definition(9999, 150)], id => names[id])[9999] is { Percent: 150, HellRewardOnly: false } &&
+            EpicDropBuffDefinition.ReadDefinitions([Definition(1239, 5)], id => names[id])[1239].Percent == 5,
+            "按effect读取任意编号和参数；小灯笼的深渊范围策略不绑死其效果参数");
+        foreach (var invalid in new[] { Definition(9999, -1), Definition(9999, 10) with { Children = Definition(9999, 10).Children.Add(Numbers("overlap max", 0)) },
+            Definition(9999, 10) with { Children = Definition(9999, 10).Children.Add(Numbers("unknown field", 1)) } })
+            That(EpicDropBuffDefinition.ReadDefinitions([invalid], id => names[id]).IsEmpty,
+                "未知元数据、非法叠加或负概率保留不支持状态，不因effect已知而放行");
         var canonical = new EpicDropBuffDefinition(1136, 100);
         var definitions = new Dictionary<int, EpicDropBuffDefinition> { [1136] = canonical };
         PvfTokenSection Row(int item, int buff = 1136, int probability = 100) => new("index", [new(0, item)],
@@ -580,6 +629,27 @@ internal static class ConsumableUseTests
         That(mapping.Count == 3 && mapping[500001].IsFamilyItem(500002) && mapping[500002].IsFamilyItem(490000413) &&
             !mapping.ContainsKey(10008219) && !mapping.ContainsKey(500003),
             "确定单映射加入同族；随机多分支和星空不同效果不冒充固定史诗倍率");
+        var combined = new Dictionary<int, EpicDropBuffDefinition>(lanterns) { [1136] = canonical };
+        var lanternMapping = EpicDropBuffDefinition.ParseMappings([Row(490005358, 1239), Row(490005359, 1240)], combined);
+        That(lanternMapping.Count == 3 && lanternMapping[490005358].IsFamilyItem(490005359) &&
+            lanternMapping[490005359].IsFamilyItem(490000413) && lanternMapping[490005358].HellRewardOnly &&
+            lanternMapping[490005359].HellRewardOnly && !lanternMapping[490000413].HellRewardOnly,
+            "大小瓶与固定史诗药共用替换家族；明确的本服道具范围覆盖与通用effect分发分开");
+        var previousEffects = InventorySnapshot.Empty with { ConsumableStates = [
+            new(ConsumableStateKind.Effect, 490000413, 900000, 15, 252),
+            new(ConsumableStateKind.Effect, 490005358, 900000, 15, 251),
+            new(ConsumableStateKind.Effect, 490005359, 900000, 15, 251),
+            new(ConsumableStateKind.Effect, 7440, 900000, 15, 99)] };
+        foreach (int id in new[] { 490005358, 490005359, 490000413 })
+        {
+            var next = ConsumableStatePolicy.Activate(previousEffects,
+                new(id, 1, 600000, 251) { EpicDropBuff = lanternMapping[id], EffectMilliseconds = 600000,
+                    EffectMaintenance = 15, CooltimeMaintenance = 7 }, 100000)!;
+            That(next.ConsumableStates.Count(row => row.Kind == ConsumableStateKind.Effect) == 2 &&
+                next.ConsumableStates.Single(row => row.Kind == ConsumableStateKind.Effect && row.ItemId == id).UntilMilliseconds == 700000 &&
+                next.ConsumableStates.Any(row => row.ItemId == 7440) && previousEffects.ConsumableStates.Length == 4,
+                "小灯笼大小瓶及原固定史诗药双向覆盖，不叠加旧倍率或剩余时长，不删无关药效");
+        }
         var strings = new[] { "[index]", "[probability buff list]", "[/probability buff list]", "[/index]" };
         PvfToken[] tokens = [new(3, 0), new(0, 490000413), new(3, 1), new(0, 1136), new(0, 100), new(3, 2),
             new(3, 0), new(0, 500001), new(3, 1), new(0, 1136), new(0, 100), new(3, 2), new(3, 3)];

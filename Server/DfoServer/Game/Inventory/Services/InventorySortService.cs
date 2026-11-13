@@ -22,6 +22,7 @@ internal static class InventorySortService
         bool runePage = page?.Start == 70;
         if (list == InventoryListType.Talisman ? page is null :
             !cargo && (!Enum.IsDefined(kind) || ItemSlotBoundService.List(kind) != list) ||
+            cargo && (list == InventoryListType.PersonalCargo ? before.CargoCapacity : before.AccountCargo.Capacity) == 0 ||
             list == InventoryListType.PersonalCargo && (byte)kind is not (11 or 20))
             return InventoryResult.Reject();
         var range = page ?? (!cargo ? ItemSlotBoundService.Range(kind, before) :
@@ -62,9 +63,15 @@ internal static class InventorySortService
             {
                 ItemKind.Equipment when condition is 1 or 2 or 3 => condition,
                 ItemKind.Consumable when condition is 3 or 4 => condition,
+                // 主背包材料页“按类型”发6；旧3仍兼容，仓库和副职业不套用新编号。
+                ItemKind.Material when list == InventoryListType.Main && condition == 6 => (byte)3,
                 ItemKind.Material or ItemKind.Profession when condition == 3 => condition,
                 _ => (byte)0
             };
+            // 客户端 029CE630(condition=0) 经 029CB470 只检查空槽后是否仍有物品：
+            // 背包页按栏位整理只向前紧凑填充空槽、保持原有槽位先后，仓库默认整理才按类别与 itemId 排序。
+            if (!cargo && algorithm == 0)
+                return input.OrderBy(item => item.Position.Index);
             var sorted = algorithm switch
             {
                 // 符文品级来自资源，不使用模板稀有度。

@@ -6,7 +6,7 @@ namespace DfoServer.Testing;
 
 internal static partial class AntonRaidGapTcpTests
 {
-    static void VerifyConstructorLast(TcpPeer peer, RaidDungeonCatalog catalog, AntonTcpProbe.AntonProbeReport report, LukeRaidClockTests.Clock clock)
+    static void VerifyConstructorLast(TcpPeer peer, RaidDungeonCatalog catalog, AntonTcpProbe.AntonProbeReport report, LukeRaidClockTests.Clock clock, int before)
     {
         clock.Advance(180);
         var opened = AntonTcpProbe.Barrier(peer, "180秒正式开放孵化场");
@@ -33,7 +33,6 @@ internal static partial class AntonRaidGapTcpTests
         });
         That(report.Maps.Any(map => BinaryPrimitives.ReadInt32LittleEndian(map.AsSpan(14)) == resource.Map),
             "15/16/37/45/39/117自然进入并清理真实Constructor所在MAP");
-        const int before = 6900;
         That(report.Symbols.Skip(symbolsBefore).Select(body => ConstructorSymbol(body, 110)).Where(value => value >= 0).All(value => value == before),
             "39和117真实死亡清图不会代替Constructor Last自动扣1000或500");
         That(earlySignals == 1 && report.Symbols.Skip(symbolsBefore).Any(body => ConstructorSymbol(body, resource.Signal) == 1),

@@ -22,6 +22,7 @@ internal static class AuctionListingTests
         Seed();
         Pagination();
         Filters();
+        TemplateCandidates();
         Categories();
         ProductionDatabaseShape();
         CategoryLeaves();
@@ -30,9 +31,31 @@ internal static class AuctionListingTests
         UnreconciledLeaves();
         CategoryMapping();
         LeafIdTable();
+        SpecialAndTitleLeavesAndSort();
         SeedPool();
         InvalidDraft();
+        GoldConsignmentAndSpecialAuction();
         Console.WriteLine($"PASS {Count - checks} auction listing read assertions");
+    }
+
+    static void GoldConsignmentAndSpecialAuction()
+    {
+        That(AuctionGoldTickets.TryGetByCategory(40101, out var firstTicket) && firstTicket.ItemId == 2681725 && firstTicket.FaceGold == 1_000_000 &&
+            AuctionGoldTickets.TryGetByCategory(40117, out var lastTicket) && lastTicket.ItemId == 2683073 && lastTicket.FaceGold == 200_000_000 &&
+            AuctionGoldTickets.TryGetByItemId(2681734, out var tenMillion) && tenMillion.FaceGold == 10_000_000 &&
+            !AuctionGoldTickets.TryGetByCategory(40100, out _),
+            "金币寄售17档面额分类(40101..40117)与金币券模板ID精确双向映射");
+        var board = new SpecialAuctionBoard();
+        board.Publish(new(1, 101010912, 1, 50_000, 0, 100_000, null, "", 2000));
+        That(!board.TryPlaceBid(1, 10, "BidderA", 49_999, 1000, out _) &&
+            board.TryPlaceBid(1, 10, "BidderA", 60_000, 1000, out var afterBid) &&
+            afterBid.CurrentBid == 60_000 && afterBid.HighestBidderId == 10 && !afterBid.Settled,
+            "特殊拍卖竞价校验最低起拍与递增出价");
+        That(!board.TryPlaceBid(1, 11, "BidderB", 60_000, 1000, out _) &&
+            board.TryBuyNow(1, 11, "BidderB", 100_000, 1000, out var afterBuyout) &&
+            afterBuyout.Settled && afterBuyout.HighestBidderId == 11 &&
+            !board.TryPlaceBid(1, 12, "BidderC", 100_000, 1000, out _),
+            "特殊拍卖一口价成交后锁定拍品并拒绝后续竞价");
     }
 
     static void Seed()
@@ -116,6 +139,33 @@ internal static class AuctionListingTests
         That(f.Search(AuctionCategoryFilter.All, 0).TotalCount == 2, "到期时间等于当前时间的挂牌按已过期处理");
         f.Execute($"UPDATE auction_listings SET expires_at_unix={f.Now + 1} WHERE seller_name='机器人'");
         That(f.Search(AuctionCategoryFilter.All, 0).TotalCount == 3, "未到期的挂牌恢复参与搜索");
+    }
+
+    static void TemplateCandidates()
+    {
+        using var f = new Fixture();
+        f.Repository.InsertListings(Enumerable.Range(0, 12).Select(index =>
+            Stackable(index == 0 ? 7 : null, "候选", index % 2 == 0 ? 3037 : 1000, f.Now,
+                index % 2 == 0 ? ItemKind.Material : ItemKind.Consumable, 1)).Append(
+            Draft(null, "候选外", 101010912, f.Now)).ToImmutableArray());
+        var request = new AuctionSearchRequest(0, null, AuctionCategoryFilter.All)
+        {
+            ItemTemplateIds = [3037, 1000, 3037]
+        };
+        var first = f.Service.Search(request, null, f.Now);
+        var second = f.Service.Search(request with { Offset = 10 }, null, f.Now);
+        That(first.TotalCount == 12 && first.Listings.Length == 10 && second.TotalCount == 12 && second.Listings.Length == 2 &&
+            first.Listings.Concat(second.Listings).Select(row => row.ListingId).Distinct().Count() == 12,
+            "多模板 IN 同时应用于总数与分页，重复模板不重复挂牌，自己的挂牌也可见");
+        That(f.Service.Search(request with { CategoryId = 13002 }, null, f.Now).TotalCount == 6 &&
+            f.Matches(first.Plan!.Filter).Length == 12,
+            "多模板与分类取交集，内存过滤前的全量匹配入口使用同一候选集合");
+        var sorted = f.Service.Search(request with { SortOrder = AuctionSortOrder.PriceDesc }, null, f.Now);
+        That(sorted.TotalCount == 12 && sorted.Listings.All(row => row.ItemTemplateId is 3037 or 1000),
+            "多模板自定义排序仍保持候选限制与正确总数");
+        That(f.Service.Search(request with { ItemTemplateIds = [] }, null, f.Now).TotalCount == 0 &&
+            f.Service.Search(request with { ItemTemplateIds = [999_999] }, null, f.Now).TotalCount == 0,
+            "空候选及不存在模板不会退回全表查询");
     }
 
     /// <summary>
@@ -467,8 +517,8 @@ internal static class AuctionListingTests
         That(collectedSet.Count == 140 && AuctionCategoryFilter.CollectedIds.Length == 140,
             "采集清单是 140 个互不重复的 id（9 个顶层 + 131 个子叶）");
         int mappedLeaves = AuctionCategoryFilter.Leaves.Length;
-        That(mappedLeaves == 86,
-            $"已对账子叶 {mappedLeaves} 个 = 首饰 3 + 消耗品 6 + 宠物装备 3 + 副职业 4 + 武器 45 + 防具 25");
+        That(mappedLeaves == 119,
+            $"已对账子叶 {mappedLeaves} 个 = 首饰 3 + 消耗品 6 + 宠物装备 3 + 副职业 4 + 武器 45 + 防具 25 + 辅助装备 16 + 魔法石 16 + 耳环 1");
         // 每个采集到的 id 都必须被解析成「已识别」（要么精确命中、要么归到某一大类），
         // 不允许出现「客户端点过、服务端却完全没见过」的 id：那说明映射表落后于客户端界面。
         var unrecognized = AuctionCategoryFilter.CollectedIds
@@ -501,12 +551,13 @@ internal static class AuctionListingTests
             "采集清单里的武器/防具子叶全部出现在子叶表里（点过的节点都认下来了）");
 
         // 逐大类锁定「已对账子叶数」。数字来自采集结果；改动映射表时必须同步改这里，避免静默增删。
-        (int TopLevel, int LeafCount)[] expected = [(13000, 6), (14000, 3), (12000, 3), (33000, 4), (10000, 45), (11000, 25)];
+        (int TopLevel, int LeafCount)[] expected =
+            [(13000, 6), (14000, 3), (12000, 3), (33000, 4), (10000, 45), (11000, 25), (32001, 16), (32100, 16), (32200, 1)];
         foreach (var (topLevelId, leafCount) in expected)
         {
             var leaves = AuctionCategoryFilter.Leaves.Where(leaf => leaf.TopLevelId == topLevelId).ToArray();
             That(leaves.Length == leafCount,
-                $"已对账大类 {topLevelId} 的子叶数为 {leafCount}（消耗品 6 / 宠物装备 3 / 首饰 3 / 副职业 4 / 武器 45 / 防具 25）");
+                $"已对账大类 {topLevelId} 的子叶数为 {leafCount}");
         }
 
         // 子叶序号：客户端十进制 id = 父节点 id 的族 + 序号，父节点自身占序号 0。
@@ -563,6 +614,71 @@ internal static class AuctionListingTests
             AuctionCategoryFilter.Resolve(32116).MappedId == 32100 &&
             AuctionCategoryFilter.Resolve(32116).Dimensions.Slots == AuctionCategoryFilter.Resolve(32100).Dimensions.Slots,
             "特殊装备子叶按 id 区间归族：32002→32001（辅助装备 22）、32116→32100（魔法石 23）");
+    }
+
+    static void SpecialAndTitleLeavesAndSort()
+    {
+        using var f = new Fixture();
+        f.Categories.PrefillSlots(new Dictionary<int, int>
+        {
+            [114014003] = 14, // 板甲上衣
+            [114001201] = 12, // 魔枪士武器
+            [116170801] = 22, // 鬼剑士辅助装备
+            [116170802] = 22, // 枪剑士辅助装备
+            [118190901] = 23, // 鬼剑士魔法石
+            [118190902] = 23, // 枪剑士魔法石
+            [109600042] = 13  // 鬼剑士称号
+        });
+        f.Categories.PrefillJobs(new Dictionary<int, ushort>
+        {
+            [114001201] = 1 << 13, // demonic lancer
+            [116170801] = 1 << 0,  // swordman
+            [116170802] = 1 << 15, // gun blader
+            [118190901] = 1 << 0,  // swordman
+            [118190902] = 1 << 15, // gun blader
+            [109600042] = 1 << 0   // swordman
+        });
+        f.Categories.PrefillAttributes(new Dictionary<int, (int Rarity, int MinimumLevel)>
+        {
+            [116170801] = (2, 60),
+            [116170802] = (4, 90)
+        });
+        f.Repository.InsertListings(
+        [
+            Draft(null, "板甲上衣", 114014003, f.Now) with { StartingPrice = 50_000, BuyoutPrice = 80_000 },
+            Draft(null, "魔枪武器", 114001201, f.Now) with { StartingPrice = 20_000, BuyoutPrice = 30_000 },
+            Draft(null, "剑士辅装", 116170801, f.Now) with { StartingPrice = 40_000, BuyoutPrice = 60_000 },
+            Draft(null, "枪剑辅装", 116170802, f.Now) with { StartingPrice = 10_000, BuyoutPrice = 20_000 },
+            Draft(null, "剑士魔石", 118190901, f.Now) with { StartingPrice = 30_000, BuyoutPrice = 50_000 },
+            Draft(null, "枪剑魔石", 118190902, f.Now) with { StartingPrice = 15_000, BuyoutPrice = 25_000 },
+            Draft(null, "耳环", 108090404, f.Now) with { StartingPrice = 35_000, BuyoutPrice = 55_000 },
+            Draft(null, "剑士称号", 109600042, f.Now) with { StartingPrice = 45_000, BuyoutPrice = 70_000 }
+        ]);
+        // 114 消歧：板甲子叶 11401 命中板甲上衣（不命中魔枪武器），魔枪子叶 10801 命中魔枪武器（不命中板甲上衣）。
+        That(f.Search(11401, 0).Listings.Single().SellerName == "板甲上衣" &&
+            f.Search(11400, 0).Listings.Single().SellerName == "板甲上衣" &&
+            f.Search(10801, 0).Listings.Single().SellerName == "魔枪武器",
+            "114 号段消歧：板甲子叶 11401 与板甲材质节点 11400 命中板甲上衣，魔枪子叶 10801 命中魔枪武器");
+        // 辅助装备职业子叶（32002 鬼剑士(男) vs 32017 枪剑士）与魔法石职业子叶（32101 vs 32116）。
+        That(f.Search(32002, 0).Listings.Single().SellerName == "剑士辅装" &&
+            f.Search(32017, 0).Listings.Single().SellerName == "枪剑辅装" &&
+            f.Search(32101, 0).Listings.Single().SellerName == "剑士魔石" &&
+            f.Search(32116, 0).Listings.Single().SellerName == "枪剑魔石" &&
+            f.Search(32200, 0).Listings.Single().SellerName == "耳环",
+            "特殊装备子叶（32002/32017/32101/32116/32200）按职业位与耳环部位精确过滤");
+        // 称号职业子叶（12005 鬼剑士(男) vs 12006 鬼剑士(女)）。
+        That(f.Search(12005, 0).Listings.Single().SellerName == "剑士称号" &&
+            f.Search(12006, 0).TotalCount == 0,
+            "称号职业子叶（12005..12018）按部位 13 + 职业位精确过滤");
+        // 排序与品级/等级过滤。
+        var sortedAsc = f.Service.Search(new(0, null, 32001) { SortOrder = AuctionSortOrder.PriceAsc }, null, f.Now);
+        var sortedDesc = f.Service.Search(new(0, null, 32001) { SortOrder = AuctionSortOrder.PriceDesc }, null, f.Now);
+        That(sortedAsc.Listings.Select(r => r.SellerName).SequenceEqual(["枪剑辅装", "剑士辅装"]) &&
+            sortedDesc.Listings.Select(r => r.SellerName).SequenceEqual(["剑士辅装", "枪剑辅装"]),
+            "搜索支持按价格升序/降序排序");
+        var byRarity = f.Service.Search(new(0, null, 32001) { Rarity = 4, MinLevel = 85, MaxLevel = 95 }, null, f.Now);
+        That(byRarity.TotalCount == 1 && byRarity.Listings.Single().SellerName == "枪剑辅装",
+            "搜索支持按品级与穿戴等级区间过滤");
     }
 
     /// <summary>
@@ -693,22 +809,22 @@ internal static class AuctionListingTests
         for (int index = 0; index < weaponFamilies.Length; index++)
         {
             ulong mask = AuctionCategoryFilter.ItemGroupMask(AuctionCategoryFilter.EquipmentTemplateId(weaponFamilies[index], 0, 12));
-            That(mask == AuctionCategoryFilter.WeaponGroupMask(index) && (mask & AuctionCategoryFilter.AllWeaponGroups) == mask,
-                $"武器族 {weaponFamilies[index]} 的模板落进本族掩码（界面第 {index + 1} 个武器节点），且是并集的子集");
+            ulong weaponBit = AuctionCategoryFilter.WeaponGroupMask(index);
+            That((mask & weaponBit) == weaponBit && (weaponBit & AuctionCategoryFilter.AllWeaponGroups) == weaponBit,
+                $"武器族 {weaponFamilies[index]} 的模板含本族掩码（界面第 {index + 1} 个武器节点），且是并集的子集");
         }
         for (int index = 0; index < 5; index++)
         {
             int material = new[] { 110, 111, 112, 113, 114 }[index];
             ulong mask = AuctionCategoryFilter.ItemGroupMask(AuctionCategoryFilter.ArmorTemplateId(material, 16));
-            // 材质 114（板甲）与武器族 114（魔枪士）共用同一段号码：族掩码读的是 id 的族号，
-            // 此时武器族优先命中，因此板甲的材质掩码口径与其它材质不同（板甲子叶靠部位维度收窄）。
+            ulong armorBit = AuctionCategoryFilter.ArmorGroupMask(index);
             if (material == 114)
             {
-                That(mask == AuctionCategoryFilter.WeaponGroupMask(AuctionCategoryFilter.WeaponGroup.BitLancer),
-                    "材质 114 与武器族 114 同名：族掩码按武器族优先命中（板甲子叶靠部位维度收窄，见文档未确认项）");
+                That(mask == (AuctionCategoryFilter.WeaponGroupMask(AuctionCategoryFilter.WeaponGroup.BitLancer) | armorBit),
+                    "材质 114 与武器族 114 共用号段：ItemGroupMask 同时置魔枪士族位与板甲材质位，由部位 12 vs 14..18 精确消歧");
                 continue;
             }
-            That(mask == AuctionCategoryFilter.ArmorGroupMask(index),
+            That(mask == armorBit,
                 $"防具族 {material} 的模板落进本材质掩码（界面第 {index + 1} 个防具节点）");
         }
         // 不认识的 id 一律不过滤（宁可粗，不可错）：族 103/105/107（本机 PVF 里没有任何武器条目）、

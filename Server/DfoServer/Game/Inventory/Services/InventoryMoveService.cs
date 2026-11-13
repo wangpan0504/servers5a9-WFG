@@ -16,7 +16,7 @@ internal static class InventoryMoveService
     internal const string LoginWearRestatementReason = "move_login_wear_restatement";
 
     public static InventoryResult Plan(Character character, InventoryMoveRequest request, ItemCatalog catalog, long utcSeconds,
-        PremiumContractCatalog? contracts = null, bool loginWearRestatement = false)
+        PremiumContractCatalog? contracts = null, bool loginWearRestatement = false, bool allowQuickSlotEquipmentChange = true)
     {
         if (InventoryKnightShieldService.Recognizes(request) || character.Inventory.ShieldDeck.Items[0] != 0 &&
             (request.Source == InventoryKnightShieldService.MainSlot || request.Destination == InventoryKnightShieldService.MainSlot))
@@ -52,8 +52,12 @@ internal static class InventoryMoveService
             request.Count == 1 && request.DestinationItemId == 0 &&
             source is { Core.Kind: ItemKind.Avatar, Avatar: not null } &&
             destination is { Core.Kind: ItemKind.Avatar, Avatar: not null };
+        // 仓库自动取出会把已占用的同模板背包堆回显为0；完整合堆条件仍由后续规则校验。
+        bool cargoStackTargetEcho = IsCargo(request.Source.List) && request.Destination.List == InventoryListType.Main &&
+            request.DestinationItemId == 0 && source is { Core.IsStackable: true } &&
+            destination is { Core.IsStackable: true } && source.Core.ItemId == destination.Core.ItemId;
         bool destinationMatches = destination is null && (CargoCell(request.Destination, request.DestinationItemId) || sourceContainerEcho) ||
-            (destination?.Core.ItemId ?? 0) == request.DestinationItemId || avatarEmptyTargetEcho ||
+            (destination?.Core.ItemId ?? 0) == request.DestinationItemId || avatarEmptyTargetEcho || cargoStackTargetEcho ||
             destination is not null && IsCargo(request.Destination.List) &&
             (request.DestinationItemId == 0 || CargoCell(request.Destination, request.DestinationItemId) || sourceContainerEcho);
         bool throwOntoOccupied = source is not null && destination is not null && destinationMatches &&
@@ -107,12 +111,26 @@ internal static class InventoryMoveService
                 if (item is { ExpireTime: > 0 })
                     qualificationExpiresAt = qualificationExpiresAt is null ? item.ExpireTime : Math.Min(qualificationExpiresAt.Value, item.ExpireTime);
         }
+        // 不增加快捷栏装备数量；直接替换以及旧多件记录的移位、卸下仍可恢复。
+        bool AddsQuickEquipment(InventoryItem item, InventorySlot from, InventorySlot to, InventoryItem? replaced) =>
+            !QuickSlotEquipmentRules.IsQuickSlot(from) && QuickSlotEquipmentRules.IsQuickSlot(to) &&
+            item.Core.Kind == ItemKind.Equipment && catalog.Get(item.Core.ItemId).IsQuickSlotEquipment &&
+            !(replaced is { Core.Kind: ItemKind.Equipment } && catalog.Get(replaced.Core.ItemId).IsQuickSlotEquipment) &&
+            before.Items.Any(other => QuickSlotEquipmentRules.IsQuickSlot(other.Position) &&
+                other.Core.Kind == ItemKind.Equipment && catalog.Get(other.Core.ItemId).IsQuickSlotEquipment);
+        if (AddsQuickEquipment(source, sourceSlot, destinationSlot, destination) ||
+            destination is not null && AddsQuickEquipment(destination, destinationSlot, sourceSlot, source))
+            return InventoryResult.Reject(CannotMoveItem);
         int count = InventoryStackRuleService.NormalizeMoveCount(source.Core, request.Count);
         if (count <= 0 || !AllowsAt(destinationSlot, source.Core) ||
             sourceSlot.List != destinationSlot.List && !InventoryCargoService.AllowsInsert(source.Core, destinationSlot.List, catalog.Get(source.Core.ItemId)))
             return InventoryResult.Reject(CannotMoveItem);
         if (sourceSlot == destinationSlot)
             return new(true, 0, new(before, before, "move_no_change", Precondition()));
+        if (!allowQuickSlotEquipmentChange && QuickSlotEquipmentRules.IsQuickSlot(sourceSlot) != QuickSlotEquipmentRules.IsQuickSlot(destinationSlot) &&
+            (source.Core.Kind == ItemKind.Equipment && catalog.Get(source.Core.ItemId).IsQuickSlotEquipment ||
+                destination is { Core.Kind: ItemKind.Equipment } && catalog.Get(destination.Core.ItemId).IsQuickSlotEquipment))
+            return InventoryResult.Reject(CannotMoveItem);
         if (source.Core.IsStackable && sourceSlot.List != destinationSlot.List)
         {
             // 跨容器存取优先完整合并，不能合并时仍允许空格；同容器手动拆分不走自动选格。
@@ -134,11 +152,30 @@ internal static class InventoryMoveService
                 destination = null;
             }
         }
-        // 孔位绑定装备槽而不跟随护石实例：带已装符文的护石离开 34/35 会把符文留在原槽错挂到别的护石上。
-        // 因此必须先卸符文再卸护石，两槽互换同样按卸下处理。
-        if (VacatesOccupiedSockets(sourceSlot, destinationSlot) || VacatesOccupiedSockets(destinationSlot, sourceSlot))
-            return InventoryResult.Reject(CannotMoveItem);
+        // 护石直接卸回空背包格时，先在同一工作快照中归还对应孔位的符文，再移动护石；
+        // 其他离开护石装备槽的路径仍拒绝，避免符文留在原槽错挂到另一枚护石。
+        bool directTalismanUnequip = destination is null && source.Core.Kind == ItemKind.Talisman &&
+            sourceSlot.List == InventoryListType.Equipment &&
+            sourceSlot.Index is ItemSlotBoundService.TalismanEquipmentStart or ItemSlotBoundService.TalismanEquipmentEnd &&
+            destinationSlot.List == InventoryListType.Talisman && destinationSlot.Index is >= 0 and < 70;
         var planned = before.Items.ToDictionary(item => item.Position);
+        if (VacatesOccupiedSockets(sourceSlot, destinationSlot) || VacatesOccupiedSockets(destinationSlot, sourceSlot))
+        {
+            if (!directTalismanUnequip || source.Core.EquipmentLockId != 0)
+                return InventoryResult.Reject(CannotMoveItem);
+            var talismanRunes = Enumerable.Range(0, 3)
+                .Select(offset => before.Find(new(InventoryListType.Talisman,
+                    (short)(ItemSlotBoundService.EquippedRuneStart +
+                        (sourceSlot.Index - ItemSlotBoundService.TalismanEquipmentStart) * 3 + offset))))
+                .Where(item => item is not null).Cast<InventoryItem>().ToArray();
+            if (talismanRunes.Any(rune => rune.Core.Kind != ItemKind.Rune || rune.Core.Count != 1))
+                return InventoryResult.Reject(CannotMoveItem);
+            var talismanService = new InventoryTalismanService(catalog);
+            if (!talismanService.ReturnRunes(planned, talismanRunes, before, utcSeconds, out var runeDeadline))
+                return InventoryResult.Reject(CannotMoveItem);
+            if (runeDeadline is not null)
+                qualificationExpiresAt = qualificationExpiresAt is null ? runeDeadline : Math.Min(qualificationExpiresAt.Value, runeDeadline.Value);
+        }
         var moving = PrepareForDestination(source, destinationSlot, destination, catalog);
         if (destination is not null && source.Core.IsStackable && destination.Core.IsStackable && source.Core.ItemId == destination.Core.ItemId)
         {
@@ -150,7 +187,7 @@ internal static class InventoryMoveService
         }
         else if (destination is not null)
         {
-            if (count != source.Core.Count || !AllowsAt(sourceSlot, destination.Core) ||
+            if (count != source.Core.Count || !AllowsAt(sourceSlot, destination.Core, destinationSlot) ||
                 sourceSlot.List != destinationSlot.List && !InventoryCargoService.AllowsInsert(destination.Core, sourceSlot.List, catalog.Get(destination.Core.ItemId)))
                 return InventoryResult.Reject(CannotMoveItem);
             planned[sourceSlot] = PrepareForDestination(destination, sourceSlot, source, catalog);
@@ -173,7 +210,12 @@ internal static class InventoryMoveService
         after.Validate(allocating: true);
         // 自动合并必须按实际移动方向回复；其他移动（尤其穿脱）仍保持原请求顺序。
         bool forward = sourceSlot == request.Source || source.Core.IsStackable && sourceSlot.List != destinationSlot.List;
-        return new(true, 0, new(before, after, "move_item", Precondition()), count,
+        var titleSlot = new InventorySlot(InventoryListType.Equipment, 13);
+        bool titleSlotChanged = sourceSlot == titleSlot || destinationSlot == titleSlot;
+        return new(true, 0, new(before, after, "move_item", Precondition())
+        {
+            CloneTitleItemIdAfter = titleSlotChanged ? InventoryCloneAppearanceService.CloneTitleAfter(character, after, catalog) : null
+        }, count,
             forward ? sourceSlot : destinationSlot, forward ? destinationSlot : sourceSlot);
 
         InventoryCharacterPrecondition Precondition() => new(character, qualificationExpiresAt);
@@ -192,10 +234,10 @@ internal static class InventoryMoveService
             catch (InvalidDataException) { return false; }
         }
 
-        bool AllowsAt(InventorySlot position, ItemCore core)
+        bool AllowsAt(InventorySlot position, ItemCore core, InventorySlot? ignore = null)
         {
-            // 源槽作为 ignore：护石在两槽之间互换时，另一槽的占用者就是本次被移走的物品。
-            if (!Allows(character, position, core, catalog, utcSeconds, contracts, sourceSlot))
+            // 移动源槽作为 ignore：两槽互换时，另一槽的占用者就是本次被移走的物品。
+            if (!Allows(character, position, core, catalog, utcSeconds, contracts, ignore ?? sourceSlot))
                 return false;
             // 只有本次实际穿戴依赖霸王等级加成时冻结期限；卸装、普通移格和原等级合格不受其到期限制。
             if (position.List == InventoryListType.Equipment && position.Index != InventoryCreatureSkinService.AuraTargetSlot &&
@@ -261,6 +303,9 @@ internal static class InventoryMoveService
     {
         if (!ItemSlotBoundService.Allows(character.Inventory, position, core.Kind))
             return false;
+        if (QuickSlotEquipmentRules.IsQuickSlot(position) && core.Kind == ItemKind.Equipment &&
+            !QuickSlotEquipmentRules.Allows(character, position, catalog.Get(core.ItemId), catalog, ignore))
+            return false;
         if (position.List != InventoryListType.Equipment)
             return true;
         var template = catalog.Get(core.ItemId);
@@ -299,7 +344,10 @@ internal static class InventoryMoveService
     }
 
     static bool ExpiredMoveBlocked(InventoryItem item, InventorySlot from, InventorySlot to, long utcSeconds) =>
-        item.IsExpired(utcSeconds) && (from.List != InventoryListType.Equipment || to.List == InventoryListType.Equipment);
+        item.IsExpired(utcSeconds) && (!IsEquippedOrQuickSlot(from) || IsEquippedOrQuickSlot(to));
+
+    static bool IsEquippedOrQuickSlot(InventorySlot slot) =>
+        slot.List == InventoryListType.Equipment || QuickSlotEquipmentRules.IsQuickSlot(slot);
 
     static bool IsCreatureSkin(InventorySlot position) => position.List == InventoryListType.Equipment &&
         position.Index == InventoryCreatureSkinService.TargetSlot;

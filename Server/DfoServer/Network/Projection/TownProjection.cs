@@ -23,7 +23,8 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
     EpicProductionProjection? epicProduction = null, DfoServer.GameWorld.Dungeons.DungeonCatalog? dungeons = null,
     MarriageProjection? marriage = null, ServerEventService? events = null, MileageShopCatalog? mileageShop = null,
     Func<CashShopPromotionCatalog>? promotionCatalog = null, CashShopPromotionPageService? promotionPages = null, ItemCatalog? items = null,
-    DfoServer.Game.Inventory.Services.InventoryKnightShieldService? knightShields = null)
+    DfoServer.Game.Inventory.Services.InventoryKnightShieldService? knightShields = null, bool epicRoadAvailable = false,
+    CashShopCatalog? cashShop = null)
 {
     const ushort JonathanVisibleEvent = 2395;
     internal const ushort BattlePassEventId = 2520;
@@ -33,8 +34,22 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
         BattlePassMissions is { } policy && !policy.Active(now).IsEmpty;
     internal Strongway2019ProfileProjection? Strongway2019Profile { get; set; }
     internal bool MileageAvailable => mileageShop?.Available == true;
+    internal bool EpicRoadAvailable => epicRoadAvailable;
+    internal Task CashShopRestrictionsAsync(GameConnectionContext context, Character character, Func<bool> canSend,
+        DfoServer.Game.Inventory.Models.InventorySnapshot? before = null)
+    {
+        if (cashShop is null) return Task.CompletedTask;
+        // NPC商店与商城共用次数账本；只刷新商城目录实际引用的次数，避免普通商店多发空通知。
+        if (before is not null && before.ShopPurchases.Where(Relevant).SequenceEqual(character.Inventory.ShopPurchases.Where(Relevant)))
+            return Task.CompletedTask;
+        return context.Notify(NotiPacketType.BUY_RESTRICT_ITEM_LIST,
+            CashShopPackets.BuyRestrictions(character.Inventory, cashShop, timer.GetUtcNow()), "cash_shop_restrictions", canSend);
+
+        bool Relevant(DfoServer.Game.Inventory.Models.ShopPurchaseCount row) => row.NpcId == 0 && cashShop.BuyRestrictions.ContainsKey(row.ItemId);
+    }
     internal async Task AccountMaterialsAsync(GameConnectionContext context, Character character,
-        DfoServer.Game.Currency.AccountWallet? before = null, Func<bool>? canSend = null)
+        DfoServer.Game.Currency.AccountWallet? before = null, Func<bool>? canSend = null,
+        DfoServer.Game.Inventory.Models.InventorySnapshot? beforeInventory = null)
     {
         foreach (var body in AccountMaterialPackets.Balances(character.Inventory.AccountWallet, before))
             await context.Notify(NotiPacketType.ACCOUNT_MATERIAL_STORAGE_INFO, body,
@@ -43,12 +58,13 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
         {
             bool CalendarCurrent() => canSend?.Invoke() != false && context.Session.SelectionEpoch == calendar.Epoch &&
                 context.Session.Selected?.Id == character.Id && context.ActivityCalendarItems?.ItemIds == calendar.ItemIds;
+            long nowUnix = timer.GetUtcNow().ToUnixTimeSeconds();
             foreach (var (list, ids) in CalendarLists(calendar.ItemIds))
             {
                 if (before is null)
-                    await context.Notify(NotiPacketType.ITEM_LIST, ActivityCalendarItemPackets.Full(list, character.Inventory.AccountWallet, ids),
+                    await context.Notify(NotiPacketType.ITEM_LIST, ActivityCalendarItemPackets.Full(list, character.Inventory.AccountWallet, ids, character.Inventory, nowUnix),
                         "activity_calendar_items_resync", CalendarCurrent);
-                else foreach (var (body, obtained) in ActivityCalendarItemPackets.Changes(list, before, character.Inventory.AccountWallet, ids))
+                else foreach (var (body, obtained) in ActivityCalendarItemPackets.Changes(list, before, character.Inventory.AccountWallet, ids, beforeInventory, character.Inventory))
                     await context.Notify(obtained ? NotiPacketType.UPDATE_ITEM_LIST : NotiPacketType.UPDATE_ITEM_LIST_NOT_NOTICE,
                         body, obtained ? "activity_calendar_item_obtained" : "activity_calendar_item_committed", CalendarCurrent);
             }
@@ -65,18 +81,24 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
     internal DfoServer.Game.Inventory.Models.KnightShieldDeck KnightShieldDeck(Character character) =>
         knightShields?.EffectiveDeck(character) ?? character.Inventory.ShieldDeck;
 
+    internal DfoServer.GameWorld.Dungeons.DungeonRoomCatalog? BeastRooms { get; set; }
+    internal Task RefreshRevisedBeastCountsAsync(GameConnectionContext context, Func<bool>? guard = null) =>
+        BeastRooms is null ? Task.CompletedTask : RevisedBeastCountProjection.RefreshAsync(context, BeastRooms, guard);
+
     internal async Task ServerEventsAsync(GameConnectionContext context, Func<bool>? canSend = null,
         long? minimumPromotionRevision = null)
     {
         // 108替换整张活动目录；积分入口更新不能清掉其他活动和各自数值段。
         var now = timer.GetUtcNow();
         long promotionRevision = events?.PromotionRevision ?? 0;
-        var openEvents = DfoServer.Game.Raids.RaidEntryEvents.OpenEvents(RaidWindows, now);
+        var openEvents = BeastChannel.EntryEvents(true, DfoServer.Game.Raids.RaidEntryEvents.OpenEvents(RaidWindows, now));
         bool seriaLuck = events?.Read(ServerEventService.SeriaLuckId).Active ?? true;
         bool hongbao = events?.Read(ServerEventService.GuildHongbaoId).Active ?? true;
         bool jonathan = events?.Read(ServerEventService.JonathanVisibilityId).Active ?? true;
+        bool weeklyDungeon = events?.Read(ServerEventService.WeeklyDungeonVisibilityId).Active ?? true;
         // 关闭只阻止新购买和新发放；保留原入口供已付费红包领取、退款和查询。
         if (jonathan) openEvents = [JonathanVisibleEvent, .. openEvents];
+        if (weeklyDungeon) openEvents = [.. openEvents, ServerEventService.WeeklyDungeonVisibilityId];
         openEvents = [GuildHongbaoPackets.OpenEvent, .. openEvents];
         bool nolanVisible = events?.Read(ServerEventService.NolanVisibilityId).Active == true;
         if (nolanVisible)
@@ -94,6 +116,8 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
         long eventEpoch = context.Session.SelectionEpoch;
         bool battlePass = IsBattlePassEventActive(now);
         if (battlePass) openEvents = [.. openEvents, BattlePassEventId];
+        bool epicRoad = EpicRoadAvailable && events?.Read(ServerEventService.EpicRoadId).Active == true;
+        if (epicRoad) openEvents = [.. openEvents, ServerEventService.EpicRoadId];
         IReadOnlyList<EventInfoDesignPage> designPages = [];
         Func<bool>? publish = () => canSend?.Invoke() != false && context.Session.EndlessAdventureActive == endless;
         if (promotionCatalog is not null && promotionPages is not null)
@@ -114,9 +138,17 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
         List<ushort> activeEvents = [];
         if (endless) activeEvents.Add(Game.Events.EndlessAdventurePolicy.EventId);
         if (jonathan) activeEvents.Add(JonathanVisibleEvent);
+        if (weeklyDungeon) activeEvents.Add(ServerEventService.WeeklyDungeonVisibilityId);
         if (onlineEnabled) activeEvents.Add(ServerEventService.PcRoomTimePointId);
         if (attendanceEnabled) activeEvents.Add(ServerEventService.DailyAttendanceId);
         if (weeklyEnabled) activeEvents.Add(ServerEventService.WeeklyAttendanceId);
+        var eventValues = new Dictionary<ushort, IReadOnlyList<uint>>();
+        if (nolanVisible && context.MonsterMockBattle?.Enabled == true)
+        {
+            activeEvents.Add(ServerEventService.NolanVisibilityId);
+            // 026BEAD5的12项数值经004721B0将第二项写入活动体力上限；1766不含该上限。
+            eventValues[ServerEventService.NolanVisibilityId] = [0, Game.MonsterMockBattle.MockBattleAccount.HeartLimit, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        }
         if (battlePass) activeEvents.Add(BattlePassEventId);
         var firstValues = new Dictionary<ushort, uint>();
         if (battlePass) firstValues[BattlePassEventId] = checked((uint)BattlePassMissions!.End.ToUnixTimeSeconds());
@@ -125,7 +157,8 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
             activeEvents: activeEvents,
             designPages: designPages,
             firstValues: firstValues,
-            includeSeriaLuck: seriaLuck);
+            includeSeriaLuck: seriaLuck,
+            eventValues: eventValues);
         string action = canSend is null ? "seria_luck_event_initialize" : "server_events_changed";
         if (designPages.Count != 0)
             await context.Sender.SendProtectedRevalidated(0, (ushort)NotiPacketType.EVENT_INFO, eventInfo, action, publish!);
@@ -143,7 +176,7 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
                         EndlessAdventurePackets.Npc(endless, towns), "endless_adventure_npc",
                         () => publish?.Invoke() != false && context.Session.CanPublishEndlessAdventure(view));
             }
-            await EndlessAdventureProjection.PublishAsync(context, force: endless);
+            await EndlessAdventureProjection.PublishAsync(context, force: endless, eventCatalogActive: endless);
         }
         if (publish?.Invoke() != false) context.WeeklyAttendance?.EventsPublished(weeklyEnabled);
         if (mileage && context.Session.Selected is { } selected)
@@ -172,7 +205,7 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
                 throw new IOException("Strongway NPC send queue unavailable");
         }
         if (NpcCurrent() && context.Session.EndlessAdventureActive == endless) context.ServerEvents?.Queued(mileage, strongway?.Active == true, npcEpoch, npcRevision ?? 0,
-            nolanVisible, seriaLuck, hongbao, jonathan, promotionRevision, attendanceEnabled);
+            nolanVisible, seriaLuck, hongbao, jonathan, promotionRevision, attendanceEnabled, epicRoadValue: epicRoad);
     }
     internal DfoServer.Game.Guild.GuildPanelService? GuildPanels { get; set; }
     internal GuildEconomyProjection? GuildEconomy { get; set; }
@@ -189,7 +222,7 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
         await context.Notify(NotiPacketType.USERINFO,
             TownPackets.Actor(context.Session.ReadSkillCharacter(expected), grade, context.Channel,
                 timer.GetUtcNow().ToUnixTimeSeconds(), context.Session.ReadAdventureName(),
-                premiumPcRoom: context.Session.PremiumPcRoom), "pvp_grade_recovered", Current);
+                premiumPcRoom: context.Session.PremiumPcRoom, returningAdventurerType: context.Session.ReturningAdventurerType, marriage: context.MarriageAppearance), "pvp_grade_recovered", Current);
     }
 
     public async Task OtherPlayerAsync(GameConnectionContext context, DfoServer.Game.Session.PublicCharacterSnapshot snapshot,
@@ -199,7 +232,7 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
         var now = timer.GetUtcNow();
         var actor = TownPackets.Actor(character, snapshot.PvpGrade, snapshot.Channel, now.ToUnixTimeSeconds(), snapshot.AdventureName,
             snapshot.Phase == DfoServer.Game.Session.SessionPhase.Town ? ActorSceneState.Town : ActorSceneState.Dungeon,
-            snapshot.PremiumPcRoom);
+            snapshot.PremiumPcRoom, returningAdventurerType: snapshot.ReturningAdventurerType, marriage: context.MarriageAppearance);
         var player = TownPackets.OtherPlayer(character, stats.Compute(character), snapshot.AdventureLevel,
             snapshot.Channel, now);
         // 公开属性依赖同一目标的Actor身份，不能复用本人Player或接收者的资产。
@@ -235,9 +268,11 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
             await settings.PreloadGameOptionsAsync(context, settingReceipt);
         var appearanceTime = timer.GetUtcNow();
         bool premiumPcRoom = context.Session.PremiumPcRoom;
+        // 原生Player初始化消费幸运名单，必须先于本人Actor及技能表建立资格。
+        AdventurerBenefitProjection.PostLucky(context);
         await context.Notify(NotiPacketType.USERINFO,
             TownPackets.Actor(context.Session.ReadSkillCharacter(c), context.Session.ReadPvpGrade(c), context.Channel, appearanceTime.ToUnixTimeSeconds(), context.Session.ReadAdventureName(),
-                premiumPcRoom: premiumPcRoom), "actor");
+                premiumPcRoom: premiumPcRoom, returningAdventurerType: context.Session.ReturningAdventurerType, marriage: context.MarriageAppearance), "actor");
         context.Premiums?.RecordPremiumAppearance(c, appearanceTime.ToUnixTimeSeconds(), premiumPcRoom);
         // Actor先建立本人对象；穿戴表装载前恢复装备准入技能，避免光剑、拳套、扫把被客户端按空技能树卸下。
         if (c.Learning.Initialized)
@@ -246,15 +281,15 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
             TownPackets.Player(context.Session.ReadSkillCharacter(c), stats.Compute(context.Session.ReadSkillCharacter(c)), context.Session.ReadAdventureLevel(), context.Channel, appearanceTime), "player");
         await PrivilegeServiceProjection.PostAsync(context, initialization: true);
         await PcRoomBuffProjection.PostAsync(context);
+        AdventurerBenefitProjection.Post(context, clear: true, force: true);
         await GuildTrainingProjection.PostAsync(context, clear: true);
         await BossSelectionBuffProjection.PostAsync(context, force: true);
+        await HellLegendBuffProjection.PostAsync(context, force: true);
+        await DungeonEpicBuffProjection.PostAsync(context, force: true);
         await DungeonEnterCountProjection.RefreshAsync(context, dungeons);
         // 本人Actor初始职位为6；成员名单和70均不会设置它，必须由127独立安装权限索引。
         await context.Notify(NotiPacketType.GUILD_MEMBER_INFO, [c.Guild?.Grade ?? (byte)100], "guild_member_grade_initialize");
         await DazzlementTowerProjection.StateAsync(context);
-        if (c.Guild is { } membership)
-            await context.Notify(NotiPacketType.GUILD_INFO, GuildPackets.Information(membership, context.Channel.ServerIndex,
-                GuildPanels?.Read(context.Owner, c.Id, context.Channel.ServerIndex)), "guild_information_initialize");
         await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.Full(c.Inventory), "main_inventory_initialize");
         foreach (var set in EchonEquipmentPackets.Snapshot(c))
             await context.Notify(NotiPacketType.CUSTOM_ABILITY_PART_SET_OPTION, set, "echon_set_initialize");
@@ -282,6 +317,7 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
         await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.SpecialFull(c.Inventory, DfoServer.Game.Inventory.Models.InventoryListType.Pet), "pet_inventory_initialize");
         await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.SpecialFull(c.Inventory, DfoServer.Game.Inventory.Models.InventoryListType.GuildMedal), "medal_inventory_initialize");
         await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.SpecialFull(c.Inventory, DfoServer.Game.Inventory.Models.InventoryListType.Talisman), "talisman_inventory_initialize");
+        await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.SpecialFull(c.Inventory, DfoServer.Game.Inventory.Models.InventoryListType.AccountCommon), "account_common_inventory_initialize");
         if (Math.Max(c.TeleportCooldowns.PartyAuraUntil, Math.Max(c.TeleportCooldowns.AuraUntil, c.TeleportCooldowns.UpgradeAuraUntil)) >
             timer.GetUtcNow().ToUnixTimeMilliseconds())
             await context.Notify(NotiPacketType.AURA_TYPE_COOLTIME, TeleportPackets.Cooldown(c, timer.GetUtcNow().ToUnixTimeMilliseconds()),
@@ -306,6 +342,7 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
                 "dungeon_enter_count_initialize");
         await DimensionEntranceProjection.RefreshAsync(context);
         await DimensionEntranceProjection.AncientAsync(context);
+        await RiftDailyProjection.RefreshParticularHellAsync(context);
         if (mailbox is not null)
             await mailbox.InitializeAsync(context);
         if (marriage is not null)
@@ -325,6 +362,7 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
         await LocationAsync(context, c, initial: true, transition: !resumeTown);
         await ServerEventsAsync(context);
         await context.Notify(NotiPacketType.FATIGUE, FatiguePackets.Current(context.Session.FatigueForClient(c)), "fatigue_after_town_hud");
+        await RefreshRevisedBeastCountsAsync(context);
         await context.Notify(NotiPacketType.BOOSTER_GAGE, SeriaLuckPackets.Gauge(c.Inventory.AccountWallet.SeriaLuck,
             c.Inventory.AccountWallet.SeriaLuck), "seria_luck_gauge_initialize");
         RaidClearProjection.Refresh(context, initialize: true);
@@ -385,6 +423,7 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
         foreach (var count in context.Session.EnterCounts())
             await context.Notify(NotiPacketType.DUNGEON_ENTER_COUNT_INFO, DungeonEnterCountPackets.Remaining(count), "dungeon_enter_count_daily", Guard);
         await DungeonEnterCountProjection.RefreshAsync(context, dungeons, Guard);
+        await RiftDailyProjection.RefreshParticularHellAsync(context, Guard);
         if (adventure is not null) await adventure.InformationAsync(context);
         if (context.Premiums is { } premiums) await premiums.RefreshAsync();
         if (context.BoosterUses is { } boosters) await boosters.RefreshAsync();
@@ -510,6 +549,16 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
             return true;
         });
         return Task.CompletedTask;
+    }
+
+    public async Task GuildInformationAsync(GameConnectionContext context, Character character)
+    {
+        // NOTI124在023E0AA0清零公会公告已输出标志062D4970，NOTI70在023DB1D2首次见到0时置1并打印欢迎公告；
+        // 置于124之后下发可避免与ACK4触发的140成员查询在124前后重复打印两条公告。
+        if (character.Guild is { } membership)
+            await context.Notify(NotiPacketType.GUILD_INFO, GuildPackets.Information(membership, context.Channel.ServerIndex,
+                GuildPanels?.Read(context.Owner, character.Id, context.Channel.ServerIndex)), "guild_information_initialize",
+                () => context.Owner.Execute(() => context.Session.Ready && ReferenceEquals(context.Session.Selected, character)));
     }
 
     public void Join(GameConnectionContext context, Func<bool>? canJoin = null)
@@ -654,7 +703,41 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
         await PcRoomBuffProjection.PostAsync(context, CanSend);
         await GuildTrainingProjection.PostAsync(context, clear: true);
         await BossSelectionBuffProjection.PostAsync(context, force: true, canSend: CanSend);
-        await context.Notify(NotiPacketType.AREA_USERS, TownPackets.Transition(receipt.Character), action, CanSend);
+        await HellLegendBuffProjection.PostAsync(context, force: true, canSend: CanSend);
+        await DungeonEpicBuffProjection.PostAsync(context, force: true, canSend: CanSend);
+        if (context.Session.RaidStatusSnapshot() is { } raid)
+        {
+            // 业务Town可早于24写出；时钟资格提交不得把成功演出投到仍在图内的原生场景。
+            void SceneWritten()
+            {
+                var latest = raid.Battle.View;
+                bool Current() => CanSend() && raid.Actor.IsCurrent &&
+                    ReferenceEquals(context.Session.CurrentRaidBattle(raid.Actor), raid.Battle) &&
+                    latest.Phase == raid.View.Phase && !latest.PhaseExpired && !latest.ClockFaulted &&
+                    context.Session.CanPublishRaidBattle(raid.Actor, latest);
+                if (latest.State == Game.Raids.AntonRaidBattleState.Reward && context.Owner.Execute(Current))
+                    // 只排当前已提交演出；完整Notice含资格查询，不能在发送泵回调中执行。
+                    RaidCombatProjection.PostState(context, latest, raid.Actor, Current, "raid_return_state");
+            }
+            if (!context.Sender.TryPost(0, (ushort)NotiPacketType.AREA_USERS, TownPackets.Transition(receipt.Character),
+                action, CanSend, afterWritten: SceneWritten))
+                throw new IOException("Raid return scene queue unavailable");
+            // 42在排队发布里会跳过Drain，24的写后回调因此落在ACK 1278之后。引导奖励须把601紧跟24入队，探针才能在屏障内看到演出。
+            if (raid.Battle.PreyGuide)
+            {
+                var follow = raid.Battle.View;
+                bool Follow() => CanSend() && raid.Actor.IsCurrent &&
+                    ReferenceEquals(context.Session.CurrentRaidBattle(raid.Actor), raid.Battle) &&
+                    follow.State == Game.Raids.AntonRaidBattleState.Reward && follow.Phase == raid.View.Phase &&
+                    !follow.PhaseExpired && !follow.ClockFaulted && context.Session.CanPublishRaidBattle(raid.Actor, follow);
+                if (context.Owner.Execute(Follow))
+                    RaidCombatProjection.PostState(context, follow, raid.Actor, Follow, "raid_return_state", sceneFollowsQueuedAreaUsers: true);
+            }
+            if (!context.Sender.IsPublicationQueued) await context.Sender.DrainAsync();
+        }
+        else
+            await context.Notify(NotiPacketType.AREA_USERS, TownPackets.Transition(receipt.Character), action, CanSend);
+        await RestoreFreeConsumablesAsync(context, receipt.ConsumableCooldowns, receipt.ConsumableEffects, CanSend);
         if (context.Dazzlement is { HasBindings: true })
             await DazzlementTowerProjection.StateAsync(context, CanSend);
         // 城镇场景绑定后重新投影当前任务，不依赖重新选角。
@@ -666,6 +749,18 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
         // 先安装城镇场景，再启动本阶段演出，避免24重建场景清掉刚收到的601/587。
         if (receipt.RaidBattleChange is not null && CanSend()) context.Session.PublishRaidCombat();
         RaidCombatProjection.RestoreStatusForScene(context, CanSend);
+    }
+
+    internal static async Task RestoreFreeConsumablesAsync(GameConnectionContext context,
+        IReadOnlyList<DfoServer.Game.Inventory.Models.ConsumableStateUpdate> cooldowns,
+        IReadOnlyList<DfoServer.Game.Inventory.Models.ConsumableStateUpdate> effects, Func<bool> guard)
+    {
+        foreach (var batch in cooldowns.Chunk(byte.MaxValue))
+            await context.Notify(NotiPacketType.LOAD_COOLTIME_ITEM_INFO, ConsumableStatePackets.Updates(batch),
+                "free_consumable_cooldowns_restored", guard);
+        foreach (var batch in effects.Chunk(byte.MaxValue))
+            await context.Notify(NotiPacketType.LOAD_EFFECT_ITEM_INFO, ConsumableStatePackets.Updates(batch),
+                "free_consumable_effects_restored", guard);
     }
 
     public async Task GiftEffectAsync(GameConnectionContext context, int itemId, Func<bool> guard)
@@ -695,10 +790,12 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
     }
 
     public void Remove(GameConnectionContext context) => presence?.Remove(context.Sender);
-    public void Refresh(GameConnectionContext context, bool marriageOnly = false)
+    public void Refresh(GameConnectionContext context, bool marriageOnly = false, string? adventureName = null,
+        DfoServer.Game.Pvp.PvpDisplayGrade? pvpGrade = null)
     {
         if (context.Session.Selected is { } c)
-            presence?.Refresh(context.Owner, context.Sender, c, context.Session.ReadAdventureName(), marriageOnly: marriageOnly, pvpGrade: context.Session.ReadPvpGrade(c));
+            presence?.Refresh(context.Owner, context.Sender, c, adventureName ?? context.Session.ReadAdventureName(),
+                marriageOnly: marriageOnly, pvpGrade: pvpGrade ?? context.Session.ReadPvpGrade(c));
     }
     public async Task DetachAsync(GameConnectionContext context)
     {

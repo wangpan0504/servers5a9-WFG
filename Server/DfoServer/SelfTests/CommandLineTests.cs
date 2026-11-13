@@ -27,6 +27,18 @@ internal static class CommandLineTests
         }
 
         That(ServerCommand.Parse([]) is { Kind: ServerCommandKind.Serve, PacketCapture: false }, "default entry needs no configuration");
+        var hostSession = Guid.NewGuid().ToString("N");
+        var host = ServerOptions.Load(ServerCommand.Parse(["--log-dir", "host logs", "--resources-dir", "host resources",
+            "--launcher-session", hostSession, "--logical-root", "host root"]).Options);
+        That(host.LogDirectory == Path.GetFullPath("host logs", AppContext.BaseDirectory) &&
+            host.ResourcesDirectory == Path.GetFullPath("host resources", AppContext.BaseDirectory) &&
+            host.LauncherSession == hostSession && host.LogicalRoot == Path.GetFullPath("host root", AppContext.BaseDirectory),
+            "宿主日志、外置资源、逻辑根和启动代次均显式传递");
+        Reject(["--log-dir"]);
+        Reject(["--resources-dir", "a", "--resources-dir", "b"]);
+        Reject(["--launcher-session", hostSession]);
+        Reject(["--logical-root", "root"]);
+        Reject(["--launcher-session", "invalid", "--logical-root", "root"]);
         That(ServerCommand.Parse(["--help"]).Kind == ServerCommandKind.Help, "standalone help");
         That(ServerCommand.Parse(["--gm", "account", "--selftest", "list"]).Arguments.SequenceEqual(["account", "--selftest", "list"]), "command-like account name remains a GM argument");
         var launch = ServerCommand.Parse(["--server-ip", "auto", "--packet-http-port", "18081", "--packet-capture", "capture files"]);
@@ -103,7 +115,7 @@ internal static class CommandLineTests
             That(ServerCommand.Parse(["--selftest-tcp", group]).Kind == ServerCommandKind.TcpTest, "known TCP group " + group);
         foreach (string selection in new[] { "", "booster,", "booster,booster", "booster,unknown", "Booster" })
             Reject(["--selftest-tcp", selection]);
-        foreach (string name in new[] { "--pvf", "--log-dir", "--duplicate-login", "--client-ip" })
+        foreach (string name in new[] { "--pvf", "--duplicate-login", "--client-ip" })
             Reject([name, "unused"]);
         string[][] invalid =
         [
@@ -182,6 +194,19 @@ internal static class CommandLineTests
     {
         int checks = Count;
         That(!ServerOptions.Load().EnablePromotionPage, "页面协议未配置时默认关闭");
+        That(!ServerOptions.Load().EpicRoad2019Enabled, "星河裂缝未配置时默认关闭");
+        That(ServerOptions.Load(ServerCommand.Parse(["--epic-road-2019", "On"]).Options).EpicRoad2019Enabled,
+            "星河裂缝可通过正式运行参数显式开启");
+        var simulated = ServerOptions.Load(ServerCommand.Parse(["--epic-road-2019", "On",
+            "--epic-road-2019-simulated-drops", "On"]).Options);
+        That(simulated.EpicRoad2019Enabled && simulated.EpicRoad2019SimulatedDropsEnabled, "模拟掉落开关可与活动开关共同装载");
+        That(!ServerOptions.Load().EpicRoad2019SimulatedDropsEnabled &&
+            !ServerOptions.Load(ServerCommand.Parse(["--epic-road-2019", "On"]).Options).EpicRoad2019SimulatedDropsEnabled,
+            "默认和仅开启活动都不自动开启模拟掉落");
+        That(!ServerOptions.Load(ServerCommand.Parse(["--epic-road-2019-simulated-drops", "Off"]).Options).EpicRoad2019SimulatedDropsEnabled,
+            "模拟掉落可以显式关闭");
+        Reject<InvalidDataException>(() => ServerOptions.Load(ServerCommand.Parse(["--epic-road-2019-simulated-drops", "true"]).Options),
+            "模拟开关拒绝未知值");
         That(!ServerOptions.Load(ServerCommand.Parse(["--promotion-page", "Off"]).Options).EnablePromotionPage,
             "页面协议可显式关闭");
         That(ServerOptions.Load(ServerCommand.Parse(["--promotion-page", "On"]).Options).EnablePromotionPage,

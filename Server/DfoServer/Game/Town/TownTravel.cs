@@ -18,6 +18,8 @@ internal sealed record TownTravelReceipt(Character Character, long Generation, l
 {
     public DfoServer.Game.Raids.AntonRaidBattleChange? RaidBattleChange { get; init; }
     public DateTimeOffset? BattlePassMissionAt { get; init; }
+    public System.Collections.Immutable.ImmutableArray<DfoServer.Game.Inventory.Models.ConsumableStateUpdate> ConsumableCooldowns { get; init; } = [];
+    public System.Collections.Immutable.ImmutableArray<DfoServer.Game.Inventory.Models.ConsumableStateUpdate> ConsumableEffects { get; init; } = [];
 }
 
 internal static class TownTravel
@@ -34,7 +36,8 @@ internal static class TownTravel
     }
 
     public static TownTravelPlan Plan(Character character, AreaRequest request, TownCatalog towns, IReadOnlySet<int> completed, ChannelEntry? channel = null, NpcTownVisit? npcVisit = null,
-        bool fiendwarWaiting = false, bool fiendwarGuideWaiting = false, bool fiendwarActive = false)
+        bool fiendwarWaiting = false, bool fiendwarGuideWaiting = false, bool fiendwarActive = false, bool preyBoarding = false,
+        byte? raidType = null, bool raidGuide = false)
     {
         if (!ChannelAreaLanding.AllowsFiendwarTown(channel, request.Town))
             return TownTravelPlan.Reject("fiendwar-channel-town-mismatch");
@@ -60,6 +63,15 @@ internal static class TownTravel
         }
         if (request.PreviousTown != character.Position.Town || request.PreviousArea != character.Position.Area)
             return TownTravelPlan.Reject("source-area-mismatch");
+        if (request.TargetNpc != 0 && towns.RaidNpcRoutes.FirstOrDefault(route => route.WaitingNpc == request.TargetNpc) is { } raidRoute)
+        {
+            // NPC菜单不授予入团或跨模式资格，房间和频道必须匹配当前真实攻坚队。
+            if (raidType != raidRoute.Type || channel is null || Raids.RaidTypes.FromChannelType(channel.Type) != raidRoute.Type)
+                return TownTravelPlan.Reject("raid-npc-membership-required");
+            var room = raidRoute.Room(raidGuide);
+            if (target.Town != room.Town || target.Area != room.Area)
+                return TownTravelPlan.Reject("raid-npc-mode-room-mismatch");
+        }
         // 公会菜单005B7960直接发送固定落点，不经过街区的PVF有向门。
         // 仅放行本版这一种菜单形状；最终保存仍在同一事务复核真实会籍。
         if (request is { Town: 8, Area: 0, X: 2110, Y: 270, Movement: 5, TargetNpc: 0, PathKind: 0 })
@@ -101,6 +113,20 @@ internal static class TownTravel
             return admission == "ready" ? new(visit.Origin with { Direction = character.Position.Direction }, character.Return, "ready")
                 : TownTravelPlan.Reject(admission);
         }
+        // 换频道会丢失本次NPC入场票据，客户端仍保留返回房间的原坐标。
+        // 仅从带exit town的地图返回实际房间，并要求该房间的enter town明确指向当前出口NPC；
+        // 不恢复任意旧来源，也不放宽目标可站、等级和任务限制。
+        if (npcVisit is null && request is { TargetNpc: 0, Movement: 5, PathKind: 0 } &&
+            towns.IsRoom(target, completed) && towns.IsPosition(target, completed) &&
+            towns.Areas.TryGetValue((character.Position.Town, character.Position.Area), out var npcSource) &&
+            npcSource.Map(completed) is { Error: null } npcMap &&
+            towns.Areas[(target.Town, target.Area)].Map(completed).Npcs.Any(entry =>
+                towns.NpcMoves.TryGetValue(entry.Id, out var destinations) &&
+                npcMap.Npcs.Any(exitNpc => towns.NpcExits.Contains(exitNpc.Id) && destinations.Contains(exitNpc.Id))))
+        {
+            string admission = towns.DestinationAdmission(target, character.Level, completed);
+            return admission == "ready" ? new(target, character.Return, "ready") : TownTravelPlan.Reject(admission);
+        }
         // 特殊区域与团队频道的赛丽亚房间按频道落点出门：客户端若以区域请求代替 PREV_VILLAGE 指向频道落点区域，按同一出口处理。
         if (request.TargetNpc == 0 && ChannelAreaLanding.RoomExit(towns, channel, character.Position, character.Level, completed) is { } exit &&
             exit.Town == request.Town && exit.Area == request.Area)
@@ -112,6 +138,11 @@ internal static class TownTravel
              request.PathKind != 0 && towns.RoomPortals.Any(p => p.Town == target.Town && p.Area == target.Area));
         string reason = towns.Admission(character.Position, target, character.Level, completed,
             RoomDoorReturn(character, towns, completed, channel), portal, request.TargetNpc);
+        // 普雷开战演出经原生36登上鸟背，候战地图没有普通有向门；资格由当前普通攻坚实例签发。
+        if (reason == "route-not-in-pvf" && preyBoarding && channel?.Type == 50 &&
+            character.Position is { Town: 59, Area: 2 } && target is { Town: 59, Area: 3 } &&
+            request is { TargetNpc: 0, PathKind: 0 })
+            reason = towns.DestinationAdmission(target, character.Level, completed);
         // 57/1的团队门condition1、引导门condition2；真实未开战攻坚队及模式由Session核验。
         // 仅解释对应模式的已证门，不放行其他地图或跨模式条件。
         if (reason == "route-state-required" && (fiendwarWaiting || fiendwarGuideWaiting) && channel?.Type == ChannelAreaLanding.FiendwarType &&

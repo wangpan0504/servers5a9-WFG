@@ -4,6 +4,7 @@ using System.Data.Common;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.CashShopPromotions;
 using DfoServer.Game.Inventory.Services;
+using DfoServer.Network.Builders;
 using DfoServer.Network.Builders.Inventory;
 using DfoServer.Network.Parsers.Inventory;
 using DfoServer.Network.Projection.Inventory;
@@ -13,6 +14,7 @@ using DfoServer.Game.Marriage;
 using DfoServer.Network.Projection;
 using DfoServer.Game.Events;
 using DfoServer.Game.Strongway2019;
+using DfoServer.Game.EpicRoad2019;
 using DfoServer.GameWorld.Items;
 
 namespace DfoServer.Network.Handlers.Inventory;
@@ -21,7 +23,8 @@ internal sealed class ShopHandler(InventoryShopService shop, InventoryCashShopSe
     ServerLog log, MarriageShopService? marriageShop = null, MarriageProjection? marriageProjection = null, CashShopPromotionService? promotions = null,
     PromotionPageProjection? promotionPage = null, TownProjection? nativePromotionTown = null,
     ServerEventService? serverEvents = null, NpcShopCatalog? strongwayShops = null,
-    Func<GameConnectionContext, BattlePassMissionState, InventoryCommitReceipt, Task>? battlePassCertificateChanged = null) : IGameCommandModule
+    Func<GameConnectionContext, BattlePassMissionState, InventoryCommitReceipt, Task>? battlePassCertificateChanged = null,
+    TownProjection? renameTown = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -79,82 +82,123 @@ internal sealed class ShopHandler(InventoryShopService shop, InventoryCashShopSe
             context.Session.Selected?.Id == committed.Character.Id && context.Session.DungeonSnapshot?.Identity == committed.DungeonIdentity;
         bool SameOrigin() => context.Owner.Execute(SameOriginLocked);
         var published = committed;
-        try
+        var capacityPublication = result.Plan is { } capacityPlan &&
+            (capacityPlan.After.AvatarExpansion > capacityPlan.Before.AvatarExpansion ||
+             capacityPlan.After.CargoCapacity > capacityPlan.Before.CargoCapacity)
+            ? new InventoryProjection.CashShopCapacityPublication(capacityPlan) : null;
+        if (capacityPublication is not null && context.DispatchGates is { HasShared: true })
         {
-            foreach (var product in receipt.Products)
-                await context.Reply(CmdPacketType.BUY_CERASHOP_ITEM,
-                    CashShopPackets.Success(product, receipt.Bonuses.GetValueOrDefault(product.CommodityId)),
-                    "cash_shop_buy_success", () => recoverBattlePassPurchase ? SameOrigin() : context.Session.CanPublishInventory(committed));
-            await projection.RefreshAsync(context, result, suppressMailboxNotice: promotion is { MailIds.Length: > 0 });
-            if (promotion is { MailIds.Length: > 0 } && context.Session.CanPublishInventory(committed))
-                context.Session.NotifyMailbox(committed.Character.Id, restoreOnTown: true);
-            if (receipt.Products.Any(product => product.IsMileage))
-                await context.Notify(NotiPacketType.CASH_SHOP_PURCHASE_LIMIT_INFO,
-                    MileagePackets.Limits(committed.Character.Inventory.AccountWallet, cashShop.Mileage), "mileage_shop_limits", () => context.Session.CanPublishInventory(committed));
-            if (battlePassCertificateChanged is not null)
-            {
-                if (result.Plan?.CashShopPayment is { Cera: > 0 } payment &&
-                    context.Session.CanPublishInventory(committed) &&
-                    context.Session.ReadBattlePassMissionState(payment.Clock.GetUtcNow()) is { State.Active: true } state &&
-                    state.Receipt.Character.Id == committed.Character.Id &&
-                    state.Receipt.Character.Revision == committed.Character.Revision &&
-                    context.Session.CanPublishInventory(committed))
-                    await battlePassCertificateChanged(context, state.State, committed);
-            }
-            if (result.Plan?.UnlockSkillTree == true)
-                await projection.RefreshSkillTreeAsync(context, committed.Character, () => context.Session.CanPublishInventory(committed));
-            if (recoverBattlePassPurchase && !context.Session.CanPublishInventory(committed))
-            {
-                var plan = result.Plan!;
-                while (true)
-                {
-                    context.Stop.ThrowIfCancellationRequested();
-                    var current = context.Owner.Execute(() =>
-                    {
-                        if (!SameOriginLocked())
-                            return (Receipt: (InventoryCommitReceipt?)null, Mission: (BattlePassMissionSessionState?)null);
-                        var mission = context.Session.ReadBattlePassMissionState(plan.CashShopPayment!.Clock.GetUtcNow());
-                        return (Receipt: mission?.Receipt ?? context.Session.ReadInventoryForSynchronization(), Mission: mission);
-                    });
-                    if (current.Receipt is not { } snapshot) break;
-                    await projection.ResynchronizeCommittedAsync(context, snapshot, committed, plan);
-                    if (plan.Before.PrivilegeService != plan.After.PrivilegeService)
-                        await PrivilegeServiceProjection.PostAsync(context, snapshot);
-                    if (current.Mission is { State.Active: true } missionState)
-                        await battlePassCertificateChanged!(context, missionState.State, snapshot);
-                    if (plan.UnlockSkillTree && context.Session.CanPublishInventory(snapshot))
-                        await projection.RefreshSkillTreeAsync(context, snapshot.Character, () => context.Session.CanPublishInventory(snapshot));
-                    if (receipt.Products.Any(product => product.IsMileage))
-                        await context.Notify(NotiPacketType.CASH_SHOP_PURCHASE_LIMIT_INFO,
-                            MileagePackets.Limits(snapshot.Character.Inventory.AccountWallet, cashShop.Mileage),
-                            "mileage_shop_limits", () => context.Session.CanPublishInventory(snapshot));
-                    if (context.Session.CanPublishInventory(snapshot))
-                    {
-                        if (!plan.OverflowItems.IsEmpty || promotion is { MailIds.Length: > 0 })
-                            context.Session.NotifyMailbox(snapshot.Character.Id, restoreOnTown: true);
-                        published = snapshot;
-                        break;
-                    }
-                    if (!SameOrigin()) break;
-                    await Task.Yield();
-                }
-            }
-            if (promotion is not null && promotionPage is not null)
-            {
-                string status = promotionPage.Changed(context, promotion.Progress);
-                log.Write("cash_shop_promotion_page_changed", new { Connection = context.Id, Status = status, ProgressRevision = promotion.Progress.Revision });
-            }
-            if (promotion is not null && nativePromotionTown is not null &&
-                promotion.Progress.Scope == CashShopPromotionPageService.Scope && context.Session.CanPublishInventory(published))
-                await nativePromotionTown.ServerEventsAsync(context, () => context.Session.CanPublishInventory(published),
-                    minimumPromotionRevision: promotion.Progress.Revision);
+            // 组队共享门禁内只提交；确认容量/ACK实际写帧须沿现成AfterDispatch在释放门禁后执行。
+            var previous = context.AfterDispatch;
+            context.AfterDispatch = () => PublishAsync(previous);
         }
-        catch (DbException error) when (promotion is not null || result.Plan?.CashShopPayment is { Cera: > 0 })
-        {
-            // 联合购买已提交；后续SQL发布失败不能触发外层重放购买。
-            throw new IOException("Committed cash shop purchase publication failed", error);
-        }
+        else await PublishAsync();
         return CommandResult.Handled;
+
+        async Task PublishAsync(Func<Task>? beforePublication = null)
+        {
+            try
+            {
+                if (beforePublication is not null) await beforePublication();
+                foreach (var product in receipt.Products)
+                {
+                    var body = CashShopPackets.Success(product, receipt.Bonuses.GetValueOrDefault(product.CommodityId));
+                    if (capacityPublication is null)
+                        await context.Reply(CmdPacketType.BUY_CERASHOP_ITEM, body, "cash_shop_buy_success",
+                            () => recoverBattlePassPurchase ? SameOrigin() : context.Session.CanPublishInventory(committed));
+                    else
+                    {
+                        bool written = false;
+                        // 只重试尚未写出的本项ACK；每次先补齐当前已提交快照的容量，不重放购买或之前商品的ACK。
+                        for (int attempt = 0; attempt < 3 && !written; attempt++)
+                        {
+                            context.Stop.ThrowIfCancellationRequested();
+                            var snapshot = context.Owner.Execute(() => !SameOriginLocked() ? null :
+                                context.Session.CanPublishInventory(committed) ? committed :
+                                recoverBattlePassPurchase ? context.Session.ReadInventoryForSynchronization() : null);
+                            if (snapshot is null) return;
+                            if (!await projection.RefreshCashShopCapacitiesAsync(context, result.Plan!, snapshot, capacityPublication))
+                                continue;
+                            written = await context.Sender.SendConfirmedAsync(1, (ushort)CmdPacketType.BUY_CERASHOP_ITEM,
+                                body, "cash_shop_buy_success", () => SameOrigin() && context.Session.CanPublishInventory(snapshot) &&
+                                    capacityPublication.Matches(snapshot.Character.Inventory));
+                        }
+                        if (!written) throw new IOException("Committed cash shop capacity publication changed repeatedly");
+                    }
+                }
+                await projection.RefreshAsync(context, result, suppressMailboxNotice: promotion is { MailIds.Length: > 0 },
+                    cashShopCapacitiesPublished: capacityPublication is not null);
+                if (promotion is { MailIds.Length: > 0 } && context.Session.CanPublishInventory(committed))
+                    context.Session.NotifyMailbox(committed.Character.Id, restoreOnTown: true);
+                if (receipt.Products.Any(product => product.IsMileage))
+                    await context.Notify(NotiPacketType.CASH_SHOP_PURCHASE_LIMIT_INFO,
+                        MileagePackets.Limits(committed.Character.Inventory.AccountWallet, cashShop.Mileage), "mileage_shop_limits", () => context.Session.CanPublishInventory(committed));
+                if (battlePassCertificateChanged is not null)
+                {
+                    if (result.Plan?.CashShopPayment is { Cera: > 0 } payment &&
+                        context.Session.CanPublishInventory(committed) &&
+                        context.Session.ReadBattlePassMissionState(payment.Clock.GetUtcNow()) is { State.Active: true } state &&
+                        state.Receipt.Character.Id == committed.Character.Id &&
+                        state.Receipt.Character.Revision == committed.Character.Revision &&
+                        context.Session.CanPublishInventory(committed))
+                        await battlePassCertificateChanged(context, state.State, committed);
+                }
+                if (result.Plan?.UnlockSkillTree == true)
+                    await projection.RefreshSkillTreeAsync(context, committed.Character, () => context.Session.CanPublishInventory(committed));
+                if (recoverBattlePassPurchase && !context.Session.CanPublishInventory(committed))
+                {
+                    var plan = result.Plan!;
+                    while (true)
+                    {
+                        context.Stop.ThrowIfCancellationRequested();
+                        var current = context.Owner.Execute(() =>
+                        {
+                            if (!SameOriginLocked())
+                                return (Receipt: (InventoryCommitReceipt?)null, Mission: (BattlePassMissionSessionState?)null);
+                            var mission = context.Session.ReadBattlePassMissionState(plan.CashShopPayment!.Clock.GetUtcNow());
+                            return (Receipt: mission?.Receipt ?? context.Session.ReadInventoryForSynchronization(), Mission: mission);
+                        });
+                        if (current.Receipt is not { } snapshot) break;
+                        await projection.ResynchronizeCommittedAsync(context, snapshot, committed, plan);
+                        if (plan.Before.PrivilegeService != plan.After.PrivilegeService)
+                            await PrivilegeServiceProjection.PostAsync(context, snapshot);
+                        if (current.Mission is { State.Active: true } missionState)
+                            await battlePassCertificateChanged!(context, missionState.State, snapshot);
+                        if (plan.UnlockSkillTree && context.Session.CanPublishInventory(snapshot))
+                            await projection.RefreshSkillTreeAsync(context, snapshot.Character, () => context.Session.CanPublishInventory(snapshot));
+                        if (receipt.Products.Any(product => product.IsMileage))
+                            await context.Notify(NotiPacketType.CASH_SHOP_PURCHASE_LIMIT_INFO,
+                                MileagePackets.Limits(snapshot.Character.Inventory.AccountWallet, cashShop.Mileage),
+                                "mileage_shop_limits", () => context.Session.CanPublishInventory(snapshot));
+                        if (context.Session.CanPublishInventory(snapshot))
+                        {
+                            if (!plan.OverflowItems.IsEmpty || promotion is { MailIds.Length: > 0 })
+                                context.Session.NotifyMailbox(snapshot.Character.Id, restoreOnTown: true);
+                            published = snapshot;
+                            break;
+                        }
+                        if (!SameOrigin()) break;
+                        await Task.Yield();
+                    }
+                }
+                if (promotion is not null && promotionPage is not null)
+                {
+                    string status = promotionPage.Changed(context, promotion.Progress);
+                    log.Write("cash_shop_promotion_page_changed", new { Connection = context.Id, Status = status, ProgressRevision = promotion.Progress.Revision });
+                }
+                if (promotion is not null && nativePromotionTown is not null &&
+                    promotion.Progress.Scope == CashShopPromotionPageService.Scope && context.Session.CanPublishInventory(published))
+                    await nativePromotionTown.ServerEventsAsync(context, () => context.Session.CanPublishInventory(published),
+                        minimumPromotionRevision: promotion.Progress.Revision);
+                if (result.Plan?.CashShopRename == true && renameTown is not null)
+                    await renameTown.ReturnToSelectionAsync(context, () => context.Session.CanPublishInventory(published));
+            }
+            catch (DbException error) when (promotion is not null || result.Plan?.CashShopPayment is { Cera: > 0 })
+            {
+                // 联合购买已提交；后续SQL发布失败不能触发外层重放购买。
+                throw new IOException("Committed cash shop purchase publication failed", error);
+            }
+        }
     }
 
     async Task PublishCertificateAsync(GameConnectionContext context, InventoryResult result, CashShopPurchaseReceipt purchase,
@@ -218,6 +262,9 @@ internal sealed class ShopHandler(InventoryShopService shop, InventoryCashShopSe
         else if (Strongway2019ShopRules.Handles(request.ShopId))
             result = serverEvents is null || strongwayShops is null ? InventoryResult.Reject(17) :
                 context.Session.PlanAndCommitStrongway2019ShopBuy(request, shop, strongwayShops, serverEvents, out receipt);
+        else if (EpicRoad2019ShopRules.Handles(request.ShopId))
+            result = serverEvents is null || strongwayShops is null ? InventoryResult.Reject(17) :
+                context.Session.PlanAndCommitEpicRoad2019ShopBuy(request, shop, strongwayShops, serverEvents, out receipt);
         else if (marriageShop?.Handles(request.ItemId) == true)
         {
             result = InventoryResult.Reject(17);
@@ -274,10 +321,16 @@ internal sealed class ShopHandler(InventoryShopService shop, InventoryCashShopSe
     async Task<CommandResult> Sell(GameConnectionContext context, Packet packet)
     {
         var request = ShopRequests.Sell(packet.Body);
+        var feedbackSnapshot = context.Session.ReadInventoryForSynchronization();
         var result = context.Activity?.BlocksTownActions == true ? InventoryResult.Reject() : context.Session.SellAtShop(request, shop);
         var committed = result.Receipt;
         await context.Reply(CmdPacketType.SELL_ITEM, ShopPackets.Sold(result, request), result.Accepted ? "npc_shop_sold" : "npc_shop_sell_rejected",
             () => committed is null || context.Session.CanPublishInventory(committed));
+        // 本版ACK22的金币容量错误静默收尾；保留ACK解除pending，再向原选角快照补普通信息窗。
+        if (result is { Accepted: false, RejectReason: "gold_carry_limit" } && feedbackSnapshot is not null)
+            await context.Notify(NotiPacketType.SERVER_NOTICE_MESSAGE,
+                ServerNoticePackets.Information("出售后将超过金币携带上限，请先清理所持金币。"),
+                "npc_shop_sell_gold_limit", () => context.Session.CanPublishInventory(feedbackSnapshot));
         await projection.RefreshAsync(context, result);
         return CommandResult.Handled;
     }

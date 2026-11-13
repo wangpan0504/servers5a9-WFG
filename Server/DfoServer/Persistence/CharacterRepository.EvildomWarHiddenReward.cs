@@ -71,8 +71,8 @@ internal sealed partial class CharacterRepository
             throw new InvalidOperationException("魔界实验室奖励缺少原持久物件完成事实");
         command.CommandText = "SELECT reward_json FROM character_evildom_war_rewards WHERE character_id=$id AND battle_id=$battle";
         bool accounted = command.ExecuteScalar() is string finalJson &&
-            ReadWarJson<EvildomWarRewardSnapshot>(finalJson) is { Rule: EvildomWarRewardPolicy.LegacyRule } legacy &&
-            legacy.Reward.Items.Any(item => item.Group == 1);
+            ReadWarJson<EvildomWarRewardSnapshot>(finalJson) is { } final &&
+            final.Reward.Items.Any(item => item.Group == 1);
         var mails = ImmutableArray.CreateBuilder<uint>();
         if (!accounted)
         {

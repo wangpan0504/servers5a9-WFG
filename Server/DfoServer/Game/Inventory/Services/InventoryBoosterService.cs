@@ -10,8 +10,10 @@ namespace DfoServer.Game.Inventory.Services;
 internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalog boosters, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces,
     Random? random = null, GameDebugSettings? debugSettings = null, PremiumContractCatalog? contracts = null,
     AvatarPackageCatalog? avatars = null, TimeProvider? clock = null, RandomOptionCatalog? randomOptions = null,
-    IndependentAttributePairCatalog? attributePairs = null)
+    IndependentAttributePairCatalog? attributePairs = null, DfoServer.Game.Dungeons.DungeonDropControlSettings? dropControl = null)
 {
+    readonly EpicRewardOdds epicOdds = new(catalog, boosters);
+
     public BoosterUsePlacesDefinition UsePlaces(int itemId) => boosters.UsePlaces(itemId);
     public InventoryResult Open(Character character, BoosterOpenRequest request, out BoosterReceipt? receipt, DateTimeOffset? utcNow = null)
         => OpenCore(character, request, out receipt, out _, utcNow, ceraPackage: false);
@@ -116,11 +118,12 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
         int productId;
         try
         {
+            bool canBoostOwn = RuneBoxSelection.CanBoostOwnClass(character.Job, character.GrowType);
             if (RuneBoxSelection.Select(choose,
                     grade => box.Family == 0 ? catalog.RuneCandidates((byte)grade) : catalog.TalismanCandidates(grade),
-                    id => box.Family == 0
+                    id => canBoostOwn && (box.Family == 0
                         ? catalog.Rune(id)?.AllowsUse(character.Level, character.Job, character.GrowType) == true
-                        : catalog.Talisman(id)?.AllowsUse(character.Level, character.Job, character.GrowType) == true,
+                        : catalog.Talisman(id)?.AllowsUse(character.Level, character.Job, character.GrowType) == true),
                     draw.NextInt64, out _, out productId) is { } reason)
                 return RejectRuneBox(reason);
         }
@@ -163,8 +166,11 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
         DateTimeOffset? utcNow = null)
     {
         receipt = null;
-        if (request.Choices.Length == 0)
+        var source = character.Inventory.Find(new(InventoryListType.Main, request.Slot));
+        if (request.Choices.Length == 0 && source is not null && boosters.Get(source.Core.ItemId).PackageSelections.IsDefaultOrEmpty)
             return OpenCore(character, new(request.Slot, 1), out receipt, out _, utcNow, ceraPackage: true);
+        if (request.Choices.Length == 0)
+            return InventoryResult.Reject(19) with { RejectReason = "cera_package_selection_required" };
         return OpenCeraPackageAvatars(character, request, out receipt, utcNow);
     }
 
@@ -192,25 +198,41 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
         if (!InventoryAvatarPackageService.SourceEligible(character, source, sourceTemplate))
             return InventoryResult.Reject(19) with { RejectReason = "cera_package_source_ineligible" };
         var definition = boosters.Get(source.Core.ItemId);
-        if (!definition.Available || !definition.AllowsFirstGrowType(character.GrowType) || definition.PackageRewards.IsDefaultOrEmpty || avatars is null)
+        if (!definition.Available || !definition.AllowsFirstGrowType(character.GrowType) || definition.PackageRewards.IsDefaultOrEmpty)
             return InventoryResult.Reject(19) with { RejectReason = "cera_package_avatar_unconfigured" };
         if (HasCooldown(before, source.Core.ItemId, definition, now))
             return InventoryResult.Reject(19);
+        var selectedRewards = new List<BoosterReward>();
+        var selectionChoiceIndexes = new HashSet<int>();
+        foreach (var selection in definition.PackageSelections.IsDefault ? [] : definition.PackageSelections)
+        {
+            var matches = request.Choices.Select((choice, index) => (choice, index))
+                .Where(row => selection.Rewards.Any(reward => reward.ItemId == row.choice.ItemId)).ToArray();
+            if (matches.Length != 1 || !selectionChoiceIndexes.Add(matches[0].index))
+                return InventoryResult.Reject(19) with { RejectReason = "cera_package_selection_mismatch" };
+            var selected = selection.Rewards.First(reward => reward.ItemId == matches[0].choice.ItemId);
+            selectedRewards.Add(selected);
+        }
+        var allRewards = definition.PackageRewards.AddRange(selectedRewards);
         HashSet<int> avatarIds;
         try
         {
-            avatarIds = InventoryCeraPackageAvatarRewards.AvatarIds(definition.PackageRewards, catalog);
+            avatarIds = InventoryCeraPackageAvatarRewards.AvatarIds(allRewards, catalog);
         }
         catch (Exception error) when (error is InvalidDataException or KeyNotFoundException)
         {
             return InventoryResult.Reject(19) with { RejectReason = "cera_package_avatar_resource_invalid" };
         }
-        if (!InventoryCeraPackageAvatarRewards.Matches(avatarIds, request.Choices))
+        var avatarChoices = request.Choices.Where(choice => avatarIds.Contains(choice.ItemId)).ToArray();
+        if (!InventoryCeraPackageAvatarRewards.Matches(avatarIds, avatarChoices) ||
+            request.Choices.Where((_, index) => !selectionChoiceIndexes.Contains(index) && !avatarIds.Contains(request.Choices[index].ItemId)).Any())
             return InventoryResult.Reject(19) with { RejectReason = "cera_package_avatar_choice_mismatch" };
+        if (avatarIds.Count != 0 && avatars is null)
+            return InventoryResult.Reject(19) with { RejectReason = "cera_package_avatar_unconfigured" };
         long? rewardDeadline = null;
         try
         {
-            foreach (int id in definition.PackageRewards.Select(row => row.ItemId).Distinct())
+            foreach (int id in allRewards.Select(row => row.ItemId).Distinct())
             {
                 if (CurrencyWallet.RewardKind(id) is not null || pieces.ByPiece.ContainsKey(id))
                     continue;
@@ -236,8 +258,10 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
         {
             return InventoryResult.Reject(19);
         }
-        if (!InventoryCeraPackageAvatarRewards.TryCreate(catalog, avatars, definition.PackageRewards, request.Choices, now,
-            shopExpiration, ignoreUsablePeriod, out var avatarItems, out string? reason))
+        InventoryItem[] avatarItems = [];
+        if (avatarIds.Count != 0 &&
+            !InventoryCeraPackageAvatarRewards.TryCreate(catalog, avatars!, allRewards, avatarChoices, now,
+                shopExpiration, ignoreUsablePeriod, out avatarItems, out string? reason))
             return InventoryResult.Reject(19) with { RejectReason = reason };
         long? deadline = InventoryAvatarPackageService.EarliestDeadline(source, avatarItems);
         if (rewardDeadline is not null && (deadline is null || rewardDeadline < deadline))
@@ -245,7 +269,7 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
         var totals = new Dictionary<int, int>();
         try
         {
-            foreach (var row in definition.PackageRewards)
+            foreach (var row in allRewards)
                 totals[row.ItemId] = checked(totals.GetValueOrDefault(row.ItemId) + row.Count);
         }
         catch (OverflowException)
@@ -297,6 +321,7 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
     {
         receipt = null;
         grantBefore = null;
+        decimal epicMultiplier = dropControl?.Current.ResolveReward(DfoServer.Game.Dungeons.DungeonDropScope.All)?.Equipment ?? 1;
         bool shopExpiration = debugSettings?.IgnoreCashShopAbsoluteExpiration == true;
         bool ignoreUsablePeriod = debugSettings?.IgnoreCashShopUsablePeriod == true;
         var before = character.Inventory;
@@ -327,7 +352,7 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
         if (definition.DailyUseLimit is { } dailyLimit)
         {
             if (sourceTemplate.Id != source.Core.ItemId || sourceTemplate.Kind != source.Core.Kind ||
-                !sourceTemplate.AllowsUse(character.Level, character.Job) ||
+                !sourceTemplate.AllowsActivation(character.Level, character.Job) ||
                 !InventoryMoveService.RequiredSkillSatisfied(character, sourceTemplate) ||
                 !DailyBoosterUsage.TryConsume(before.DailyBoosterUses, source.Core.ItemId, request.Count, dailyLimit, now, out dailyUses))
                 return InventoryResult.Reject(19) with { RejectReason = "daily_retained_source_or_quota_ineligible" };
@@ -420,14 +445,21 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
                     catalog.Get(id).Kind != ItemKind.Equipment)
                 {
                     var childTemplate = catalog.Get(id);
-                    bool fixedOrdinary = !definition.Lottery && definition.PackageRewards.IsDefaultOrEmpty &&
-                        !definition.Pools.IsEmpty && definition.Pools.All(pool => pool is
-                            { Draws: 1, JobTag: null, Rewards: [{ Weight: > 0, Count: > 0 }] });
-                    if (definition.SetsEpicExchangeInstanceType || (definition.Selection is null && !fixedOrdinary) ||
+                    if ((definition.Selection is null && !definition.HasFixedOrdinaryRewards) ||
                         childTemplate.Kind != ItemKind.Consumable || CurrencyWallet.RewardKind(id) is not null ||
                         pieces.ByPiece.ContainsKey(id) || childTemplate.HasAcquisitionEffect ||
                         childTemplate.IsPremiumService || contracts?.Recognizes(id) == true ||
-                        boosters.DirectActivationItems.Contains(id) || boosters.Get(id) is not { Available: true, Selection: not null })
+                        boosters.DirectActivationItems.Contains(id))
+                        return InventoryResult.Reject(19);
+                    var child = boosters.Get(id);
+                    if (child is not { Available: true, Selection: not null } ||
+                        definition.SetsEpicExchangeInstanceType && (id == source.Core.ItemId || definition.Selection is not { SelectionCount: 1 } ||
+                            definition.Lottery || !definition.Pools.IsEmpty || !definition.PackageRewards.IsDefaultOrEmpty ||
+                            !child.SetsEpicExchangeInstanceType || definition.SetsDisjointInstanceType && !child.SetsDisjointInstanceType ||
+                            child.Lottery || !child.Pools.IsEmpty || !child.PackageRewards.IsDefaultOrEmpty ||
+                            child.Selection is not { SelectionCount: 1, Categories.IsEmpty: false } ||
+                            child.Selection.Categories.Any(category => category.PendingRule is not null || category.Rewards.IsEmpty ||
+                                category.Rewards.Any(reward => catalog.Get(reward.ItemId).Kind != ItemKind.Equipment))))
                         return InventoryResult.Reject(19);
                 }
                 // 类型0有限池的0号为金币，经钱包规划和ACK27备选数量发布，不占实体槽位。
@@ -488,7 +520,7 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
         }
         var totals = new Dictionary<int, int>();
         var avatarRolls = new List<(BoosterReward Row, int Copies)>();
-        var avatarRewardIds = new HashSet<int>();
+        var avatarRewardCounts = new Dictionary<int, int>();
         byte[]? trace = null;
         try
         {
@@ -509,7 +541,7 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
                         Add(choice.ItemId, choice.Count, request.Count);
                 foreach (var pool in pools)
                 {
-                    var candidates = pool.Rewards.Where(row => row.Weight > 0).ToArray();
+                    var candidates = epicOdds.Apply(pool.Rewards, epicMultiplier).Where(row => row.Weight > 0).ToArray();
                     long draws = (long)pool.Draws * request.Count;
                     if (candidates.Length == 1)
                     {
@@ -620,13 +652,24 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
             }
         }
         else
-            grants.AddRange(totals.Where(pair => !avatarRewardIds.Contains(pair.Key))
-                .Select(pair => new InventoryReward(pair.Key, pair.Value)));
+            foreach (var (id, total) in totals)
+            {
+                // 同ID可以同时命中普通行与带修饰行，只扣除稍后单独发放的显式实例份数。
+                int count = total - avatarRewardCounts.GetValueOrDefault(id);
+                if (count > 0)
+                    grants.Add(new(id, count));
+            }
         var avatarInstances = new List<InventoryItem>();
         if (avatarRolls.Count > 0)
         {
             if (avatars is null)
                 return InventoryResult.Reject(19) with { RejectReason = "avatar_pool_catalog_missing" };
+            var range = ItemSlotBoundService.Range(ItemKind.Avatar, paid);
+            int occupied = paid.Items.Count(item => item.Position.List == InventoryListType.Avatar &&
+                item.Position.Index >= range.Start && item.Position.Index <= range.End);
+            // 按已抽出的显式份数检查实际页容量，不能先展开不可能容纳的大批量实例。
+            if (avatarRolls.Sum(row => (long)row.Copies) > range.End - range.Start + 1 - occupied)
+                return InventoryResult.Reject(4);
             try
             {
                 foreach (var (row, copies) in avatarRolls)
@@ -686,12 +729,14 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
             granted.Validate(allocating: true);
             grant = new(true, 0, new(paid, granted, "reward_grant"));
         }
-        else if (definition.UnsealsRandomOptions || definition.GrantsEpicExchangeOrigin)
+        else if (definition.UnsealsRandomOptions || definition.GrantsEpicExchangeOrigin &&
+                 grants.Any(row => catalog.Get(row.ItemId).Kind == ItemKind.Equipment))
         {
             var range = ItemSlotBoundService.Range(ItemKind.Equipment, paid.Expansion);
             int occupied = paid.Items.Count(item => item.Position.List == InventoryListType.Main &&
                 item.Position.Index >= range.Start && item.Position.Index <= range.End);
-            if (grants.Sum(row => (long)row.Count) > range.End - range.Start + 1 - occupied)
+            if (grants.Where(row => catalog.Get(row.ItemId).Kind == ItemKind.Equipment).Sum(row => (long)row.Count) >
+                range.End - range.Start + 1 - occupied)
                 return InventoryResult.Reject(4);
             var instances = new List<InventoryItem>();
             try
@@ -709,8 +754,9 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
                             core = InventoryRandomOptionService.Initialize(core, unsealDefinitions[reward.ItemId],
                                 (random ?? Random.Shared).NextInt64);
                         if (definition.GrantsEpicExchangeOrigin && core.Kind == ItemKind.Equipment)
-                            // 客户端物品核心 +0xC1（123B 偏移 119）的 bit0 才是交换资格位；只记服务端来源不够。
-                            core = core with { EpicExchangeOrigin = new(1, source.Core.ItemId), Extension119 = 0x01 };
+                            // 活动礼盒显式禁止交换，不能把来源记录误当作休亚兑换资格。
+                            core = core with { EpicExchangeOrigin = new(1, source.Core.ItemId),
+                                Extension119 = definition.SetsEpicExchangeInstanceType ? (byte)0 : (byte)0x01 };
                         if (source.Core.IsRental)
                         {
                             if (source.ExpireTime <= now.ToUnixTimeSeconds()) return InventoryResult.Reject(19);
@@ -800,8 +846,9 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
                 return;
             if (row.AvatarAbility is not null || row.AvatarPeriodDays is not null)
             {
-                avatarRolls.Add((row, checked((int)checked((long)row.Count * draws))));
-                avatarRewardIds.Add(row.ItemId);
+                int copies = checked((int)checked((long)row.Count * draws));
+                avatarRolls.Add((row, copies));
+                avatarRewardCounts[row.ItemId] = checked(avatarRewardCounts.GetValueOrDefault(row.ItemId) + copies);
             }
             Add(row.ItemId, row.Count, draws);
         }

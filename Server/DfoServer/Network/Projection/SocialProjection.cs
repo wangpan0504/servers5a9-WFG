@@ -4,14 +4,15 @@ using DfoServer.Network.Protocol;
 
 namespace DfoServer.Network.Projection;
 
-internal sealed class SocialProjection(SocialService service)
+internal sealed class SocialProjection(SocialService service, ISocialStore store)
 {
     public void Initialize(GameConnectionContext context)
     {
         // 12B6830会创建并加载隐藏好友面板，1702填充分组；否则右键5DB窗口读取空下拉项。
-        long epoch = context.Session.SelectionEpoch;
-        context.Sender.Post(0, (ushort)NotiPacketType.ACCOUNT_FRIEND_GROUP_INFO, SocialPackets.AccountGroups(),
-            "account_friend_groups", () => context.Session.Ready && context.Session.SelectionEpoch == epoch);
+        if (context.Session.CaptureSocialActor() is not { } actor) return;
+        var groups = store.AccountGroups(actor);
+        context.Sender.Post(0, (ushort)NotiPacketType.ACCOUNT_FRIEND_GROUP_INFO, SocialPackets.AccountGroups(groups),
+            "account_friend_groups", actor.IsCurrent);
         service.Refresh(context.Owner.Account);
         if (context.Session.Selected is { } c) service.PresenceChanged(c.Id, context.Owner.Account);
     }
@@ -19,7 +20,8 @@ internal sealed class SocialProjection(SocialService service)
     {
         context.Sender.Post(0, (ushort)NotiPacketType.UNITED_SERVER_FRIEND_INFO, SocialPackets.CharacterFriends(view.Characters),
             "character_friends", view.IsCurrent);
-        foreach (var row in view.Characters)
+        // 273子命令0静默恢复含频道的完整列表；274会直接显示上下线提示，只能回放本次事件目标。
+        foreach (var row in view.Characters.Where(row => row.Link.Person.Id == view.ChangedCharacter))
             context.Sender.Post(0, (ushort)NotiPacketType.INOUT_UNITED_SERVER_FRIEND, SocialPackets.CharacterPresence(row),
                 "character_friend_presence", view.IsCurrent);
         context.Sender.Post(0, (ushort)NotiPacketType.ACCOUNT_FRIEND_INFO, SocialPackets.AccountFriends(view.Accounts),

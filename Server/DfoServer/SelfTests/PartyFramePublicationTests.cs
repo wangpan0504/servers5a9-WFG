@@ -72,11 +72,76 @@ internal static class PartyFramePublicationTests
                 .Single(n => ReferenceEquals(n.Recipient.Actor.Session, target));
             parties.Leave(target);
             TestCheck.That(!obsolete.Guard!(), "接收者离队使排队中的边框与名册一并失效");
+            await CheckRemovalAsync(repository, towns);
         }
         finally
         {
             Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
             if (Directory.Exists(root)) TestFiles.DeleteDirectory(root, true);
+        }
+    }
+
+    static async Task CheckRemovalAsync(CharacterRepository repository, TownCatalog towns)
+    {
+        int index = 0;
+        foreach (string mode in new[] { "current", "rejoin", "epoch", "owner" })
+        {
+            var owners = new AccountOwners();
+            using var sourceOwner = owners.Acquire("kick-source-" + mode, () => { });
+            using var targetOwner = owners.Acquire("kick-target-" + mode, () => { });
+            var point = new Location(1, 0, 10, 10);
+            repository.Create(sourceOwner, new("KickSrc" + index, point, point));
+            repository.Create(targetOwner, new("KickTgt" + index++, point, point));
+            var source = new GameSession(repository, towns, sourceOwner);
+            var target = new GameSession(repository, towns, targetOwner);
+            source.Select(0); source.MarkReady(); target.Select(0); target.MarkReady();
+            var parties = new PartyService(repository);
+            TestCheck.That(parties.Invite(source, target, 1).Accepted &&
+                parties.Respond(target, source.Selected!.Id, 2, true).Accepted, "踢人队列用例使用真实双人队伍");
+            using var stop = new CancellationTokenSource();
+            using var stream = new GameSenderBudgetTests.HeldStream();
+            await using var sender = new GameConnectionSender(targetOwner, stream, stop, 0, (_, _, _, _, _) => { });
+            var context = new GameConnectionContext(new(1, System.Net.IPAddress.Loopback, stream, stop), targetOwner, target, sender);
+            var held = sender.Send(0, 2, [1], "held");
+            await stream.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var notice = parties.Leave(source, 1).Notices.Single(n => n.Kind == PartyNoticeKind.Removed);
+            TestCheck.That(notice.RemovalReason == PartyRemovalReason.Kicked && notice.Recipient.Slot == 1,
+                "已提交移除保留原目标槽与原因");
+            PartyProjection.Notice(context, notice);
+            TestCheck.That(sender.PendingBytes == 62, "阻塞帧和踢人两帧完整计入既有发送预算");
+            var drained = sender.DrainAsync();
+            if (mode == "rejoin")
+                TestCheck.That(parties.Invite(source, target, 3).Accepted &&
+                    parties.Respond(target, source.Selected!.Id, 4, true).Accepted, "踢人通知出队前目标合法重新入队");
+            else if (mode == "epoch")
+            {
+                target.ReturnToRoster(); target.Select(0); target.MarkReady();
+            }
+            else if (mode == "current")
+            {
+                TestCheck.That(target.Move(new(11, 10, 0, 0, 0, 0)), "移除提交后目标可正常移动并推进位置revision");
+                sender.InvalidateScene();
+            }
+            using var replacement = mode == "owner" ? owners.Acquire(targetOwner.Account, () => { }) : null;
+            TestCheck.That(notice.Guard?.Invoke() == (mode == "current"),
+                "原身份允许无关移动与场景推进，重入、换角及接管使同一移除守卫失效");
+            stream.Release.TrySetResult();
+            try { await Task.WhenAll(held, drained).WaitAsync(TimeSpan.FromSeconds(5)); }
+            catch (Exception error) when (mode == "owner" && (error is IOException or OperationCanceledException or InvalidOperationException))
+            {
+                TestCheck.That(stop.IsCancellationRequested, "原owner失效结束旧发送泵并释放可靠等待者");
+            }
+            if (mode == "owner") await sender.DisposeAsync();
+            TestCheck.That(sender.PendingBytes == 0 && stream.Frames.Count == (mode == "current" ? 3 : 1),
+                "原移除有效时按序写两帧，身份失效时两帧均不写且发送预算归零");
+            if (mode == "current")
+            {
+                TestCheck.Bytes(stream.Frames[1], GameFrame.Build(0, 10, 1, [1, 0]), "强制退队使用旧槽和原生原因0");
+                ushort id = notice.Party!.Id;
+                TestCheck.Bytes(stream.Frames[2], GameFrame.Build(0, 9, 2,
+                    [1, 0, 15, 39, (byte)id, (byte)(id >> 8), 0, 0, 0, 3, 0]),
+                    "WALKOUT之后才发送独立编码的名册删除，保持完整帧序号");
+            }
         }
     }
 }

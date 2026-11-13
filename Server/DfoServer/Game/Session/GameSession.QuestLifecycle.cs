@@ -3,6 +3,7 @@ using DfoServer.Game.Dungeons;
 using DfoServer.Game.Quests;
 using DfoServer.GameWorld.Items;
 using DfoServer.GameWorld.Quests;
+using DfoServer.GameWorld.Dungeons;
 
 namespace DfoServer.Game.Session;
 
@@ -18,6 +19,34 @@ internal sealed partial class GameSession
     private sealed record PendingQuestLifecycle(QuestLifecyclePlan Plan, long SelectionEpoch, SessionPhase Phase,
         DungeonRunIdentity? Identity, QuestClientCondition? Condition);
     private PendingQuestLifecycle? pendingQuestLifecycle;
+    private sealed record PendingCinematicClear(ushort QuestId, Guid AcceptanceId, long SelectionEpoch,
+        DungeonRunIdentity Identity, DungeonMap Map, QuestCatalog Quests, ItemCatalog Items,
+        GoldLimitCatalog GoldLimits, EpicPieceCatalog Pieces);
+    private PendingCinematicClear? pendingCinematicClear;
+
+    // 仅消费原加载动作和原接取绑定；复用33的完整场景校验及事务，异常时保留原事务恢复能力。
+    public QuestLifecycleReceipt? CompletePendingCinematicClear()
+    {
+        var pending = owner.Execute(() =>
+        {
+            var value = pendingCinematicClear;
+            if (value is null) return null;
+            if (!Ready || Phase != SessionPhase.Dungeon || SelectionEpoch != value.SelectionEpoch ||
+                formalDungeon?.Run is not { } run || run.LastLoadingFact is not { } loaded ||
+                loaded.Identity != value.Identity || loaded.Map != value.Map || run.Snapshot.CurrentMap != value.Map ||
+                Selected?.ActiveMainQuests.Any(row => row.QuestId == value.QuestId && row.AcceptanceId == value.AcceptanceId) != true)
+            {
+                pendingCinematicClear = null;
+                return null;
+            }
+            return value;
+        });
+        if (pending is null) return null;
+        var receipt = ChangeQuest(pending.QuestId, QuestLifecycleAction.Condition, pending.Quests, pending.Items,
+            pending.GoldLimits, pending.Pieces, new QuestClientCondition(null, 0, 0));
+        owner.Execute(() => { if (ReferenceEquals(pendingCinematicClear, pending)) pendingCinematicClear = null; return true; });
+        return receipt;
+    }
 
     // 仅接收已经批准的同坐标演出导航终末；初次加载和水平换房仍须等待37。
     private static bool CinematicLoadingTransition(FormalDungeon dungeon, StoryQuest movie)
@@ -64,7 +93,10 @@ internal sealed partial class GameSession
             Character? character = !AntonRejoinPresentationPending && Ready && Selected is not null && Phase != SessionPhase.Unselected &&
                 (Phase != SessionPhase.Loading || cinematicTransition) &&
                 pendingRental is null && pendingCommunication is null && pendingQuestCompletion is null && pendingQuestQuickClear is not { CommitStarted: true } &&
-                !HasPendingFormalCard && formalDungeon?.Ground.HasPendingOperation != true && formalDungeon?.Run.HasPendingDeath != true &&
+                !HasPendingFormalCard && formalDungeon?.Ground.HasPendingOperation != true &&
+                (formalDungeon?.Run.HasPendingDeath != true ||
+                    formalDungeon.Run.HasPendingPassiveClear && pendingQuestLifecycle?.Plan.SceneClear is { } pendingClear &&
+                    formalDungeon.Run.IsPendingPassiveClear(pendingClear)) &&
                 formalDungeon?.Run.HasPendingSettlement != true && !HasPendingQuestScene ? Selected : null;
             var instance = Phase is SessionPhase.Dungeon or SessionPhase.Settlement || cinematicTransition ? formalDungeon?.Run.Snapshot.Identity : null;
             var room = instance is not null && formalDungeon is { } dungeon
@@ -91,6 +123,10 @@ internal sealed partial class GameSession
         var strongwaySchedule = strongwayQuest ? CaptureStrongway2019QuestSchedule() : null;
         if (strongwayQuest && capture.Pending is null && !IsCurrentStrongway2019QuestSchedule(strongwaySchedule))
             return refusal with { Reason = "强者之路活动未开启" };
+        bool epicRoadQuest = QuestEpicRoad2019Entry.Supports(quest) && action != QuestLifecycleAction.Giveup;
+        var epicRoadSchedule = epicRoadQuest ? CaptureEpicRoad2019QuestSchedule() : null;
+        if (epicRoadQuest && capture.Pending is null && !IsCurrentEpicRoad2019QuestSchedule(epicRoadSchedule))
+            return refusal with { Reason = "星河裂缝活动未开启" };
         if (action == QuestLifecycleAction.Accept && !CanAcceptHiddenQuest(expected,quest,quests,capture.SelectionEpoch,capture.Phase))
             return refusal with {Reason="隐藏对话任务缺少当前场景开启许可"};
         // 觉醒券本地消费者补发关联活动任务32；只确认本次已提交券事务实际关闭的接取槽。
@@ -124,7 +160,7 @@ internal sealed partial class GameSession
                 plan = action switch
                 {
                     QuestLifecycleAction.Accept => QuestLifecyclePlan.Accept(expected, quest, quests, items, goldLimits, pieces, DateTimeOffset.UtcNow, grade,
-                        strongway2019Active: strongwayQuest),
+                        strongway2019Active: strongwayQuest, epicRoad2019Active: epicRoadQuest),
                     QuestLifecycleAction.Giveup => QuestLifecyclePlan.Giveup(expected, quest, quests, DateTimeOffset.UtcNow),
                     QuestLifecycleAction.Condition => ConditionPlan(),
                     _ => throw new NotSupportedException("客户端条件需经过类型及场景事实校验")
@@ -132,7 +168,10 @@ internal sealed partial class GameSession
                 plan.PvpRating = rank;
                 if (strongwayQuest)
                     plan.RequiredEvent = new(strongwaySchedule!, timeProvider ?? TimeProvider.System);
-                if (action == QuestLifecycleAction.Condition && expected.ActiveMainQuests.SequenceEqual(plan.ActiveAfter))
+                if (epicRoadQuest)
+                    plan.RequiredEvent = new(epicRoadSchedule!, timeProvider ?? TimeProvider.System);
+                if (action == QuestLifecycleAction.Condition && expected.ActiveMainQuests.SequenceEqual(plan.ActiveAfter) &&
+                    plan.SceneClear is null)
                     return refusal with { Outcome = QuestLifecycleOutcome.Unchanged, Reason = "当前条件已由实际场景或库存满足，无需再次保存" };
             }
         }
@@ -147,6 +186,9 @@ internal sealed partial class GameSession
             if (strongwayQuest && capture.Pending is null && (!IsCurrentStrongway2019QuestSchedule(strongwaySchedule) ||
                 plan.RequiredEvent is not { } required || !required.Matches(strongwaySchedule!)))
                 return refusal with { Reason = "强者之路活动前提已变化" };
+            if (epicRoadQuest && capture.Pending is null && (!IsCurrentEpicRoad2019QuestSchedule(epicRoadSchedule) ||
+                plan.RequiredEvent is not { } epicRequired || !epicRequired.Matches(epicRoadSchedule!)))
+                return refusal with { Reason = "星河裂缝活动前提已变化" };
             pendingQuestLifecycle = new(plan, capture.SelectionEpoch, capture.Phase, capture.Identity, condition);
             var commit = repository.CommitQuestLifecycle(owner, plan);
             var receipt = refusal with { Character = commit.Character, Commit = commit, Outcome = QuestLifecycleOutcome.Committed, Reason = "任务事务已提交" };
@@ -154,11 +196,32 @@ internal sealed partial class GameSession
             if (!commit.ProjectionCurrent) return receipt with { Reason = "任务事务已提交，当前投影已失效，需重新选角恢复" };
             Selected = commit.Character;
             completed = QuestEligibility.Completed(Selected);
+            if (capture.CinematicTransition && action == QuestLifecycleAction.Condition &&
+                capture.Identity is { } loadingIdentity && capture.Entry is { } loadingEntry && capture.Room is { } loadingRoom &&
+                PartyDungeon is null && loadingEntry.PassiveClearTerminalMap == loadingRoom.Map &&
+                loadingEntry.Maze.ClearConditions is [{ Type: "destroy object", Count: 1 } clear] &&
+                loadingRoom.PassiveObjects.Any(row => row.ObjectId == clear.TargetId) &&
+                commit.Character.ActiveMainQuests.SingleOrDefault(row => row.QuestId == questId && QuestHuntProgress.Bound(row, loadingEntry)) is { } active)
+                pendingCinematicClear = new(questId, active.AcceptanceId, capture.SelectionEpoch, loadingIdentity, loadingRoom.Map,
+                    quests, items, goldLimits, pieces);
+            if (action == QuestLifecycleAction.Giveup && pendingCinematicClear?.QuestId == questId)
+                pendingCinematicClear = null;
             if (action == QuestLifecycleAction.Accept && capture.Phase is SessionPhase.Dungeon or SessionPhase.Settlement && formalDungeon is { } dungeon &&
                 !dungeon.Entry.QuestAcceptances.Any(row => row.QuestId == quest.Id))
             {
                 dungeon.Run.BindQuestAcceptance(commit.Character.ActiveMainQuests.Single(row => row.AcceptanceId == plan.AcceptanceId));
                 formalDungeon = dungeon with { Entry = dungeon.Run.Entry };
+            }
+            if (plan.SceneClear is { } preparedClear && formalDungeon is { } sceneDungeon)
+            {
+                var clearResult = sceneDungeon.Run.ConfirmCommittedPassiveClear(preparedClear);
+                if (clearResult.Outcome != DungeonRunOutcome.Accepted)
+                    throw new InvalidOperationException("已提交场景清图的原实例准备无法确认");
+                if (plan.SceneEvent is { } committedScene)
+                    sceneDungeon.QuestSceneEvents[(sceneDungeon.Run.Snapshot.CurrentMap, committedScene.TemplateId, committedScene.SourceOrdinal)] =
+                        new PendingQuestScene(plan) { Committed = true };
+                SetState(SessionPhase.Settlement);
+                receipt = receipt with { Phase = Phase, DungeonIdentity = sceneDungeon.Run.Snapshot.Identity };
             }
             pendingQuestLifecycle = null;
             return receipt;
@@ -252,14 +315,59 @@ internal sealed partial class GameSession
             if (condition is { Channel: null, Value: 0, Reserved: 0 } && capture.Phase == SessionPhase.Town &&
                 QuestClientSceneProgress.Matches(expected,quest,towns))
                 return QuestLifecyclePlan.SetCondition(expected,quest,0);
-            // 0102A20F→0203D070→event42→02011B80：33是演出终末/关闭通知，不含CMT或接取身份，也不签发清图。
+            // 0102A20F→0203D070→event42→02011B80：33是演出终末/关闭通知，不含CMT或接取身份；
+            // 3858在70487按ESC跳过CMT2710时，0102BFE0只发33而不触发ON END CINEMATIC销毁69292，故已加载物件末层的33同时提交唯一物件清图。
             if (condition is { Channel: null, Value: 0, Reserved: 0 } &&
                 QuestClientSceneProgress.DungeonCinematic(quest) && (capture.Loaded || capture.CinematicTransition) &&
                 (capture.Phase is SessionPhase.Dungeon or SessionPhase.Settlement || capture.CinematicTransition) && capture.Entry is { } cinematicEntry &&
                 capture.Room is { } cinematicRoom && QuestClientSceneProgress.OnDungeonCinematicMap(quest,cinematicEntry,cinematicRoom.Map) &&
                 quest.Definition!.Dungeons.Any(row => row.DungeonId == cinematicEntry.DungeonId) &&
                 expected.ActiveMainQuests.Any(active => active.QuestId == quest.Id && QuestHuntProgress.Bound(active,cinematicEntry)))
+            {
+                if (PartyDungeon is null && capture.Loaded && capture.Phase == SessionPhase.Dungeon &&
+                    capture.Identity is { } sceneIdentity &&
+                    cinematicEntry.PassiveClearTerminalMap == cinematicRoom.Map &&
+                    cinematicEntry.Maze.ClearConditions is [{ Type: "destroy object", Count: 1 } clearCondition])
+                {
+                    int passiveOrdinal = -1;
+                    for (int idx = 0; idx < cinematicRoom.PassiveObjects.Count; idx++)
+                        if (cinematicRoom.PassiveObjects[idx].ObjectId == clearCondition.TargetId)
+                        {
+                            passiveOrdinal = idx;
+                            break;
+                        }
+                    if (passiveOrdinal >= 0)
+                    {
+                        var cinematicPassive = owner.Execute(() =>
+                        {
+                            if (!Ready || Phase != capture.Phase || SelectionEpoch != capture.SelectionEpoch ||
+                                !ReferenceEquals(Selected, expected) || formalDungeon is not { } current ||
+                                current.Run.Snapshot.Identity != sceneIdentity ||
+                                !current.Run.CanPreparePassiveClear(sceneIdentity, clearCondition.TargetId, passiveOrdinal))
+                                return null;
+                            string fingerprint = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+                                System.Text.Encoding.UTF8.GetBytes($"cinematic-passive:{quest.Id}:{sceneIdentity.InstanceId:N}:{cinematicRoom.Map.Id}:{clearCondition.TargetId}:{passiveOrdinal}")));
+                            var source = new QuestSceneEvent(Guid.NewGuid(), sceneIdentity, checked((int)cinematicEntry.DungeonId),
+                                cinematicRoom.Map.Id, clearCondition.TargetId, passiveOrdinal, fingerprint);
+                            var prepared = current.Run.PreparePassiveClear(sceneIdentity, source.OperationId,
+                                source.TemplateId, source.SourceOrdinal);
+                            if (prepared is null) return null;
+                            try
+                            {
+                                return QuestLifecyclePlan.SetCinematicPassiveClear(expected, quest, quests, current.Run.Entry,
+                                    source, prepared, current.Run);
+                            }
+                            catch
+                            {
+                                current.Run.CancelUncommittedPassiveClear(prepared);
+                                throw;
+                            }
+                        });
+                        if (cinematicPassive is not null) return cinematicPassive;
+                    }
+                }
                 return QuestLifecyclePlan.SetCondition(expected,quest,0);
+            }
             // 6401 的条件文案是在希莫娜菜单开启贮藏箱。33 只在该任务 NPC 所在城镇地图上归零。
             // 0155C6F8 发事件 0x28（载荷 6401,0），02011CB0 按通道 0 的低 9 位次数调用 0200EE50；
             // kind 0 时 0200F0BB 写通道 0x10、value 归 0，02280690 发 7 字节 33。无通道形状不是这条路径。
@@ -272,7 +380,8 @@ internal sealed partial class GameSession
                 condition is { Value: 1 } && quest.Condition != "[seeking]" ||
                 capture.Phase is not (SessionPhase.Town or SessionPhase.Dungeon or SessionPhase.Settlement) ||
                 quest.Definition is not { Diagnostics.Length: 0 } || !QuestLifecyclePlan.SeekingSubtype(quest) ||
-                QuestEligibility.InspectResource(quest, strongway2019Active: strongwayQuest).Entry is not (QuestResourceEntry.Ordinary or QuestResourceEntry.Creature) && !QuestRelationProgress.DialogueChild(quest, quests) &&
+                QuestEligibility.InspectResource(quest, strongway2019Active: strongwayQuest,
+                    epicRoad2019Active: epicRoadQuest).Entry is not (QuestResourceEntry.Ordinary or QuestResourceEntry.Creature) && !QuestRelationProgress.DialogueChild(quest, quests) &&
                     !QuestHiddenEntry.Direct(quest,quests))
                 throw new InvalidDataException("客户端条件需要已确认类型和当前真实场景");
             uint scalar;

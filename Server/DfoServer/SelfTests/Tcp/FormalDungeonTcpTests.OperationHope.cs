@@ -1,9 +1,11 @@
 using System.Buffers.Binary;
+using System.Text.Json;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Dungeons;
 using DfoServer.Game.Skills;
 using DfoServer.Game.Inventory.Services;
+using DfoServer.Game.Inventory.Models;
 using DfoServer.GameWorld.Dungeons;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Persistence;
@@ -16,7 +18,7 @@ internal static partial class FormalDungeonTcpTests
 {
     public static async Task RunOperationHopeAsync(ServerOptions source,string root,TcpTestResources resources)
     {
-        OperationHopeSessionTests.Run(resources.Archive,resources.ItemResources);
+        OperationHopeSessionTests.Run(resources.Towns,resources.Archive,resources.Characters,resources.ItemResources);
         await using var f = new TcpTestFixture(source,Path.Combine(root,"operation-hope"),gm:true,resources:resources);
         var dungeons = SelfTestCatalogs.Dungeons(resources.Archive);
         var rooms = SelfTestCatalogs.Rooms(resources.Archive);
@@ -39,6 +41,8 @@ internal static partial class FormalDungeonTcpTests
             var seed = CharacterCreation.Prepare("HopeTcp",resources.Characters.Get(0),position,position,resources.Learning.Get);
             var repository = new CharacterRepository(f.Database,resources.Quests);
             created = repository.Create(owner,seed with { Level=95,AcceptedStoryLevel=95,
+                Inventory = seed.Inventory with { Items = seed.Inventory.Items.Add(new(0, new(InventoryListType.Main, 3),
+                    InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(400360000)) with { Durability = 25 })) },
                 CompletedQuests=done.ToArray(),InitialLearning=SkillPointLedger.Synchronize(0,0,95,seed.InitialLearning with
                     {Experience=resources.Growth.GetLevelStartExperience(95)},resources.Learning) });
             var service = new InventoryService(resources.ItemResources.Items,resources.ItemResources.GoldLimits,resources.ItemResources.EpicPieces);
@@ -49,9 +53,94 @@ internal static partial class FormalDungeonTcpTests
         f.Sql("UPDATE characters SET quest_cycle_day=$p0 WHERE id=$p1; " +
             "UPDATE character_completed_quests SET daily_period=$p0 WHERE character_id=$p1 AND quest_id=6115",
             DfoServer.Game.Quests.QuestCycle.Day(f.UtcNow),created.Id);
+        var admissionRoles = new List<(string Account,ushort Id)>();
+        for (int i = 0; i < 2; i++)
+        {
+            string admissionAccount = "hope-admission-"+i;
+            using var owner = new AccountOwners().Acquire(admissionAccount,()=>{});
+            var seed = CharacterCreation.Prepare("HopeGate"+i,resources.Characters.Get(0),position,position,resources.Learning.Get);
+            var repository = new CharacterRepository(f.Database,resources.Quests);
+            var role = repository.Create(owner,seed with { Level=95,AcceptedStoryLevel=95,CompletedQuests=done.ToArray(),
+                InitialLearning=SkillPointLedger.Synchronize(0,0,95,seed.InitialLearning with
+                    {Experience=resources.Growth.GetLevelStartExperience(95)},resources.Learning) });
+            if (i == 1) f.Sql("UPDATE character_fatigue SET used=maximum-3,remaining=3 WHERE character_id=$p0",role.Id);
+            admissionRoles.Add((admissionAccount,role.Id));
+        }
         await f.StartAsync();
         That(DfoServer.Network.Management.DevelopmentGmClient.TryExecute(f.Options.GmPort,"infinite-fatigue off",out var mode) &&
             mode == "OK {\"infiniteFatigue\":false}","显式关闭默认开发无限疲劳，验证真实扣费");
+        var entry = new byte[25];BinaryPrimitives.WriteUInt32LittleEndian(entry,8523);entry[4]=hope.Difficulty;entry[9]=255;entry[10]=255;
+        {
+            // 0至3及恢复扣费矩阵由Session覆盖；socket只验证代表性拒绝、取消和真实非零队伍槽。
+            string State(ushort id) => f.Snapshot("SELECT * FROM characters WHERE id=$p0",id)+
+                f.Snapshot("SELECT * FROM character_fatigue WHERE character_id=$p0",id)+
+                f.Snapshot("SELECT * FROM character_dungeon_state WHERE character_id=$p0",id)+
+                f.Snapshot("SELECT * FROM character_dungeon_incount WHERE character_id=$p0",id)+
+                f.Snapshot("SELECT * FROM character_active_main_quests WHERE character_id=$p0 ORDER BY slot",id);
+            using (var solo = Open(f,admissionRoles[1].Account))
+            {
+                solo.Select(prepared:true,resumeTown:true,room:false);
+                solo.Barrier();
+                string before = State(solo.Id);
+                solo.Send(1598,[]);solo.Expect(1,1598,[1,0,0,0,0]);
+                solo.Send(1598,[]);solo.Expect(1,1598,[1,0,0,0,0]);
+                solo.Send(15,Build(w=>w.Write((uint)8523)));solo.Expect(1,15,[1]);
+                QuestLifecycleTcpTests.DrainNotifications(solo);
+                solo.Send(16,entry);
+                var rejected = PartyDungeonTcpTests.Drain(solo);
+                That(rejected.Any(packet=>packet is {Kind:1,Opcode:16} && packet.Body.SequenceEqual(new byte[]{0,22,0,0})) &&
+                    rejected.All(packet=>packet.Opcode is not (28 or 29)) && State(solo.Id) == before,
+                    "希望3疲劳真实1598/15/16返回完整错误22，不接任务、不扣费或次数、不发送地图");
+                solo.Send(132);solo.Expect(1,132,[1]);
+                var soloReturned = PartyDungeonTcpTests.Drain(solo);
+                That(soloReturned.Any(packet=>packet is {Kind:0,Opcode:24}) && soloReturned.All(packet=>packet.Opcode is not (28 or 29)),
+                    "疲劳拒绝后取消选图仍沿原城镇返回通知恢复");
+                solo.Send(1598,[]);solo.Expect(1,1598,[1,0,0,0,0]);solo.Barrier();
+            }
+
+            // 新连接清除单人冻结的迷宫，避免随机路线与随后队长的共享选择冲突。
+            using var low = Open(f,admissionRoles[1].Account);
+            low.Select(prepared:true,resumeTown:true,room:false);
+            using var leader = Open(f,admissionRoles[0].Account);
+            leader.Select(prepared:true,resumeTown:true,room:false);
+            PartyDungeonTcpTests.Drain(leader);PartyDungeonTcpTests.Drain(low);
+            foreach (var member in new[] {leader,low})
+            {
+                member.Send(2,Build(w=>{w.Write((byte)5);w.Write(0x0100007fu);w.Write(0x0100007fu);
+                    w.Write((ushort)(31000+(ReferenceEquals(member,leader)?0:1)));w.Write(512u);}));
+                PartyDungeonTcpTests.Drain(member);
+            }
+            leader.Send(10,Build(w=>{w.Write(low.Id);w.Write((byte)0);w.Write(0u);w.Write(new byte[6]);}));
+            PartyDungeonTcpTests.Drain(leader);PartyDungeonTcpTests.Drain(low);
+            low.Send(11,Build(w=>{w.Write(leader.Id);w.Write((byte)0);w.Write(0u);}));
+            var joinedLow = PartyDungeonTcpTests.Drain(low);
+            var joinedLeader = PartyDungeonTcpTests.Drain(leader);
+            That(joinedLow.Any(packet=>packet is {Kind:0,Opcode:9}) && joinedLeader.Any(packet=>packet is {Kind:0,Opcode:9}),
+                "低疲劳角色通过真实邀请成为希望队伍非零槽成员");
+            leader.Send(1598,[]);leader.Expect(1,1598,[1,0,0,0,0]);
+            leader.Send(15,Build(w=>w.Write((uint)8523)));
+            // 组队15先退出城镇可见域，再返回应答；按原屏障收齐双方投影，不假定ACK是首包。
+            foreach (var selected in new[] { PartyDungeonTcpTests.Drain(leader), PartyDungeonTcpTests.Drain(low) })
+                That(selected.Count(packet=>packet is {Kind:1,Opcode:15}) == 1 &&
+                    selected.Any(packet=>packet is {Kind:1,Opcode:15,Body:[1]}) &&
+                    selected.All(packet=>packet.Opcode is not (28 or 29)),
+                    "组队希望选图双方各收到唯一完整成功ACK15，正式入场前不发送地图");
+            string partyBefore = State(leader.Id)+State(low.Id);
+            leader.Send(16,entry);
+            var leaderRejected = PartyDungeonTcpTests.Drain(leader);
+            var lowRejected = PartyDungeonTcpTests.Drain(low);
+            That(leaderRejected.Any(packet=>packet is {Kind:1,Opcode:16} && packet.Body.SequenceEqual(new byte[]{0,22,0,1})) &&
+                leaderRejected.Concat(lowRejected).All(packet=>packet.Opcode is not (28 or 29)) &&
+                State(leader.Id)+State(low.Id) == partyBefore,
+                "组队希望疲劳拒绝携带真实成员槽1，全队不扣费、不接任务、不安装地图");
+            leader.Send(132);leader.Expect(1,132,[1]);
+            var leaderReturned = PartyDungeonTcpTests.Drain(leader);
+            var lowReturned = PartyDungeonTcpTests.Drain(low);
+            That(leaderReturned.Any(packet=>packet is {Kind:0,Opcode:24}) && lowReturned.Any(packet=>packet is {Kind:0,Opcode:24}),
+                "希望组队低疲劳拒绝后队长取消恢复双方城镇上下文");
+            leader.Send(1598,[]);leader.Expect(1,1598,[1,0,0,0,0]);
+            PartyDungeonTcpTests.Drain(leader);PartyDungeonTcpTests.Drain(low);
+        }
         using var failedPeer = Open(f,account);
         var peer = failedPeer;
         peer.Select(prepared:true);peer.Barrier();
@@ -68,7 +157,6 @@ internal static partial class FormalDungeonTcpTests
             "选择阶段仅准备实例，尚未新增希望任务");
         peer.Send(15,Build(w=>w.Write((uint)8523)));peer.Expect(1,15,[1]);
         peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id>>8),1]);QuestLifecycleTcpTests.DrainNotifications(peer);
-        var entry = new byte[25];BinaryPrimitives.WriteUInt32LittleEndian(entry,8523);entry[4]=hope.Difficulty;entry[9]=255;entry[10]=255;
         string CountState() => f.Snapshot("SELECT * FROM character_dungeon_incount WHERE character_id=$p0 ORDER BY dungeon",created.Id);
         string initialCounts = CountState();
         string initialAttempt = f.Snapshot("SELECT * FROM character_dungeon_state WHERE character_id=$p0",created.Id);
@@ -126,6 +214,10 @@ internal static partial class FormalDungeonTcpTests
         }
         That((long)f.Query("SELECT remaining FROM character_fatigue WHERE character_id=$p0",created.Id)[0][0]==fatigueBefore-16,
             "真实网络完整四区域仅扣16疲劳");
+        var energy = JsonSerializer.Deserialize<ItemCore>((string)f.Query("SELECT item_core FROM character_inventory_items i " +
+            "JOIN character_inventory_slots s USING(item_uid) WHERE s.character_id=$p0 AND list_type=0 AND slot_index=3", created.Id)[0][0]);
+        That(energy == created.Inventory.Find(new(InventoryListType.Main, 3))!.Core with { Durability = 9 },
+            "希望完整路线按四区域疲劳16同扣能量16，同区域换房不重复扣且不改品级");
         That(progressTransitions == 1, "希望完整迷宫恰有一次权威目标完成UI转换");
         peer.Send(46,DungeonSettlementProtocolTests.Report(peer.Id,99));
         QuestLifecycleTcpTests.DrainNotifications(peer);

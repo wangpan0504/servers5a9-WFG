@@ -135,6 +135,14 @@ internal static class DungeonPackets
         return body;
     }
 
+    // NOTI785：0237F7D0只读一个相对秒数；普雷HUD与当前副本使用同一截止点。
+    public static byte[] DungeonLimitTime(uint seconds)
+    {
+        byte[] body = new byte[4];
+        BinaryPrimitives.WriteUInt32LittleEndian(body, seconds);
+        return body;
+    }
+
     public static byte[] Elevator(DungeonElevatorNotice notice) => [notice.Counter, notice.State];
 
     public static byte[] StoryPause(ushort characterId, byte state, byte type)
@@ -184,6 +192,35 @@ internal static class DungeonPackets
     // NOTI5 DUNGEON_PERMISSION：u16 count + 每项 u32 dungeonId、u8 state。
     // 布局与参考实现 buildCurrentDungeonResourceStateEntriesBody 一致；state=0 不会进入快照。
     // 这里只写世界地图悬浮需要开通的地下城编号，不写名称字符串。
+    public static byte[] RevisedBeastSelectNotice(IReadOnlyList<int> dungeonIds)
+    {
+        ArgumentNullException.ThrowIfNull(dungeonIds);
+        if (dungeonIds.Count is < 1 or > 8) throw new ArgumentOutOfRangeException(nameof(dungeonIds));
+        if (dungeonIds.Any(id => id is < RevisedBeastSelection.FirstDungeon or > RevisedBeastSelection.LastDungeon))
+            throw new ArgumentOutOfRangeException(nameof(dungeonIds));
+        byte[] body = new byte[42 + 4 * dungeonIds.Count];
+        body[41] = checked((byte)dungeonIds.Count);
+        int at = 42;
+        foreach (int id in dungeonIds)
+        {
+            BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(at), checked((uint)id));
+            at += 4;
+        }
+        return body;
+    }
+
+    public static byte[] RevisedBeastNativeIncount(RevisedBeastCounts counts)
+    {
+        byte[] body = new byte[12];
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(0), counts.DailyEntriesUsed);
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(4), counts.WeeklyEntriesUsed);
+        body[8] = counts.DailyRewards;
+        body[9] = counts.WeeklyRewards;
+        body[10] = counts.DailyRewards;
+        body[11] = counts.WeeklyRewards;
+        return body;
+    }
+
     public static byte[] Permission(IReadOnlyList<int> dungeonIds)
     {
         ArgumentNullException.ThrowIfNull(dungeonIds);
@@ -217,7 +254,7 @@ internal static class DungeonPackets
             throw new ArgumentOutOfRangeException(nameof(error));
         return [0, (byte)error, (byte)((ushort)error >> 8), memberSlot];
     }
-    // 本版0xAD显示次数/权限上限，不用于缺区域任务；缺任务沿错误9恢复，门票不足保留0x11。
+    // 本版0xAD显示次数/权限上限，不用于缺区域任务；缺任务沿错误9恢复，深渊门票/灵石不足沿0233AAA8(0x1B)提示并经03B9F7E0(1,1)复位选图深渊状态。
     public static byte[] HellPartyRejected(DungeonSelectionError code) => SelectionRejected(code);
     // NOTI28的匹配36B布局；调用方提供已审核的准入计划，构包不建立实例或确认加载。
     public static byte[] Information(DungeonEntryPlan plan, DungeonPoint? bossPosition = null)
@@ -227,8 +264,8 @@ internal static class DungeonPackets
         BinaryPrimitives.WriteUInt32LittleEndian(body, checked((uint)plan.DungeonId));
         body[4] = plan.Difficulty;
         body[7] = checked((byte)plan.Maze.SourceOrdinal);
-        body[8] = checked((byte)(bossPosition ?? plan.BossMap.Position).X);
-        body[9] = checked((byte)(bossPosition ?? plan.BossMap.Position).Y);
+        body[8] = plan.IsRevisedBeast ? byte.MaxValue : checked((byte)(bossPosition ?? plan.BossMap.Position).X);
+        body[9] = plan.IsRevisedBeast ? byte.MaxValue : checked((byte)(bossPosition ?? plan.BossMap.Position).Y);
         body[10] = byte.MaxValue;
         body[11] = byte.MaxValue;
         // 0238ABCC读取并经03BB1510安装练习模式；不可只改变服务端奖励策略。
@@ -386,7 +423,7 @@ internal static class DungeonPackets
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(monsters);
-        int actorCount = checked(monsters.Monsters.Count(monster => monster.HellWave is null) + monsters.SpecialObjects.Count + monsters.HellWaves.Count);
+        int actorCount = checked(monsters.Monsters.Count(monster => monster.HellWave is null && monster.MockBattleSpawn is null) + monsters.SpecialObjects.Count + monsters.HellWaves.Count);
         if (monsters.Room.Map != plan.StartMap || actorCount > byte.MaxValue)
             throw new InvalidDataException("怪物计划与房间不匹配或超过通知数量范围");
         byte[] empty = StartMap(plan, seed, operation, payload);
@@ -398,7 +435,7 @@ internal static class DungeonPackets
         using var writer = new BinaryWriter(stream);
         writer.Write(empty.AsSpan(0, 18));
         writer.Write(checked((byte)actorCount));
-        foreach (var monster in monsters.Monsters.Where(monster => monster.HellWave is null))
+        foreach (var monster in monsters.Monsters.Where(monster => monster.HellWave is null && monster.MockBattleSpawn is null))
         {
             if (monster.BattleLevel is < 1 or > byte.MaxValue)
                 throw new NotSupportedException("怪物生成等级超出单字节范围");
@@ -547,6 +584,25 @@ internal static class DungeonPackets
         }
         writer.Write((byte)0);
         return bytes.ToArray();
+    }
+
+    // ARAD 0238E160(NOTI 1610 SIMPLE_CLEAR_REWARD_INFO)：u32 count(<=100)，后接 count × (u32 itemId, u32 itemCount)。
+    public static byte[] SimpleClearRewardInfo(IReadOnlyList<SpecialDungeonClearRewardGrant> rewards)
+    {
+        ArgumentNullException.ThrowIfNull(rewards);
+        if (rewards.Count is <= 0 or > 100)
+            throw new InvalidDataException("特殊地下城通关奖励条目数必须在1..100之间");
+        var body = new byte[4 + rewards.Count * 8];
+        BinaryPrimitives.WriteUInt32LittleEndian(body, checked((uint)rewards.Count));
+        for (int index = 0; index < rewards.Count; index++)
+        {
+            var reward = rewards[index];
+            if (reward.ItemId <= 0 || reward.Count <= 0)
+                throw new InvalidDataException("特殊地下城通关奖励物品ID与数量必须为正数");
+            BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(4 + index * 8), checked((uint)reward.ItemId));
+            BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(8 + index * 8), checked((uint)reward.Count));
+        }
+        return body;
     }
 
     // 0238EFE8 只消费当前格的骑乘记录；其它格的 [map] 声明不进入本包。

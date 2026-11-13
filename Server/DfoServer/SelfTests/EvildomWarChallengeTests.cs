@@ -104,10 +104,35 @@ internal static partial class EvildomWarChallengeTests
         var none = new HashSet<int>();
         var catalog = SelfTestCatalogs.Dungeons(pvf);
         var definition = catalog.Get(EvildomWarChallengeEntryPolicy.DungeonId);
+        var prices = SelfTestCatalogs.CardPrices(pvf);
+        var limits = ClearRewardLimitCatalog.Load(pvf);
+        var rewards = new DungeonCardRewardPolicy(SelfTestCatalogs.DropRules(pvf), itemResources.DungeonDropItems,
+            itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, prices: prices,
+            tayberrsRewards: new(prices, itemResources.Boosters, itemResources.Items, limits));
+        var rewardNow = DateTimeOffset.Parse("2026-11-06T00:00:00Z");
+        foreach (var usage in new[] { new DungeonIncountUsage(0, 0), new DungeonIncountUsage(0, 1) })
+        {
+            var card = rewards.Prepare(definition, 2, 13, draw: _ => throw new InvalidOperationException("英雄专奖不能抽普通池"),
+                utcNow: rewardNow, clearRewardUsage: usage);
+            That(card is { Gold: 0, Item: { ItemId: 490014021, Value: 1 }, RuleId: EvildomWarChallengeRewardPolicy.Rule } &&
+                card.Items().Count() == 1, "英雄合格通关只冻结一件真实闪耀装饰，不借普通装备或金币牌");
+        }
+        foreach (var usage in new[] { new DungeonIncountUsage(1, 1), new DungeonIncountUsage(0, 2) })
+            That(rewards.Prepare(definition, 2, 13, utcNow: rewardNow, clearRewardUsage: usage) is
+                { Gold: 0, Item: null }, "英雄每日1或每周2耗尽仍可通关，不再冻结奖励");
+        var heroOptions = rewards.PrepareOptions(definition, 2, 13,
+            new(rewardNow.AddDays(1).ToUnixTimeSeconds(), rewardNow.AddDays(1).ToUnixTimeSeconds()), rewardNow);
+        That(heroOptions is { PaidDisabled: true, BlackDiamond: null, UseGoldCard: false },
+            "英雄专奖不能经付费、黄金契约或黑钻多领");
+        var withoutTable = new DungeonCardRewardPolicy(SelfTestCatalogs.DropRules(pvf), itemResources.DungeonDropItems,
+            itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);
+        Reject<InvalidDataException>(() => withoutTable.Prepare(definition, 2, 13),
+            "英雄奖励专表缺失明确拒绝，不能静默改发普通装备");
         var maze = definition.Mazes.Single();
         That(definition.IsEvildomWarChallenge && definition.MinimumPartyCount == 4 && definition.MinimumLevel == 95 &&
             definition.TryGetDesignatedDifficulty(out byte difficulty) && difficulty == 2 &&
-            definition.DisableFatigueConsumption && definition.EnterWithoutFatigue && definition.DisableMonsterAndClearExperience,
+            definition.DisableFatigueConsumption && definition.EnterWithoutFatigue && definition.DisableMonsterAndClearExperience &&
+            definition.DisableItemDrops && !definition.DisableClearReward,
             "候选英雄DGN独立标签、min4、95级、fixed2及无疲劳无普通经验合同");
         That(maze is { Width: 13, Height: 3, MapSpecification.Count: 15 } &&
             maze.Starts.SequenceEqual([new DungeonPoint(0, 0)]) && maze.Bosses.SequenceEqual([new DungeonPoint(12, 0)]) &&
@@ -214,6 +239,9 @@ internal static partial class EvildomWarChallengeTests
                         team.All(session => ReferenceEquals(session.PartyDungeon, team[0].PartyDungeon) &&
                             session.FormalEnteredDungeonId == 400000105 && session.Phase == SessionPhase.Loading),
                         "四真实成员进入同一正式共享Run，不创建mode3或平行实例");
+                    That(team.All(session => session.CurrentFormalDungeonScene() is
+                        { Entry.DisableItemDrops: true, Entry.DisableClearReward: false }),
+                        "英雄禁掉落由PVF冻结到每名成员，保留专用翻牌资格");
                     for (int index = 0; index < team.Length; index++)
                         That(team[index].Selected!.Fatigue == before[index].Fatigue && team[index].ReadEvildomWar() is null,
                             "英雄入场不扣普通战役30疲劳、不借54战役资格：" + index);

@@ -14,9 +14,11 @@ internal static partial class RaidCombatProjection
             // 完成态不再播放成功电影；资产提交、奖励展示和到期收尾仍沿原事务通知。
             if (view.State == AntonRaidBattleState.Completed) return true;
             var battle = context.Session.CurrentRaidBattle(actor);
-            bool SceneReady() => view.State != AntonRaidBattleState.Reward ||
+            bool SceneReady() => !view.PhaseExpired && view.State != AntonRaidBattleState.Reward ||
                 context.Session.Phase == Game.Session.SessionPhase.Town && context.Session.PartyDungeon is null &&
-                context.LukePhaseExit?.FiendwarReturnPending(view.Instance) != true;
+                !context.Sender.DungeonSceneWritten &&
+                !context.Session.NeedsFiendwarFinalReturn() &&
+                (view.PhaseExpired || context.LukePhaseExit?.ReturnPending(view.Instance) != true);
             if (!SceneReady()) return false;
             var identity = RaidCombatDisplayIdentity.Capture(actor, view);
             bool Show() => current() && SceneReady() && context.RaidDisplay != identity;
@@ -35,7 +37,9 @@ internal static partial class RaidCombatProjection
     internal static void PostFiendwarSnapshot(GameConnectionContext context, AntonRaidBattle battle,
         AntonRaidBattleView view, Func<bool> current)
     {
-        if (battle.Kind != RaidKind.Fiendwar || view.Fiendwar is not { } field) return;
+        // 失败/胜利状态会拆除原生战场；终态后不能继续向旧对象投递单位、计时器和演出事件。
+        if (battle.Kind != RaidKind.Fiendwar || view.Fiendwar is not { Failed: false, Cleared: false } field ||
+            view.State != AntonRaidBattleState.Fighting || view.PhaseExpired) return;
         bool Guard() => current() && battle.IsCurrent(view);
         if (view.State == AntonRaidBattleState.Fighting && !view.PhaseExpired && !view.ClockFaulted && !field.Failed && !field.Cleared)
         {

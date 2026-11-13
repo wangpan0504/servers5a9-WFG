@@ -17,15 +17,27 @@ internal sealed partial class DungeonHandler
     public void PreparePartyContext(GameConnectionContext context)
     {
         context.Session.PartyDungeonNoticeArrived = notice => PublishPartyNoticeAsync(context, notice);
+        context.Session.EvildomWarRewardPreparing = evildomRewards is not null && evildomRewardStore is not null
+            ? view => context.Session.CommitEvildomWarReward(evildomRewards, evildomRewardStore, view) : null;
         context.Session.FiendwarKeyLeaseArrived = message => PublishFiendwarKeyMessageAsync(context, message);
         context.Session.FiendwarAreaTravelArrived = receipt => town.TravelFiendwarAsync(context, receipt);
         context.Session.Strongway2019NormalTimeoutArrived = timeout => ReturnStrongway2019NormalTimeoutAsync(context, timeout);
-        if (partyDungeons is not null) context.LukePhaseExit = new(context, partyDungeons, town, log, lukeLifecycle, raidStart);
+        if (partyDungeons is not null)
+        {
+            context.Death?.ConfigurePartyDungeons(partyDungeons, parties);
+            context.LukePhaseExit = new(context, partyDungeons, town, log, lukeLifecycle, raidStart);
+            if (preyRaid is not null)
+                context.PreyBoarding = new(context,
+                    (view, actor) => EnterPreyLandingAsync(context, view, actor),
+                    error => log.Write("prey_landing_failed", new { Connection = context.Id,
+                        Stage = "dispatch", Error = error.GetType().Name, error.Message }));
+        }
     }
 
     static Task PublishPartyHostAsync(GameConnectionContext context, PartyMember[] members, Func<bool> guard)
     {
-        byte? slot = context.Session.PartyDungeon?.Leader ?? context.Session.CurrentParty?.Invoke()?.Leader;
+        byte? slot = context.Session.PartyDungeon?.Leader ?? context.Session.CurrentParty?.Invoke()?.Leader ??
+            (context.Session.IsPreySoloRaid && members.Length == 1 ? (byte?)0 : null);
         if (slot is null || !members.Any(m => m.Slot == slot))
             throw new InvalidOperationException("组队场景缺少当前主机成员");
         return context.Notify(NotiPacketType.UDP_HOST, PartyPackets.Host(slot.Value), "party_dungeon_host", guard);
@@ -38,12 +50,13 @@ internal sealed partial class DungeonHandler
             if (member.Actor.Session.PublicCharacter(member.Actor.Character.Id) is not { } identity) continue;
             await context.Notify(NotiPacketType.USERINFO,
                 TownPackets.Actor(identity.Character, identity.PvpGrade, identity.Channel, adventureName: identity.AdventureName,
-                    sceneState: ActorSceneState.Dungeon, premiumPcRoom: identity.PremiumPcRoom), "party_dungeon_actor", guard);
+                    sceneState: ActorSceneState.Dungeon, premiumPcRoom: identity.PremiumPcRoom, returningAdventurerType: identity.ReturningAdventurerType, marriage: context.MarriageAppearance), "party_dungeon_actor", guard);
             // 0267C569读取角色ID，0267C581按ID查找已安装Actor；完整属性包同样适用于当前副本队员。
             await context.Notify(NotiPacketType.USERINFO,
                 TownPackets.Player(identity.Character, (partyStats ?? throw new InvalidOperationException("组队副本缺少属性目录")).Compute(identity.Character),
                     identity.AdventureLevel, identity.Channel), "party_dungeon_player", guard);
         }
+        if (context.Session.IsPreySoloRaid && members.Length == 1) return;
         var endpoints = PartyPackets.Endpoints(members.Where(m => m.Actor.Session.PartyEndpoint is not null)
             .Select(m => new PartyEndpointRow(m.Actor.Character.Id, m.Actor.Session.PartyEndpoint!, m.Actor.Session.PeerAccount)).ToArray());
         // 名册处理会立即按Actor端点创建peer；必须先恢复地址和账号，避免以0.0.0.0/账号0启动连接。
@@ -73,13 +86,8 @@ internal sealed partial class DungeonHandler
         if (lukeLifecycle is not null && notice.Kind is PartyDungeonNoticeKind.RaidBattleSync or PartyDungeonNoticeKind.Departure &&
             context.Session.CommitPendingLukePhase(lukeLifecycle))
             log.Write("raid_phase_committed", new { Connection = context.Id, RaidType = context.Session.RaidCombatKind(), Instance = context.Session.RaidCombatView()?.Instance });
-        var hiddenReward = notice.Kind == PartyDungeonNoticeKind.EvildomWarUpdated && notice.WarView is { } hiddenView &&
-            context.Session.CanPublishEvildomWar(hiddenView) && evildomRewards is not null && evildomRewardStore is not null
-            ? context.Session.CommitEvildomWarHiddenReward(evildomRewards, evildomRewardStore) : null;
-        // 奖励规划和持久化先于发送队列预留；只消费当前战役真实完成事实。
-        var warReward = notice.Kind == PartyDungeonNoticeKind.EvildomWarUpdated && notice.WarView is { Completed: true } completed &&
-            context.Session.CanPublishEvildomWar(completed) && evildomRewards is not null && evildomRewardStore is not null
-            ? context.Session.CommitEvildomWarReward(evildomRewards, evildomRewardStore) : null;
+        // 全员奖励已在并发投影前提交；此处只取本人的回执，不能在每个接收者重复抽全队奖励。
+        var warReward = notice.EvildomWarRewards.SingleOrDefault(row => row.Member == notice.Recipient)?.Receipt;
         bool RejoinSceneCurrent() => notice.Recipient.Actor.IsCurrent() && notice.Scene is { } restoring &&
             context.Session.HasAntonRejoinPresentation && context.Session.CanPublishNativeScene(restoring);
         Func<bool> publicationCurrent = notice.Kind == PartyDungeonNoticeKind.AntonRejoinScene
@@ -91,29 +99,38 @@ internal sealed partial class DungeonHandler
             if (notice.Kind == PartyDungeonNoticeKind.EvildomWarUpdated)
                 log.Write("evildom_war_progress", new { Connection = context.Id, view.BattleId, view.Revision,
                     view.Completed, States = view.Dungeons.Select(row => new { row.Id, row.State }).ToArray() });
-            await context.Notify(NotiPacketType.EVILDOM_WAR_INFO, EvildomWarPackets.Info(view.Mode,
+            await context.Notify(NotiPacketType.EVILDOM_WAR_INFO, EvildomWarPackets.Info(view.Mode, view.Completed,
                 (int)(view.Deadline - context.Session.EvildomWarNow).TotalSeconds, view.Dungeons),
                 "evildom_war_info", () => context.Session.CanPublishEvildomWar(view));
-            if (hiddenReward is not null)
-            {
-                if (!hiddenReward.Commit.MailIds.IsEmpty)
-                    await context.Notify(NotiPacketType.MAILBOX_ALARM, MailboxPackets.Alarm(), "evildom_war_hidden_reward_mail",
-                        () => context.Session.CanPublishEvildomWarHiddenReward(hiddenReward));
-                log.Write("evildom_war_hidden_reward_committed", new { Connection = context.Id, view.BattleId,
-                    Character = hiddenReward.Admission.CharacterId, hiddenReward.Commit.Duplicate,
-                    MailIds = hiddenReward.Commit.MailIds, Rule = EvildomWarRewardPolicy.HiddenRule });
-            }
             if (warReward is not null)
             {
                 bool sent = false;
-                bool Guard() => sent = context.Session.CanPublishEvildomWarReward(warReward);
+                bool Guard() => sent = notice.Recipient.Actor.IsCurrent() && context.Session.CanPublishEvildomWar(view) &&
+                    context.Session.CanPublishEvildomWarReward(warReward) && RewardRosterCurrent();
+                bool RewardRosterCurrent()
+                {
+                    var party = context.Session.CurrentParty?.Invoke();
+                    return party is not null && party.EvildomWarBattleId == view.BattleId &&
+                        notice.EvildomWarRewards.All(row => row.IsFrom(view) &&
+                            ReferenceEquals(row.Receipt.Admission.Battle, warReward.Admission.Battle) && party.Members.All(current =>
+                            current.Slot != row.Member.Slot || ReferenceEquals(current.Actor.Owner, row.Member.Actor.Owner) &&
+                            ReferenceEquals(current.Actor.Session, row.Member.Actor.Session) && current.Actor.Epoch == row.Member.Actor.Epoch &&
+                            current.Actor.Character.Id == row.Member.Actor.Character.Id));
+                }
                 if (context.Session.ShouldPublishEvildomWarReward(warReward))
                 {
-                    var groups = warReward.Commit.Plan.Reward.Items.GroupBy(row => row.Group).Select(group =>
-                        new EvildomWarPackets.RewardGroup(group.Key, group.Select(row =>
-                            new EvildomWarPackets.RewardRow(0, row.ItemId, checked((uint)row.Count))).ToArray())).ToArray();
-                    // 首字段和特殊展示类型的业务语义未闭合；本服只用通用物品图标及真实数量，首字段保留0。
-                    await context.Notify(NotiPacketType.EVILDOM_WAR_REWARD_LIST, EvildomWarPackets.Rewards(0, groups),
+                    if (warReward.Commit.Character is { } rewardCharacter && !warReward.Commit.ChangedSlots.IsEmpty)
+                    {
+                        foreach (var listGroup in warReward.Commit.ChangedSlots.GroupBy(slot => slot.List).OrderBy(group => group.Key))
+                            await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(rewardCharacter.Inventory,
+                                listGroup.Key, [..listGroup]), "evildom_war_reward_items", Guard);
+                    }
+                    var groups = notice.EvildomWarRewards.Select(member =>
+                        new EvildomWarPackets.RewardGroup(member.Member.Slot, member.Receipt.Commit.Plan.Reward.Items.Select(row =>
+                            new EvildomWarPackets.RewardRow(row.Group, row.ItemId, checked((uint)row.Count))).ToArray())).ToArray();
+                    // 用时随原完成事实冻结；奖励提交或发送延迟不能计入通关时间。
+                    await context.Notify(NotiPacketType.EVILDOM_WAR_REWARD_LIST,
+                        EvildomWarPackets.Rewards(warReward.Commit.Plan.Completion.ElapsedMilliseconds, groups),
                         "evildom_war_reward", Guard);
                     if (sent) context.Session.ConfirmEvildomWarRewardPublished(warReward);
                 }
@@ -121,6 +138,7 @@ internal sealed partial class DungeonHandler
                     await context.Notify(NotiPacketType.MAILBOX_ALARM, MailboxPackets.Alarm(), "evildom_war_reward_mail", Guard);
                 log.Write("evildom_war_reward_committed", new { Connection = context.Id, view.BattleId,
                     Character = warReward.Admission.CharacterId, warReward.Commit.Duplicate,
+                    warReward.Commit.Plan.Completion.ElapsedMilliseconds, TimeKnown = view.StartedAt is not null,
                     MailIds = warReward.Commit.MailIds, Rule = EvildomWarRewardPolicy.Rule });
             }
             return;
@@ -143,6 +161,7 @@ internal sealed partial class DungeonHandler
         if (notice.Kind == PartyDungeonNoticeKind.Departure && notice.Travel is { } departure)
         {
             if (context.Death is not null) await context.Death.StopAsync();
+            await UpdatePreyBoardingPartyAsync(context);
             await town.ReturnFromFormalDungeonAsync(context, departure, "party_departure_town");
             log.Write("formal_dungeon_return", new { Connection = context.Id, Reason = "party_departure",
                 departure.Character.Id, departure.Character.Position });
@@ -159,6 +178,7 @@ internal sealed partial class DungeonHandler
         if (notice.Kind == PartyDungeonNoticeKind.MemberLeft)
         {
             await context.Notify(NotiPacketType.USER_LEAVE, TownPackets.RemoveActor(notice.Peer), "party_dungeon_member_left");
+            AdventurerBenefitProjection.Post(context);
             GuildDungeonPartyBuffProjection.Post(context);
             await PublishPartyHostAsync(context, notice.Members, () => notice.Recipient.IsCurrent() &&
                 context.Session.PartyDungeon is { } instance && instance.Members.Contains(notice.Recipient));
@@ -166,11 +186,13 @@ internal sealed partial class DungeonHandler
         }
         if (notice.Kind == PartyDungeonNoticeKind.SelectionReturn && notice.Selection is { } returning)
         {
+            await UpdatePreyBoardingPartyAsync(context);
             await town.ReturnFromDungeonSelectionAsync(context, returning);
             return;
         }
         if (notice.Kind == PartyDungeonNoticeKind.ResultReturn && notice.Travel is { } travel)
         {
+            await UpdatePreyBoardingPartyAsync(context);
             await context.Reply(CmdPacketType.EPLP_COMMAND, DungeonSettlementPackets.ResultCommand(1, (byte)DungeonResultOption.ReturnTown),
                 "party_result_return", () => context.Session.CanPublishTravel(travel));
             await town.ReturnFromFormalDungeonAsync(context, travel, "party_result_town");
@@ -283,6 +305,8 @@ internal sealed partial class DungeonHandler
             case PartyDungeonNoticeKind.Entry:
                 await town.DetachAsync(context);
                 GuildDungeonPartyBuffProjection.Post(context, clear: true);
+                if (notice.SceneTransition)
+                    await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionNotice(), "anton_hatchery_transition", Current);
                 if (scene.Entry.Hope is { } hope)
                     await context.Reply(CmdPacketType.ACCEPT_QUEST, QuestPackets.Accepted(hope.Acceptance.QuestId,1,[]),
                         "party_operation_hope_quest_assigned",Current);
@@ -314,6 +338,9 @@ internal sealed partial class DungeonHandler
                     await context.Notify(NotiPacketType.UPDATE_ITEM_LIST,InventoryPackets.Delta(scene.Character.Inventory,
                         InventoryListType.Main,[.. scene.HellConsumedSlots]),"party_hell_entry_items",Current);
                 }
+                if (!scene.FatigueEnergySlots.IsEmpty)
+                    await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(scene.Character.Inventory,
+                        InventoryListType.Main, [.. scene.FatigueEnergySlots]), "party_entry_quick_slot_energy", Current);
                 if (!scene.EntryItemConsumedSlots.IsEmpty)
                     await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(scene.Character.Inventory,
                         InventoryListType.Main, [.. scene.EntryItemConsumedSlots]), "party_entry_items", Current);
@@ -329,6 +356,8 @@ internal sealed partial class DungeonHandler
                     await context.Notify(NotiPacketType.CERA, CurrencyPackets.Cera(scene.Character.Inventory.AccountWallet), "party_entry_cera", Current);
                 foreach (var count in scene.EnterCounts)
                     await context.Notify(NotiPacketType.DUNGEON_ENTER_COUNT_INFO, DungeonEnterCountPackets.Info(count.Dungeon, count.Daily, count.Weekly), "party_entry_count", Current);
+                if (scene.Entry.DungeonId == 316)
+                    await RiftDailyProjection.RefreshParticularHellAsync(context, Current);
                 if (scene.Entry.Dimension is not null) await DimensionEntranceProjection.RefreshAsync(context, Current, entranceOnly: false);
                 RaidCombatProjection.AntonTimersForScene(context, Current);
                 if(scene.BattlePassMissionClock is {} entryClock) await BattlePassMissionProjection.RefreshAsync(context,entryClock.GetUtcNow());
@@ -337,6 +366,7 @@ internal sealed partial class DungeonHandler
                 if (scene.NavigationReplay) break;
                 await context.Reply(CmdPacketType.FINISH_LOADING, [1], "party_loading_ack", Current);
                 await context.Notify(NotiPacketType.FINISH_LOADING, DungeonPackets.LoadingNotice(), "party_loading_release", Current);
+                await DungeonPotionProjection.LoadedAsync(context, Current);
                 foreach (var member in notice.Members)
                     await context.Notify(NotiPacketType.USER_STATE, DungeonPackets.DungeonPlayerState(member.Actor.Character.Id), "party_player_state", Current);
                 // 只有重返加载回执携带死亡快照；新客户端重建名册后恢复原死状态，不生成死亡或复活事实。
@@ -344,9 +374,12 @@ internal sealed partial class DungeonHandler
                     await context.Notify(NotiPacketType.DIE_STATE, DungeonPackets.CharacterLife(member, (byte)0), "anton_rejoin_dead_member", Current);
                 // 组队副本加载确认同样重建Actor，按当前网吧身份补发特权buff。
                 await PcRoomBuffProjection.PostAsync(context, Current);
+                AdventurerBenefitProjection.Post(context, force: true);
                 town.GuildEconomy?.Post(context, force: true);
                 await GuildTrainingProjection.PostAsync(context);
                 await BossSelectionBuffProjection.PostAsync(context, force: true, canSend: Current);
+                await HellLegendBuffProjection.PostAsync(context, force: true, canSend: Current);
+                await DungeonEpicBuffProjection.PostAsync(context, force: true, canSend: Current);
                 GuildDungeonPartyBuffProjection.Post(context);
                 if (scene.ScriptedReturnId != Guid.Empty)
                 {
@@ -355,14 +388,19 @@ internal sealed partial class DungeonHandler
                 }
                 if (scene.Entry.UsesFatigue)
                     await context.Notify(NotiPacketType.FATIGUE, FatiguePackets.Current(context.Session.FatigueForClient(scene.Character)), "party_room_fatigue", Current);
+                if (!scene.FatigueEnergySlots.IsEmpty)
+                    await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(scene.Character.Inventory,
+                        InventoryListType.Main, [.. scene.FatigueEnergySlots]), "party_room_quick_slot_energy", Current);
                 if (context.Elevator is not null) await context.Elevator.StartAsync(scene);
                 if (scene.HellPartyRoomCleared)
                     await context.Notify(NotiPacketType.HELL_PARTY_CLEAR,DungeonPackets.HellPartyCleared(),"party_hell_clear",Current);
                 if (scene.Snapshot.Phase == SinglePlayerDungeonPhase.Settlement)
                     await DungeonSettlementProjection.EnableAsync(context);
                 await PublishEpicPieceShopAsync(context, prepare: false);
+                await PublishSecretShopAsync(context, prepare: false);
                 // 首次场景安装在30之后才完整可用；重放真实参与表和HP，不沿用加载前已写帧的去重缓存。
                 RaidCombatProjection.RestoreStatusForScene(context, Current);
+                RaidCombatProjection.PostPreyDungeonTime(context, scene);
                 if(scene.BattlePassMissionClock is {} loadingClock) await BattlePassMissionProjection.RefreshAsync(context,loadingClock.GetUtcNow());
                 break;
             case PartyDungeonNoticeKind.Move:
@@ -460,7 +498,8 @@ internal sealed partial class DungeonHandler
         var destination = commit.Currency is { } currency
             ? new InventorySlot(InventoryListType.Main, CurrencyPackets.PickupSlot(currency)) : commit.Destination;
         var body = commit.Currency == CurrencyKind.Gold
-            ? DungeonPickupPackets.IndependentGoldNotification(key, picked.Character.Id, checked((uint)commit.Amount), notice.Recipient.Slot)
+            ? DungeonPickupPackets.IndependentGoldNotification(key, picked.Character.Id, checked((uint)commit.Amount), notice.Recipient.Slot,
+                checked((uint)(commit.Amount - result.Ground!.GoldAmount)))
             : DungeonPickupPackets.OrdinaryNotification(key, picked.Character.Id, new byte[8], picked.Character.Id,
                 commit.EpicPiece is not null || commit.AccountMaterial is not null
                     ? DungeonPickupPackets.NoInventorySlot : checked((ushort)destination.Index), 0);
@@ -473,8 +512,15 @@ internal sealed partial class DungeonHandler
         else if (commit.AccountMaterial is not null)
             await town.AccountMaterialsAsync(context, picked.Character, canSend: Guard);
         else
+        {
             await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(picked.Character.Inventory,
                 destination.List, [destination]), "party_pickup_inventory", Guard);
+            if (destination.List == InventoryListType.AccountCommon &&
+                picked.Character.Inventory.Find(destination) is { } created && created.Core.Count == commit.Amount)
+                await town.SyncCommonCalendarSlotsAsync(context,
+                    picked.Character.Inventory with { Items = picked.Character.Inventory.Items.Remove(created) },
+                    picked.Character, Guard);
+        }
         if (scene.Character.Id == notice.Peer)
             await context.Reply(CmdPacketType.GET_ITEM, DungeonPickupPackets.Accepted(), "party_pickup_ack", Guard);
         if (result.PreviousQuests is { } previousQuests)

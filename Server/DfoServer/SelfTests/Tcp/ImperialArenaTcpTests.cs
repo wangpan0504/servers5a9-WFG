@@ -277,10 +277,10 @@ internal static class ImperialArenaTcpTests
     }
 
     // 跨天会先跑完整服务日刷新；婚房用例已按真实运行登记这批全局日切通知，帝国用例沿用同一清单放行，
-    // 帝国自己的五包仍按原顺序、原包体精确核对，不跳过任何帝国通知。
+    // 832/833由LegacyServiceDayAsync刷新深渊日次数；帝国自己的五包仍按原顺序、原包体精确核对。
     static bool ServiceDayNotice(WirePacket packet) => packet.Kind == 0 &&
         packet.Opcode is 2 or 3 or 4 or 6 or 14 or 21 or 22 or 23 or 24 or 36 or 356 or 550 or 574 or 720
-            or 1003 or 1005 or 1011 or 1012 or 1014 or 1015 or 1016 or 1017 or 1018 or 1343 or 1349 or 1379 or 1536 or 1681;
+            or 832 or 833 or 1003 or 1005 or 1011 or 1012 or 1014 or 1015 or 1016 or 1017 or 1018 or 1343 or 1349 or 1379 or 1536 or 1681;
 
     static void ExpectDay(TcpPeer peer, ushort opcode, byte[]? body = null)
     {
@@ -302,7 +302,7 @@ internal static class ImperialArenaTcpTests
             peer.Send(39, FormalDungeonTcpTests.Death(U16(map, at + 6), peer.Id, map[at + 12])); peer.Expect(0, 38);
             if (opponent != 0 && U32(map, at + 8) == opponent)
             {
-                That(peer.Expect(0, 1402).Body[0] == (reward ? 2 : 0), "帝国只展示本次实际新增奖励");
+                if (reward) That(peer.Expect(0, 1402).Body[0] == 2, "帝国新增累计奖励回合下发1402打开201逐关奖励窗");
                 if (mail) peer.Expect(0, 99);
                 if (final)
                 {

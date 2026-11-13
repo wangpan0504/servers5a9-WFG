@@ -141,10 +141,12 @@ internal sealed partial class GameSession
         var plan = PreparedParty(token);
         if (!Ready || SelectionEpoch != plan.SelectionEpoch || !ReferenceEquals(Selected, plan.Character) ||
             !(Phase == SessionPhase.MapSelect && formalDungeon is null ||
-                Phase == SessionPhase.Settlement && FormalDungeonResultFocus() is not null || CanReserveStrongway2019Matching(plan)) || HasPendingTownQuestCommit) return null;
+                Phase == SessionPhase.Settlement && FormalDungeonResultFocus() is not null || CanReserveStrongway2019Matching(plan) ||
+                CanReserveAntonHatchery(plan)) || HasPendingTownQuestCommit) return null;
         var dungeon = plan.Dungeon;
         if (dungeon.EvildomWarChallengeEntry is { } challenge && !IsCurrentEvildomWarChallengeAdmission(challenge)) return null;
         if (dungeon.Strongway2019Admission is { } strongway && !IsCurrentStrongway2019Admission(strongway)) return null;
+        if (!CanInstallDungeonEvent(plan)) return null;
         if (dungeon.EvildomWarEntry is { } admission && !ReferenceEquals(CurrentEvildomWar(Selected), admission)) return null;
         if (dungeon.Entry.DungeonId <= int.MaxValue && dungeon.Entry.StartFatigue > 0 &&
             CurrentEvildomWar(Selected) is { Charged: false } war && EvildomWarCostRejection(Selected, war.Catalog) is not null) return null;
@@ -185,7 +187,7 @@ internal sealed partial class GameSession
         if (dungeon.Entry.Dimension is { } dimension && dimension.Period != IncountPeriod(dimension.Catalog.DailyRow.CountKey)) return null;
 
         int accelerationPercent = CaptureFatigueAcceleration(dungeon.Entry);
-        ushort fatigue = debugSettings?.InfiniteFatigue == true ? (ushort)0 :
+        ushort fatigue = InfiniteFatigue ? (ushort)0 :
             DfoServer.Game.PcRoom.FatigueAccelerationRules.Cost(dungeon.Entry.StartFatigue,
                 accelerationPercent, Selected.Fatigue?.Remaining ?? 0);
         DfoServer.Game.Guild.GuildDungeonAdmission? guildAdmission = null;
@@ -199,13 +201,14 @@ internal sealed partial class GameSession
         preparedPartyDungeon = plan with { Dungeon = dungeon with { GuildTraining = training?.Snapshot } };
         return new PartyDungeonReservation(owner, Selected, plan.NextKey,
             new(items, fatigue, dungeon.Run.Snapshot.Identity, dungeon.Entry.StartMap.Id, plan.Weekly)
-            { BattlePassMissionClock = timeProvider ?? TimeProvider.System, GuildTraining = training?.Inventory, OrdinaryLukeEntry = dungeon.Entry.OrdinaryLukeDay is null ? null : dungeon.Entry,
+            { QuickSlotEnergySource = plan.QuickSlotEnergySource, BattlePassMissionClock = timeProvider ?? TimeProvider.System, GuildTraining = training?.Inventory, OrdinaryLukeEntry = dungeon.Entry.OrdinaryLukeDay is null ? null : dungeon.Entry,
                 PreyNormalEntry = dungeon.Entry.PreyNormal is null ? null : dungeon.Entry,
                 AntonNormalEntry = dungeon.Entry.AntonNormal is null ? null : dungeon.Entry,
+                SingleBinding = SingleDungeonBinding(dungeon.Entry),
                 DungeonId = checked((int)dungeon.Entry.DungeonId), Hope = dungeon.Entry.Hope, Marriage = dungeon.Entry.Marriage,
                 GuildDungeon = guildAdmission, Dimension = dungeon.Entry.Dimension,
                 FatigueAccelerationPercent = accelerationPercent,
-                RequiredEvent = Strongway2019RequiredEvent(dungeon.Strongway2019Admission) }, incount)
+                RequiredEvent = plan.RequiredEvent ?? Strongway2019RequiredEvent(dungeon.Strongway2019Admission) }, incount)
         {
             EvildomWar = dungeon.EvildomWarEntry is { Store: not null } activeWar
                 ? new(activeWar.Battle.View, activeWar.BindingToken,
@@ -257,6 +260,7 @@ internal sealed partial class GameSession
         SetState(SessionPhase.Loading);
         var payment = reservation.Charge.InventoryPayment;
         return FormalReceipt() with { EntryItemConsumedSlots = installing.HellTicket is null ? payment?.ChangedSlots ?? [] : [],
+            FatigueEnergySlots = QuickSlotEquipmentEnergy.ChangedSlots(plan.Character.Inventory, committed.Inventory),
             HellConsumedSlots = installing.HellTicket is not null ? payment?.ChangedSlots ?? [] : [],
             HellTicket = installing.HellTicket, LegendTicket = installing.LegendTicket,
             EntryFatigueCharged = reservation.Charge.Fatigue,
@@ -308,7 +312,8 @@ internal sealed partial class GameSession
         var inventory = after == character.Inventory ? null : new InventoryPlan(character.Inventory, after, "dungeon_retreat_stamina", new(character));
         var activeHope = dungeon.Run.HopeBinding is { } binding
             ? character.ActiveMainQuests.SingleOrDefault(q => q.AcceptanceId == binding.Acceptance.AcceptanceId) : null;
-        return new PartyExitPreparation(new(owner, character, dungeon.OrdinaryReturnPosition ?? character.Position, inventory)
+        if (RaidDungeonExitPosition(dungeon, character) is not { } destination) return null;
+        return new PartyExitPreparation(new(owner, character, destination, inventory)
             { Hope = activeHope is null ? null : new(dungeon.Run.HopeCatalog!,activeHope) },
             SelectionEpoch, dungeon, kind);
     });
@@ -322,6 +327,8 @@ internal sealed partial class GameSession
             throw new InvalidOperationException("组队退场提交后身份变化");
         Selected = committed;
         DfoServer.Game.Raids.AntonRaidBattleChange? raidChange = null;
+        var consumableStates = (Cooldowns: System.Collections.Immutable.ImmutableArray<ConsumableStateUpdate>.Empty,
+            Effects: System.Collections.Immutable.ImmutableArray<ConsumableStateUpdate>.Empty);
         if (formalDungeon is { } dungeon)
         {
             if (dungeon.Run.Return(dungeon.Run.Snapshot.Identity, Guid.NewGuid()).Outcome != DungeonRunOutcome.Accepted)
@@ -331,11 +338,13 @@ internal sealed partial class GameSession
             ReleaseCurrentEvildomWarDungeon();
             formalDungeon = null;
             CrossConsumableCooldownBoundary(ConsumableMaintenance.Town);
+            consumableStates = RestoreAfterFreeConsumables(dungeon);
         }
         CancelDungeonContinuation();
         pendingQuestReplay = null;
         CurrentDungeonSelection = null;
         SetState(SessionPhase.Town);
+        raidChange = RecordPreyTownLocation(raidChange);
         if (prepared.Kind is PartyDungeonExitKind.ResultSelection or PartyDungeonExitKind.HellSelection)
         {
             CurrentDungeonSelection = new(++dungeonSelectionId, SelectionEpoch, committed.Id, committed.Position, committed.Position);
@@ -344,7 +353,8 @@ internal sealed partial class GameSession
         return prepared.Kind switch
         {
             PartyDungeonExitKind.ResultReturn or PartyDungeonExitKind.EvildomWarRetreat or PartyDungeonExitKind.FiendwarKeyRecovery => new PartyDungeonNotice(PartyDungeonNoticeKind.ResultReturn, member, members,
-                Travel: new(committed, owner.Generation, SelectionEpoch) { RaidBattleChange = raidChange }),
+                Travel: new(committed, owner.Generation, SelectionEpoch) { RaidBattleChange = raidChange,
+                    ConsumableCooldowns = consumableStates.Cooldowns, ConsumableEffects = consumableStates.Effects }),
             _ => new PartyDungeonNotice(prepared.Kind == PartyDungeonExitKind.SelectionReturn ? PartyDungeonNoticeKind.SelectionReturn :
                 prepared.Kind == PartyDungeonExitKind.ResultSelection ? PartyDungeonNoticeKind.ResultSelection : PartyDungeonNoticeKind.Selection,
                 member, members, Selection: new(committed, owner.Generation, SelectionEpoch, dungeonSelectionId), RaidBattleChange: raidChange)

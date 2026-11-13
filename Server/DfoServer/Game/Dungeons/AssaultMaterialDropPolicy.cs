@@ -53,7 +53,8 @@ internal sealed class AssaultMaterialDropPolicy
             item.StackLimit <= 0 || !item.Expiration.SupportsCreation))
             throw new InvalidDataException("英雄之证候选包含不可新建的装备或礼盒");
         var heroProofPool = new DungeonItemDropPool(heroProofItems.Select(item => new DungeonWeightedDropItem(item, 1)));
-        hiddenHeroProof = new(3000, heroProofPool, 1, 1, Category: DungeonDropCategory.Equipment);
+        hiddenHeroProof = new(3000, heroProofPool, 1, 1, Category: DungeonDropCategory.Equipment)
+            { RarityBonusGroup = DungeonRarityBonusGroup.EquipmentLottery };
         normalCertificate = Fixed(certificate, 20, 10);
         normalMaterial = Fixed(material, 50, 25);
         hiddenCertificate = Fixed(certificate, 90, 15);

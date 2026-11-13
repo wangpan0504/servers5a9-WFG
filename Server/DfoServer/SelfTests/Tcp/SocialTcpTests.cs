@@ -11,10 +11,29 @@ internal static class SocialTcpTests
 {
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
+        AccountFriendGroupTests.RunCore();
         int before = Count;
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "social"), resources: resources);
         await fixture.StartAsync();
         ushort alphaId;
+        string[] alphaNames = ["一二三四五", "Team B", "!", "好友"];
+        string[] betaNames = ["Raid", "Farm", "Trade", "伙伴"];
+        byte[] alphaIcons = [7, 0, 4, 2], betaIcons = [1, 6, 3, 5];
+        byte[] GroupRequest(byte[] icons, string[] names) => Build(w =>
+        {
+            w.Write(new byte[] { 0x91, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x72 });
+            w.Write(icons);
+            foreach (string name in names)
+            {
+                byte[] bytes = CharacterName.Encoding.GetBytes(name);
+                w.Write(bytes); w.Write(new byte[11 - bytes.Length]);
+            }
+        });
+        byte[] GroupInfo(byte[] icons, string[] names) => Build(w =>
+        {
+            for (int i = 0; i < 4; i++) { w.Write(icons[i]); WriteName(w, names[i]); }
+        });
+        byte[] alphaGroups = GroupInfo(alphaIcons, alphaNames), betaGroups = GroupInfo(betaIcons, betaNames);
         using (var alpha = Open(fixture, "sociala"))
         using (var beta = Open(fixture, "socialb"))
         {
@@ -30,6 +49,22 @@ internal static class SocialTcpTests
             alpha.Send(1684);
             alpha.Expect(0, 1702, Build(w => { for (byte group = 0; group < 4; group++) { w.Write(group); WriteName(w, ""); } }));
             Refresh(alpha, 0);
+            string[] changedNames = ["临时分组", "Stage B", "StageC", "伙伴"];
+            byte[] changedIcons = [6, 5, 1, 7];
+            alpha.Send(1683, GroupRequest(changedIcons, changedNames)); alpha.Expect(1, 1683, [1]);
+            alpha.Expect(0, 1702, GroupInfo(changedIcons, changedNames));
+            That(fixture.Query("SELECT slot,icon,name FROM account_social_groups WHERE account='sociala' ORDER BY slot") is
+                [[0L, 6L, "临时分组"], [1L, 5L, "Stage B"], [2L, 1L, "StageC"], [3L, 7L, "伙伴"]],
+                "首次保存按ACK再1702即时回放已提交四组，不需1684或重选角色");
+            alpha.Send(1683, GroupRequest(alphaIcons, alphaNames)); alpha.Expect(1, 1683, [1]);
+            alpha.Expect(0, 1702, alphaGroups);
+            That(fixture.Query("SELECT slot,icon,name FROM account_social_groups WHERE account='sociala' ORDER BY slot") is
+                [[0L, 7L, "一二三四五"], [1L, 0L, "Team B"], [2L, 4L, "!"], [3L, 2L, "好友"]],
+                "连续再次保存提交后按ACK再1702回放，10B名称保持完整");
+            beta.Barrier();
+            That(fixture.Query("SELECT count(*) FROM account_social_groups WHERE account='socialb'") is [[0L]],
+                "连续两次保存仅通知本人，不向另一账号发布或写入分组");
+            alpha.Send(1684); alpha.Expect(0, 1702, alphaGroups); Refresh(alpha, 0);
             alpha.Send(120); alpha.Expect(1, 120, [1, 0]);
             alpha.Send(290, Build(w => { w.Write(beta.Id); w.Write((byte)2); WriteName(w, "SocialB"); }));
             alpha.Expect(1, 290, [1]);
@@ -87,6 +122,11 @@ internal static class SocialTcpTests
             beta.Send(1684);
             beta.Expect(0, 1702, Build(w => { for (byte group = 0; group < 4; group++) { w.Write(group); WriteName(w, ""); } }));
             Refresh(beta, 0, Request(false, "TeamA"));
+            beta.Send(1683, GroupRequest(betaIcons, betaNames)); beta.Expect(1, 1683, [1]);
+            beta.Expect(0, 1702, betaGroups);
+            beta.Send(1684); beta.Expect(0, 1702, betaGroups); Refresh(beta, 0, Request(false, "TeamA"));
+            alpha.Send(1684); alpha.Expect(0, 1702, alphaGroups); Refresh(alpha, 1, Request(true, "TeamB"));
+            That(fixture.Query("SELECT count(*) FROM account_social_groups") is [[8L]], "两个账号各自保存四组，回放互不覆盖");
             That(fixture.Query("SELECT count(*) FROM account_social_links") is [[0L]], "申请仅保存pending");
             beta.Send(1440, Build(w => { WriteName(w, "TeamA"); w.Write((byte)4); WriteName(w, "队友"); }));
             beta.Expect(1, 1440, Build(w => { w.Write((byte)1); WriteName(w, "TeamA"); w.Write((byte)4); WriteName(w, "队友"); }));
@@ -121,10 +161,20 @@ internal static class SocialTcpTests
                     alpha.Expect(0, 6, Build(w => w.Write(original)));
                 }
                 beta.Expect(1, 7, [1]); beta.Expect(0, 2);
-                Refresh(alpha, 1, accountOnline: false, characterOnline: false, accountAdventure: "TeamB");
+                Refresh(alpha, 1, accountOnline: false, characterOnline: false, accountAdventure: "TeamB",
+                    presence: slot == 1 ? "SocialB" : null);
+                if (slot == 1)
+                {
+                    long observed = fixture.UtcNow.ToUnixTimeSeconds() - 7200;
+                    fixture.Sql("UPDATE account_social_presence SET last_seen_unix=$p0 WHERE account='socialb'", observed);
+                    alpha.Send(1684); alpha.Expect(0, 1702, alphaGroups);
+                    Refresh(alpha, 1, accountOnline: false, characterOnline: false, accountAdventure: "TeamB",
+                        expectedOfflineElapsedSeconds: 7200);
+                }
                 beta.Select(slot);
+                Bytes(beta.AccountFriendGroups, betaGroups, "换角登录1702恢复账号四组，不退回默认或其他账号配置");
                 Refresh(alpha, 1, characterOnline: slot == 0, accountAdventure: "TeamB",
-                    accountCharacter: slot == 0 ? "SocialB" : "SocialBAlt");
+                    accountCharacter: slot == 0 ? "SocialB" : "SocialBAlt", presence: slot == 0 ? "SocialB" : null);
                 That(slot == 0 ? beta.Id == original : beta.Id != original,
                     "换角使用真实不同Actor，冒险团好友仍只覆盖TeamB这一行");
                 beta.Barrier();
@@ -132,11 +182,33 @@ internal static class SocialTcpTests
             That(fixture.Query("SELECT count(*) FROM account_social_links") is [[2L]],
                 "换角不新增账号好友边，双方始终各一条冒险团关系");
         }
+        VerifyCharacterPresenceEvents(fixture);
         VerifyPartyDirectory(fixture);
+        using (var rejected = Open(fixture, "groupsreject"))
+        {
+            rejected.Create("GroupsReject"); rejected.Select();
+            rejected.Send(1683, GroupRequest(betaIcons, betaNames)); rejected.Expect(1, 1683, [1]);
+            rejected.Expect(0, 1702, betaGroups);
+            Execute("CREATE TRIGGER fail_group_packet BEFORE INSERT ON account_social_groups WHEN NEW.account='groupsreject' AND NEW.slot=3 BEGIN SELECT RAISE(ABORT,'fixture'); END");
+            rejected.Send(1683, GroupRequest(alphaIcons, alphaNames)); rejected.Closed();
+            That(fixture.Query("SELECT name FROM account_social_groups WHERE account='groupsreject' ORDER BY slot") is
+                [["Raid"], ["Farm"], ["Trade"], ["伙伴"]], "1683晚期SQL异常整笔回滚且不发成功ACK或1702");
+            Execute("DROP TRIGGER fail_group_packet");
+        }
+        using (var rejected = Open(fixture, "groupsreject"))
+        {
+            rejected.Select(); Bytes(rejected.AccountFriendGroups, betaGroups, "存储异常后重连仍回放原持久四组");
+            rejected.Send(1683, new byte[48]); rejected.Closed();
+            That(fixture.Query("SELECT count(*) FROM account_social_groups WHERE account='groupsreject'") is [[4L]],
+                "截断1683沿原非法包路径关闭，不误ACK或修改已存配置");
+        }
         await fixture.StopAsync(); await fixture.StartAsync("social-reopen", isolatedProcess: true);
         using (var alpha = Open(fixture, "sociala"))
         {
             alpha.Select();
+            Bytes(alpha.AccountFriendGroups, alphaGroups, "独立进程冷启动后1702恢复实际名称与图标");
+            alpha.Send(1684); alpha.Expect(0, 1702, alphaGroups);
+            Refresh(alpha, 1, accountOnline: false, characterOnline: false);
             That(alpha.Id == alphaId && U32(alpha.CharacterFriends, 4) == 1 && alpha.AccountFriends[0] == 1,
                 "冷启动后登录恢复角色好友和账号好友");
             VerifyAccountPresence(alpha.AccountFriends, false, "TeamB", "SocialB");
@@ -148,6 +220,37 @@ internal static class SocialTcpTests
             alpha.Expect(1, 1441, Build(w => { w.Write((byte)1); WriteName(w, "TeamB"); }));
             alpha.Expect(0, 1378, Build(w => WriteName(w, "TeamB"))); Refresh(alpha, 0);
             That(fixture.Query("SELECT count(*) FROM account_social_links") is [[0L]], "冒险团好友删除双方边并同步删除通知");
+        }
+        // 喇叭目标沿既有1439精确账号名寻址：完整32B可用，短前缀和同账号都不能命中。
+        using (var requester = Open(fixture, "targetrequest"))
+        using (var target = Open(fixture, "targetlong"))
+        {
+            requester.Create("TargetAsk"); target.Create("TargetLong");
+            requester.Select(); target.Select();
+            string fullName = new('测', 16), prefixName = new('测', 8);
+            fixture.Sql("UPDATE account_adventures SET name='TargetRequester',name_initialized=1 WHERE account='targetrequest'");
+            fixture.Sql("UPDATE account_adventures SET name=$p0,name_initialized=1 WHERE account='targetlong'", fullName);
+            byte[] Add(string name) => Build(w =>
+            {
+                WriteName(w, name); WriteName(w, "喇叭邀请"); w.Write((byte)0); WriteName(w, "");
+            });
+            requester.Send(1439, Add(prefixName)); requester.Expect(1, 1439, [0, 3, 0]);
+            That(fixture.Query("SELECT count(*) FROM account_social_requests WHERE source_account='targetrequest'") is [[0L]],
+                "16B前缀不误命中32B冒险团名，不产生错误邀请");
+            requester.Send(1439, Add(fullName));
+            requester.Expect(1, 1439, Build(w => { w.Write((byte)1); WriteName(w, fullName); w.Write((byte)0); WriteName(w, ""); }));
+            That(fixture.Query("SELECT source_account,target_account FROM account_social_requests WHERE source_account='targetrequest'")
+                is [["targetrequest", "targetlong"]], "32B/16UTF16完整邀请键精确命中目标账号，不按角色名或截断别名查询");
+            byte[] Pending(bool outgoing, string name) => Build(w =>
+            {
+                w.Write((byte)1); w.Write(outgoing ? (byte)1 : (byte)0); WriteName(w, name);
+                WriteName(w, "喇叭邀请"); w.Write(0x7ffeae7fu);
+            });
+            Refresh(requester, 0, Pending(true, fullName));
+            Refresh(target, 0, Pending(false, "TargetRequester"));
+            target.Send(1439, Add(fullName)); target.Expect(1, 1439, [0, 3, 0]);
+            That(fixture.Query("SELECT count(*) FROM account_social_requests WHERE source_account='targetlong'") is [[0L]],
+                "完整长名仍保留同账号拒绝错误3，不为换角喇叭放宽自身好友规则");
         }
         That(fixture.Query("PRAGMA foreign_key_check").Length == 0 && fixture.Query("PRAGMA integrity_check") is [["ok"]],
             "社交操作重启后保持外键与数据库完整");
@@ -265,7 +368,8 @@ internal static class SocialTcpTests
         alpha.Send(1426); alpha.SendBarrier(); alpha.Batch((0, 23), (0, 24), (0, 2), (0, 3), (0, 23), (0, 22));
         SceneInfo(alpha); alpha.Expect(1, 1347, [1]);
         beta.Batch((0, 2), (0, 3), (0, 23), (0, 22)); beta.Barrier();
-        alpha.Send(14, [1]); alpha.Expect(1, 14, [1]); PartyInfo(alpha, 1); beta.Expect(0, 9, Party(0, true));
+        alpha.Send(14, [1]); alpha.Expect(1, 14, [1]); PartyInfo(alpha, 1);
+        beta.Expect(0, 10, [1, 0]); beta.Expect(0, 9, Party(0, true));
         beta.Expect(0, 9, Party(1));
         alpha.Send(13); alpha.Expect(1, 13, [1]); alpha.Expect(0, 9, Party(0, true));
         beta.Expect(0, 9, Party(0, true));
@@ -345,9 +449,23 @@ internal static class SocialTcpTests
         observer.Select(prepared: true);
         observer.Send(1426); observer.Batch((0, 23), (0, 24));
         observer.Send(36, Area(38, 2, 1085, 249, 38, 0, kind: 5));
-        observer.Batch((0, 23), (0, 24), (0, 2), (0, 3), (0, 23), (0, 22));
+        // 目录由独立投影发布，可穿插在切图通知中；仍逐包核对切图顺序及唯一完整名册。
+        bool directoryReceived = false;
+        foreach (ushort opcode in new ushort[] { 23, 24, 2, 3, 23, 22 })
+        {
+            var packet = observer.Read();
+            if (packet.Kind == 0 && packet.Opcode == 9)
+            {
+                That(!directoryReceived, "回城名册只刷新一次");
+                Bytes(packet.Body, edited, "回城名册保留完整队伍设置");
+                directoryReceived = true;
+                packet = observer.Read();
+            }
+            That(packet.Kind == 0 && packet.Opcode == opcode,
+                $"回城切图包序：期望0/{opcode}，实际{packet.Kind}/{packet.Opcode}");
+        }
         leader.Batch((0, 2), (0, 3), (0, 23), (0, 22));
-        observer.Expect(0, 9, edited);
+        if (!directoryReceived) observer.Expect(0, 9, edited);
         leader.Send(15, new byte[4]); leader.Batch((0, 6), (1, 15), (0, 3), (0, 1536), (0, 27));
         observer.Expect(0, 6);
         var hidden = observer.Expect(0, 9).Body;
@@ -467,22 +585,84 @@ internal static class SocialTcpTests
             return body;
         }
     }
+    static void VerifyCharacterPresenceEvents(TcpTestFixture fixture)
+    {
+        using var observer = Open(fixture, "presencewatch");
+        using var never = Open(fixture, "presencenever");
+        observer.Create("PresWatch"); never.Create("PresNever");
+        observer.Select();
+        var states = new Dictionary<string, bool> { ["PresencePeer"] = true, ["PresNever"] = false };
+        using (var peer = Open(fixture, "presencepeer"))
+        {
+            peer.Create("PresencePeer"); peer.Select();
+            observer.Barrier(); peer.Barrier();
+            foreach (var target in new[] { (peer.Id, Name: "PresencePeer"), (never.Id, Name: "PresNever") })
+            {
+                observer.Send(290, Build(w => { w.Write(target.Id); w.Write((byte)2); WriteName(w, target.Name); }));
+                observer.Expect(1, 290, [1]);
+                Refresh(observer, target.Id == peer.Id ? 1 : 2,
+                    characterStates: target.Id == peer.Id ? null : states);
+            }
+            observer.Send(1684); observer.Expect(0, 1702); Refresh(observer, 2, characterStates: states);
+            peer.Send(7); peer.Expect(1, 7, [1]); peer.Expect(0, 2);
+            states["PresencePeer"] = false;
+            Refresh(observer, 2, characterOnline: false, presence: "PresencePeer", characterStates: states);
+            observer.Send(7); observer.Expect(1, 7, [1]); observer.Expect(0, 2);
+            observer.Select();
+            VerifyCharacterPresence(observer.CharacterFriends, 2, states: states);
+            That(fixture.Query("SELECT count(*) FROM account_social_presence WHERE account='presencenever'") is [[0L]],
+                "从未就绪的好友没有最近在线记录，重登入城与已离线好友一样仅回放273，不发送退出提示");
+            observer.Barrier();
+            peer.Select(); states["PresencePeer"] = true;
+            Refresh(observer, 2, presence: "PresencePeer", characterStates: states);
+            observer.Barrier(); peer.Barrier();
+        }
+        states["PresencePeer"] = false;
+        Refresh(observer, 2, characterOnline: false, presence: "PresencePeer", characterStates: states);
+        observer.Barrier();
+    }
     static byte[] Refresh(TcpPeer peer, int count, byte[]? requests = null, bool accountOnline = true,
-        bool characterOnline = true, string? accountAdventure = null, string? accountCharacter = null)
+        bool characterOnline = true, string? accountAdventure = null, string? accountCharacter = null,
+        long? expectedOfflineElapsedSeconds = null, string? presence = null,
+        IReadOnlyDictionary<string, bool>? characterStates = null)
     {
         var body = peer.Expect(0, 273).Body;
-        That(U32(body, 0) == 0 && U32(body, 4) == count, "好友全量subcommand及真实行数");
-        for (int i = 0; i < count; i++)
-        {
-            var online = peer.Expect(0, 274).Body;
-            That(U16(online) == (characterOnline ? 10 : 0), "角色好友按当前角色在线状态下发真实频道，换角不能误判原角色在线");
-        }
-        VerifyAccountPresence(peer.Expect(0, 1376).Body, accountOnline, accountAdventure, accountCharacter);
+        VerifyCharacterPresence(body, count, characterOnline, characterStates);
+        if (presence is not null)
+            peer.Expect(0, 274, Build(w =>
+            {
+                w.Write(characterOnline ? (ushort)10 : (ushort)0); w.Write((byte)2);
+                WriteName(w, presence); w.Write(characterOnline ? (byte)1 : (byte)0); w.Write((byte)0);
+            }));
+        VerifyAccountPresence(peer.Expect(0, 1376).Body, accountOnline, accountAdventure, accountCharacter,
+            expectedOfflineElapsedSeconds);
         var receivedRequests = peer.Expect(0, 1377).Body;
         if (requests is not null) That(receivedRequests.AsSpan().SequenceEqual(requests), "申请方向、发起方冒险团、留言和时间按原生通知中心协议投递");
         return body;
     }
-    static void VerifyAccountPresence(byte[] body, bool online, string? expectedAdventure = null, string? expectedCharacter = null)
+    static void VerifyCharacterPresence(byte[] body, int count, bool online = true,
+        IReadOnlyDictionary<string, bool>? states = null)
+    {
+        That(U32(body, 0) == 0 && U32(body, 4) == count, "好友全量subcommand及真实行数");
+        using var stream = new MemoryStream(body, 8, body.Length - 8);
+        using var reader = new BinaryReader(stream);
+        var names = new HashSet<string>();
+        for (int i = 0; i < count; i++)
+        {
+            byte server = reader.ReadByte(); ushort channel = reader.ReadUInt16();
+            string name = CharacterName.Encoding.GetString(reader.ReadBytes(reader.ReadInt32()));
+            That(names.Add(name) && (states is null || states.ContainsKey(name)), "273每个角色好友仅一行，不以目标事件覆盖其他好友");
+            bool expectedOnline = states is null ? online : states[name];
+            That(server == 2 && channel == (expectedOnline ? 10 : 0),
+                "273自身按当前角色在线状态下发真实频道，换角不能误判原角色在线，不依赖274初始化");
+            reader.ReadByte(); reader.ReadUInt32(); reader.ReadByte();
+            That(reader.ReadByte() == 0 && reader.ReadUInt32() == 0 && reader.ReadByte() == 0 && reader.ReadByte() == 0,
+                "273行尾保留blocked、Z、flag、group原合同");
+        }
+        That(stream.Position == stream.Length && (states is null || names.Count == states.Count), "273完整消费所有好友，不丢在线或离线行");
+    }
+    static void VerifyAccountPresence(byte[] body, bool online, string? expectedAdventure = null, string? expectedCharacter = null,
+        long? expectedOfflineElapsedSeconds = null)
     {
         using var stream = new MemoryStream(body);
         using var reader = new BinaryReader(stream);
@@ -496,9 +676,12 @@ internal static class SocialTcpTests
             That(homeServer == 2 && channelServer == 2, "不同角色、换角和离线均使用相同真实大区，不能写ActorID");
             string character = Name(); reader.ReadBytes(3);
             ushort channel = reader.ReadUInt16(); string adventure = Name(); Name();
-            reader.ReadUInt32(); byte unavailable = reader.ReadByte(); reader.ReadBytes(2);
+            uint offlineElapsedSeconds = reader.ReadUInt32(); byte unavailable = reader.ReadByte(); reader.ReadBytes(2);
             That(adventure.Length != 0 && (online ? channel == 10 && character.Length != 0 && unavailable == 0 : channel == 0),
                 "冒险团在线绘制要求真实非零频道、角色名及不可用标记0，离线由频道0表示");
+            if (!online && expectedOfflineElapsedSeconds is long expected)
+                That(Math.Abs((long)offlineElapsedSeconds - expected) <= 2,
+                    "冒险团离线行在不可用标记前写最近在线elapsed秒，按实测时钟允许两秒采样误差");
             if (expectedAdventure is not null) That(adventure == expectedAdventure, "冒险团唯一键不随登录角色变化");
             if (expectedCharacter is not null) That(character == expectedCharacter, "登录角色字段显示当前角色，不与冒险团昵称互换");
         }

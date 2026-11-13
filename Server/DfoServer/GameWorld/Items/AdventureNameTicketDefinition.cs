@@ -11,10 +11,10 @@ internal sealed record AdventureNameTicketDefinition(int TemplateId, int Minimum
             StackableActionCatalog.Arguments(raw) is not { Label: "[represent account name change]", Parameters.Count: 0 } ||
             raw.DeclaredMinimumLevel is not { } minimum || minimum < 0 ||
             raw.HasMaximumLevel && raw.DeclaredMaximumLevel is null || raw.DeclaredMaximumLevel < minimum ||
-            raw.DeclaredUsableJobs is not ["[all]"] || template.Jobs != ushort.MaxValue)
+            raw.HasUsableJobs && raw.DeclaredUsableJobs is not { Count: > 0 })
             return null;
         return new(template.Id, minimum, raw.DeclaredMaximumLevel ?? int.MaxValue, template.Jobs);
     }
 
-    public bool Allows(byte level, byte job) => job < 16 && level >= MinimumLevel && level <= MaximumLevel && (Jobs & 1 << job) != 0;
+    public bool Allows(byte level, byte job) => job < 16 && level >= MinimumLevel && level <= MaximumLevel;
 }

@@ -26,6 +26,11 @@ internal static class ChannelAreaLandingTests
     public static void Run(TownCatalog towns, PvfArchive pvf)
     {
         int before = Count;
+        foreach (int from in new[] { 23, 32, 45, 50 })
+            foreach (int to in new[] { 23, 32, 45, 50, 22, 62, 63 })
+                That(ChannelAreaLanding.SameSnapshotPredicates(from, to) == (from == to) &&
+                    ChannelAreaLanding.SameSnapshotPredicates(to, from) == (from == to),
+                    "四团跨类型双向隔离快照，同团保留原生快照资格");
         RunPvp(towns);
         var none = new HashSet<int>();
         var elven = new ChannelEntry(new(2, 1), 22, "[elven_guard]");
@@ -379,11 +384,11 @@ internal static class ChannelAreaLandingTests
         // 47=决斗场无双频道（type 8，33f95e72 接入）、48=帝国竞技场（type 39）同属按频道落点出门，不随普通频道回记住地区。
         // 决斗场普通入口按客户端 etc/pvpchannellist.etc 登记为 101（原 40 已不存在），特殊出口清单随目录取号。
         // 55=自由练习频道（type 5，dc3f551b 接入；222cd1db 起 LOGIN 保留新版 type13），同属决斗类频道，房间出口不随普通频道回记住地区。
-        var specialChannels = new HashSet<int> { 19, 20, 23, 24, 26, 31, 32, 35, 36, 39, 101, 41, 42, 43, 44, 45, 46, 47, 48, 50, 51, 55, 56 };
-        That(script.Channels.All(row => row.Number != 49 && row.Type != 40), "退役频道不再发布");
+        var specialChannels = new HashSet<int> { 19, 20, 23, 24, 26, 31, 32, 35, 36, 39, 101, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 55, 56 };
+        That(script.Channels.Single(row => row.Number == 49) is { Type: 40, Group: "[beast]" }, "改版魔兽频道独立发布");
         var retiredEntry = new ChannelEntry(new(2,49),40,"[beast]");
-        That(ChannelAreaLanding.Decide(towns,retiredEntry,95,new HashSet<int> {5927}).Spot is null,
-            "旧type40即使保留资格历史也没有专用落点");
+        That(ChannelAreaLanding.Decide(towns,retiredEntry,95,new HashSet<int> {5927}).Spot is { Town: 51 },
+            "type40魔兽频道使用专属城镇51");
         RunLegacyTownReturn(towns);
         var tagChannel = script.Channels.Single(row => row.Number == 46);
         That(tagChannel.Type == 53 && tagChannel.Group == "[evildom_gathering]",

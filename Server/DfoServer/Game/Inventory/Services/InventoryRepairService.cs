@@ -9,6 +9,11 @@ namespace DfoServer.Game.Inventory.Services;
 internal sealed class InventoryRepairService(ItemCatalog catalog, EquipmentRepairCatalog repair, TownCatalog? towns = null, TimeProvider? clock = null)
 {
     readonly TimeProvider clock = clock ?? TimeProvider.System;
+
+    // 02355D60的一键修理跳过旧符咒，036E9160也拒绝其单件修理；Heraldry仍按普通耐久修复。
+    static bool SupportsRepair(ItemTemplate template) => !template.IsQuickSlotEquipment ||
+        template.QuickSlotEquipment is { Heraldry: true };
+
     public InventoryResult Repair(Character character, RepairEquipmentRequest request, DateTimeOffset? utcNow = null,
         bool clientBattleWear = false, bool inDungeon = false)
     {
@@ -56,6 +61,11 @@ internal sealed class InventoryRepairService(ItemCatalog catalog, EquipmentRepai
                 continue;
             }
             var template = catalog.Get(item.Core.ItemId);
+            if (!SupportsRepair(template))
+            {
+                if (!all) return InventoryResult.Reject(19) with { RejectReason = "old_charm_requires_charging" };
+                continue;
+            }
             if (tool?.Label == "[repair coupon]" && template.Durability == 0) return InventoryResult.Reject(19);
             // 一键修理覆盖普通穿戴与快捷装备，不把背包装备页、仓库或特殊盾牌一起收费。
             if (all && template.EquipmentSlot is 13 or 24 or 30)
@@ -107,7 +117,8 @@ internal sealed class InventoryRepairService(ItemCatalog catalog, EquipmentRepai
                  item.Position.List == InventoryListType.Main && item.Position.Index is >= 3 and <= 8) &&
                 item.Core.Kind == ItemKind.Equipment && !item.IsExpired(now))
             .Select(item => (Item: item, Template: catalog.Get(item.Core.ItemId)))
-            .Where(row => row.Template is { Durability: > 0, EquipmentSlot: not (13 or 24 or 30) }).ToArray();
+            .Where(row => row.Template is { Durability: > 0, EquipmentSlot: not (13 or 24 or 30) } &&
+                SupportsRepair(row.Template)).ToArray();
         if (!candidates.Any(row => row.Item.Core.Durability == 0))
         {
             // 48已完成修理后，迟到的23只确认满耐久现状，不再次消费免费次数。

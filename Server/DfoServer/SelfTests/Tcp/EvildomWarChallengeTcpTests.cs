@@ -4,6 +4,7 @@ using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Dungeons;
 using DfoServer.Game.Inventory.Services;
+using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Skills;
 using DfoServer.GameWorld.Dungeons;
 using DfoServer.Network.Management;
@@ -25,7 +26,7 @@ internal static class EvildomWarChallengeTcpTests
         EvildomWarChallengeTests.RunResources(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources);
         const int recoveryPotionId = 1026;
         That(resources.ItemResources.RecoveryConsumables.TryGet(recoveryPotionId, out var recoveryPotion) &&
-            recoveryPotion.Allows(95, 0) && recoveryPotion.AllowedDungeons is null &&
+            recoveryPotion.Allows(95) && recoveryPotion.AllowedDungeons is null &&
             recoveryPotion.EffectMilliseconds == 600000 && (recoveryPotion.EffectMaintenance & 2) == 0,
             "英雄恢复夹具取候选真实食人魔药剂，95级可用且持续药效须在Town边界清理");
         var catalog = SelfTestCatalogs.Dungeons(resources.Archive);
@@ -78,7 +79,20 @@ internal static class EvildomWarChallengeTcpTests
                         var items = resources.ItemResources;
                         var granted = InventoryRewardGrantService.TryGrantBatch(role, [new(recoveryPotionId, 2)],
                             items.Items, items.GoldLimits, items.EpicPieces, DateTimeOffset.UtcNow);
-                        slot = InventoryService.Commit(repository, owner, role, granted).Slot;
+                        role = InventoryService.Commit(repository, owner, role, granted);
+                        if (count == 1)
+                        {
+                            var range = ItemSlotBoundService.Range(DfoServer.GameWorld.Items.ItemKind.Material, role.Inventory);
+                            var occupied = role.Inventory.Items.Select(item => item.Position).ToHashSet();
+                            var filler = InventoryRewardGrantService.Create(items.Items.Get(3299));
+                            var full = role.Inventory with { Items = [.. role.Inventory.Items,
+                                .. Enumerable.Range(range.Start, range.End - range.Start + 1)
+                                    .Select(at => new InventorySlot(InventoryListType.Main, checked((short)at)))
+                                    .Where(position => !occupied.Contains(position))
+                                    .Select(position => new InventoryItem(0, position, filler))] };
+                            role = repository.CommitInventory(owner, role, new(role.Inventory, full, "hero_material_full_fixture"));
+                        }
+                        slot = role.Slot;
                     }
                     var peer = Open(fixture, account, gamePort: endpoints[56], channelNumber: 56);
                     peers.Add(peer);
@@ -214,11 +228,14 @@ internal static class EvildomWarChallengeTcpTests
                     {
                         int bossAt = Enumerable.Range(0, map[18]).Select(index => 19 + index * 22)
                             .Single(at => U32(map, at + 8) == 407000556);
+                        ushort rejectedKey = AntonTcpProbe.TakeFiendwarKey(leader);
+                        byte[] wrong = SpawnBody(leader, U16(map, bossAt + 6), 407000557, rejectedKey, spawnSequence++);
+                        Spawn(leader, wrong); Spawn(leader, wrong);
+                        ChildDeath(rejectedKey, map[bossAt + 12], expected: false);
+                        Spawn(leader, SpawnBody(leader, U16(map, bossAt + 6), 407000559, rejectedKey, spawnSequence++));
+                        ChildDeath(rejectedKey, map[bossAt + 12], expected: false);
                         ushort dummyKey = AntonTcpProbe.TakeFiendwarKey(leader);
                         byte[] dummyReport = SpawnBody(leader, U16(map, bossAt + 6), 407000559, dummyKey, spawnSequence++);
-                        byte[] wrong = (byte[])dummyReport.Clone();
-                        BinaryPrimitives.WriteUInt32LittleEndian(wrong.AsSpan(32), 407000557);
-                        Spawn(leader, wrong); ChildDeath(dummyKey, map[bossAt + 12], expected: false);
                         if (count == 4)
                         {
                             Spawn(peers[1], SpawnBody(peers[1], U16(map, bossAt + 6), 407000559, dummyKey, spawnSequence));
@@ -258,9 +275,13 @@ internal static class EvildomWarChallengeTcpTests
                         ushort sealKey = AntonTcpProbe.TakeFiendwarKey(leader);
                         byte[] sealReport = SpawnBody(leader, U16(sealMap, sealAt + 6), 407000557, sealKey, spawnSequence++);
                         Spawn(leader, sealReport);
-                        ushort nextSealKey = AntonTcpProbe.PeekFiendwarKey(leader);
+                        ushort nextSealKey = AntonTcpProbe.TakeFiendwarKey(leader);
                         Spawn(leader, SpawnBody(leader, U16(sealMap, sealAt + 6), 407000557, nextSealKey, spawnSequence++));
                         ChildDeath(nextSealKey, sealMap[sealAt + 12], expected: false);
+                        // 复现现场：缓存Boss的延迟559在封印房上报，重复557亦被活槽拒绝；已采用键仍须补齐。
+                        ushort cachedKey = AntonTcpProbe.TakeFiendwarKey(leader);
+                        Spawn(leader, SpawnBody(leader, U16(map, bossAt + 6), 407000559, cachedKey, spawnSequence++));
+                        ChildDeath(cachedKey, map[bossAt + 12], expected: false);
                         ChildDeath(dummyKey, map[bossAt + 12], expected: false);
                         leader.Send(45, unsupported);
                         That(All().All(rows => !rows.Any(packet => packet is { Kind: 0, Opcode: 29 })),
@@ -291,8 +312,9 @@ internal static class EvildomWarChallengeTcpTests
                         Spawn(leader, sealReport);
                         ChildDeath(sealKey, sealMap[sealAt + 12]);
                         ChildDeath(sealKey, sealMap[sealAt + 12]);
-                        That(AntonTcpProbe.TakeFiendwarKey(leader) == nextSealKey,
-                            "活槽拒绝没有消费服务端租约，跨房后仍以同一已授未用键发起合法下一轮");
+                        nextSealKey = AntonTcpProbe.TakeFiendwarKey(leader);
+                        That(nextSealKey != rejectedKey && nextSealKey != cachedKey,
+                            "被拒绝登记的原生已采用键保持墓碑，跨房补号后不复用旧键");
                         Spawn(leader, SpawnBody(leader, U16(sealMap, sealAt + 6), 407000557, nextSealKey, spawnSequence++));
                         ChildDeath(nextSealKey, sealMap[sealAt + 12]);
                         for (int round = 0; round < 3; round++)
@@ -313,8 +335,11 @@ internal static class EvildomWarChallengeTcpTests
                         byte[] death = FormalDungeonTcpTests.Death(U16(map, offset + 6), leader.Id, map[offset + 12]);
                         if (x == 12 && U32(map, offset + 8) == 407000556) bossDeath = death;
                         leader.Send(39, death);
-                        That(All().All(rows => rows.Any(packet => packet is { Kind: 0, Opcode: 38 })),
-                            "英雄真实演员死亡由共享实例逐成员提交后发布");
+                        That(All().All(rows => rows.Any(packet => packet is { Kind: 0, Opcode: 38 }) &&
+                            rows.Where(packet => packet is { Kind: 0, Opcode: 38 }).All(packet =>
+                                packet.Body is { Length: 9 } body && U16(body, 2) == 0) &&
+                            !rows.Any(packet => packet is { Kind: 0, Opcode: 40 })),
+                            "英雄各房真实怪物及Boss死亡同步零掉落38，不产生地面物品");
                     }
                     if (x == 12) break;
                     byte[] move = new byte[100]; move[0] = (byte)(x + 1);
@@ -350,6 +375,9 @@ internal static class EvildomWarChallengeTcpTests
                         "每位真实成员由46提交自己唯一正式结算");
                     That(settled.Any(packet => packet is { Kind: 0, Opcode: 35 }),
                         "英雄同次结算明确发布真实通关牌，不以另一次Drain漏看结果");
+                    var cardGroups = DungeonSettlementProtocolTests.CardRewards(settled.Single(packet => packet is { Kind: 0, Opcode: 35 }).Body);
+                    That(cardGroups[0][peers.IndexOf(peer)].SequenceEqual(new (uint, uint)[] { (0, 0), (490014021, 1) }),
+                        "英雄翻牌只预载零金币首槽及PVF唯一装饰，不附加护石符文或碎片");
                     string committed = Assets();
                     peer.Send(46, report);
                     That(All(peer)[peers.IndexOf(peer)].Any(packet => packet is { Kind: 0, Opcode: 34 }) && Assets() == committed,
@@ -357,6 +385,16 @@ internal static class EvildomWarChallengeTcpTests
                     That(fixture.Query("SELECT used FROM character_fatigue WHERE character_id=$p0", peer.Id) is [[0L]] &&
                         fixture.Query("SELECT count(*) FROM character_evildom_war_rewards WHERE character_id=$p0", peer.Id) is [[0L]],
                         "英雄结算保持无疲劳，不混普通三模式战役专用奖励账本");
+                    var frozen = fixture.Query("SELECT json_extract(plan_json,'$.Gold'),json_extract(plan_json,'$.Item.ItemId')," +
+                        "json_extract(plan_json,'$.Item.Value') FROM character_dungeon_card_rewards WHERE character_id=$p0", peer.Id);
+                    That(frozen is [[0L, 490014021L, 1L]], "每名英雄成员结算冻结唯一闪耀装饰，不生成普通装备牌");
+                    string account = (string)fixture.Query("SELECT account FROM characters WHERE id=$p0", peer.Id).Single()[0];
+                    using var readOwner = new AccountOwners().Acquire(account, () => { });
+                    var heroLimit = ClearRewardLimitCatalog.Load(resources.Archive).FindDungeon(400000105)!;
+                    var usage = new CharacterRepository(fixture.Database).LoadClearRewardLimitUsage(readOwner, peer.Id,
+                        heroLimit, ClearRewardLimitPolicy.Period(fixture.UtcNow));
+                    That(usage == new DungeonIncountUsage(1, 1),
+                        "英雄资格在冻结通关牌时已持久消费本人日周各一次，不等待选牌或混其它成员");
                 }
                 foreach (var peer in peers)
                 {
@@ -367,6 +405,14 @@ internal static class EvildomWarChallengeTcpTests
                     peer.Send(71, [0, 3]);
                     That(All(peer)[peers.IndexOf(peer)].Any(packet => packet is { Kind: 1, Opcode: 71, Body: [1, ..] }),
                         "每名英雄成员通过正式请求领取本人免费牌");
+                    if (count == 1)
+                        That(fixture.Query("SELECT count(*) FROM mailbox_attachments a JOIN mailbox_messages m USING(mail_id) " +
+                            "JOIN character_inventory_items i USING(item_uid) WHERE m.recipient_id=$p0 " +
+                            "AND m.expires_at IS NULL AND json_extract(i.item_core,'$.ItemId')=490014021", peer.Id) is [[1L]],
+                            "英雄材料页满时实际选牌将唯一闪耀装饰转永久邮件");
+                    else
+                        That(fixture.Query("SELECT count(*) FROM character_inventory_items WHERE character_id=$p0 AND json_extract(item_core,'$.ItemId')=490014021", peer.Id)
+                            is [[1L]], "英雄闪耀装饰实际进入本人背包");
                     string claimed = Assets();
                     peer.Send(71, [0, 3]); All(peer);
                     That(Assets() == claimed, "英雄重复免费牌不再次改变角色、物品、邮件或结算账本");

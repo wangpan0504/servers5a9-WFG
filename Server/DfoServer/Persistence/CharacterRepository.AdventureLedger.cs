@@ -154,15 +154,18 @@ internal sealed partial class CharacterRepository
     }
 
     // 计入来源走完整进度写入（等级、经验、余数、结晶、胶囊、排除额）；排除来源只写排除额。
-    void WriteAdventureCredit(SqliteConnection db, SqliteTransaction tx, string account,
+    AdventureProgressionCommit? WriteAdventureCredit(SqliteConnection db, SqliteTransaction tx, string account,
         AdventureCreditPlan plan, AdventureCreditSource source, AdventureCatalog catalog)
     {
-        if (plan.After == plan.Before) return;
+        if (plan.After == plan.Before) return null;
         if (source == AdventureCreditSource.Earned)
         {
             WriteAdventureProgression(db, tx, account, plan.Before, plan.After, catalog);
             ApplyBattlePassBraveCrystalAcquisition(db, tx, account, plan, source, catalog);
-            return;
+            // 只携带1349可见变化，不因余数、对账或结晶单独变化重复刷新实体。
+            return plan.After.Level != plan.Before.Level || plan.After.Experience != plan.Before.Experience ||
+                plan.After.CapsuleExperience != plan.Before.CapsuleExperience
+                ? new(plan.After with { Revision = plan.Before.Revision + 1 }, plan.RawOverflow) : null;
         }
         using var command = db.CreateCommand(); command.Transaction = tx;
         command.Parameters.AddWithValue("$account", account);
@@ -170,6 +173,7 @@ internal sealed partial class CharacterRepository
         command.Parameters.AddWithValue("$before", plan.Before.Revision);
         command.CommandText = "UPDATE account_adventures SET revision=revision+1,excluded_experience=$excluded WHERE account=$account AND revision=$before";
         if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("冒险团排除经验版本失配");
+        return null;
     }
 
     // 一次性开启账本：自开启时已到40级的角色经验计入，开启总量取「已有精确总量」与「名册经验 + 熟练度换算」的较大者。

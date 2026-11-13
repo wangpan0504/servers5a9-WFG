@@ -49,7 +49,14 @@ internal static class DailyConsumedBoosterTcpTests
                 "当日重放没有扣源、发奖或提交revision");
             peer.Send(160, Build(writer => { writer.Write((short)66); writer.Write(1); }));
             That(peer.Expect(1, 160).Body[0] == 1, "自奖盒TCP成功ACK");
-            peer.Expect(0, 14);
+            var delta = peer.Expect(0, 14).Body;
+            // 随机奖励先占原源槽时，正式投影先清除旧UID，再发布新实例；只接收这个精确清槽包。
+            byte[] replaced = Build(writer =>
+            {
+                writer.Write((byte)0); writer.Write((ushort)1); writer.Write((ushort)66);
+                writer.Write(-1); writer.Write(new byte[117]);
+            });
+            if (delta.AsSpan().SequenceEqual(replaced)) peer.Expect(0, 14);
             Used(peer, resources, Heart, 1, false, Source, Heart);
             peer.Barrier();
             That(Quantity(Heart) == 1, "实际随机奖励后自奖礼盒精确净0，不额外保留源");

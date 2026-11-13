@@ -18,7 +18,10 @@ internal sealed record OperationHopeRewardPreparation(QuestCompletionOutcome Out
 
 internal sealed record OperationHopeRewardCommit(Character Character, ImmutableArray<QuestGrantedItem> Rewards,
     QuestExperienceReward ExperienceReward, uint GainedExperience, bool Duplicate, bool ProjectionCurrent,
-    byte PreviousLevel, CharacterLearningState PreviousLearning, ImmutableArray<InventorySlot> ChangedSlots);
+    byte PreviousLevel, CharacterLearningState PreviousLearning, ImmutableArray<InventorySlot> ChangedSlots)
+{
+    public DfoServer.Game.Adventure.AdventureProgressionCommit? Adventure { get; init; }
+}
 
 // 只由原 Run 的已提交死亡和终末通关冻结，不接收客户端上报的完成标记。
 internal sealed class OperationHopeRewardPlan

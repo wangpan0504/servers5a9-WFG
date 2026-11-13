@@ -20,14 +20,18 @@ internal sealed record ServerOptions
     public int ChannelEntryPortBase { get; init; }
     // 0 表示关闭。监听固定在 127.0.0.1，不跟随 ListenAddress。
     public int GmPort { get; init; }
-    // 嵌入服务进程的 GM 网页站点；0 表示关闭。监听固定在 127.0.0.1。
+    // 嵌入服务进程的 GM 网页站点；0 表示关闭。监听随 ListenAddress，管理路由仅接受本机来源。
     public int GmWebPort { get; init; }
-    // 充值页独立于管理开关，正式启动默认HTTP80；测试可分配隔离端口。
-    public int RechargeWebPort { get; init; } = 80;
+    // 充值页独立于管理开关，正式启动默认HTTP23104；测试可分配隔离端口。
+    public int RechargeWebPort { get; init; } = 23104;
     public int PacketHttpPort { get; init; }
     public string PvfPath { get; init; } = Path.Combine(AppContext.BaseDirectory, "Data", "Pvf", "Script.pvf");
     public string DataDirectory { get; init; } = Path.Combine(AppContext.BaseDirectory, "Data");
     public string LogDirectory { get; init; } = Path.Combine(AppContext.BaseDirectory, "Logs");
+    public bool FileLogsEnabled { get; init; }
+    public string ResourcesDirectory { get; init; } = Path.Combine(AppContext.BaseDirectory, "Resources");
+    public string LauncherSession { get; init; } = "";
+    public string LogicalRoot { get; init; } = "";
     public string? PacketCaptureDirectory { get; init; }
     public string DevelopmentAccount => LoginCredentials.DevelopmentAccount;
     public DuplicateLoginPolicy DuplicateLoginPolicy => DuplicateLoginPolicy.ReplaceExisting;
@@ -43,6 +47,10 @@ internal sealed record ServerOptions
     public int SessionTtlSeconds { get; init; } = 300;
     // 自制累计赠礼页面协议独立开关，不改变活动购买资格。
     public bool EnablePromotionPage { get; init; }
+    // 星河裂缝运行开关；默认关闭，开启后由 Runtime 显式装配活动目录、商店门禁和 10005 状态。
+    public bool EpicRoad2019Enabled { get; init; }
+    // 本服模拟装备奖励独立开关；活动与此开关同时开启才装配。
+    public bool EpicRoad2019SimulatedDropsEnabled { get; init; }
     // 普通副本加载后只读独立宿主资格探测；默认 Off，不改变入场、权威或结算。
     public bool EnableHostedDungeonEligibility { get; init; }
     public string? HostedDungeonEligibilityHost { get; init; }
@@ -67,6 +75,16 @@ internal sealed record ServerOptions
                 value = name switch
                 {
                     "--server-ip" => value,
+                    "--log-dir" => value with { LogDirectory = StoragePath(argument, name) },
+                    "--file-logs" => value with { FileLogsEnabled = argument switch
+                    {
+                        "Off" => false,
+                        "On" => true,
+                        _ => throw new InvalidDataException(name + " 必须为 Off 或 On")
+                    } },
+                    "--resources-dir" => value with { ResourcesDirectory = StoragePath(argument, name) },
+                    "--launcher-session" => value with { LauncherSession = Guid.TryParseExact(argument, "N", out _) ? argument : throw new InvalidDataException(name + " 必须为 N 格式启动代次") },
+                    "--logical-root" => value with { LogicalRoot = StoragePath(argument, name) },
                     "--listen-ip" => value with { ListenAddress = argument },
                     "--channel-port" => value with { ChannelPort = Number(argument, name) },
                     "--game-port" => value with { GamePort = Number(argument, name) },
@@ -83,6 +101,18 @@ internal sealed record ServerOptions
                     "--battle-pass-season" => value with { BattlePassSeasonKey = !string.IsNullOrWhiteSpace(argument) && argument == argument.Trim()
                         ? argument : throw new InvalidDataException(name + " 必须为非空且无首尾空白的稳定赛季标识") },
                     "--promotion-page" => value with { EnablePromotionPage = argument switch
+                    {
+                        "Off" => false,
+                        "On" => true,
+                        _ => throw new InvalidDataException(name + " 必须为 Off 或 On")
+                    } },
+                    "--epic-road-2019" => value with { EpicRoad2019Enabled = argument switch
+                    {
+                        "Off" => false,
+                        "On" => true,
+                        _ => throw new InvalidDataException(name + " 必须为 Off 或 On")
+                    } },
+                    "--epic-road-2019-simulated-drops" => value with { EpicRoad2019SimulatedDropsEnabled = argument switch
                     {
                         "Off" => false,
                         "On" => true,
@@ -138,6 +168,8 @@ internal sealed record ServerOptions
         }
         if (value.BattlePassSeasonStart is not null && value.BattlePassSeasonKey is null)
             throw new InvalidDataException("--battle-pass-start 需要显式 --battle-pass-season");
+        if ((value.LauncherSession.Length > 0) != (value.LogicalRoot.Length > 0))
+            throw new InvalidDataException("--launcher-session 与 --logical-root 必须同时指定");
         return value;
     }
 

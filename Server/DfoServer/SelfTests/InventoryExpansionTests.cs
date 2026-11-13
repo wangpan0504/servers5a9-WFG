@@ -76,12 +76,14 @@ internal static class InventoryExpansionTests
         {
             role with { Job = 1, Level = 9, Skills = [new(999, 1)] },
             role with { Job = 1, Level = 21, Skills = [new(999, 1)] },
-            role with { Job = 0, Level = 10, Skills = [new(999, 1)] },
+            role with { Job = 255, Level = 10, Skills = [new(999, 1)] },
             role with { Job = 1, Level = 10, Skills = [new(999, 0)] }
         }) That(!InventoryExpansionService.Plan(sample, 65, qualified, 1000).Accepted,
-            "合成模板的等级上下界、职业与技能不足均拒绝，不改变真实资源目录");
+            "合成模板的等级上下界、非法职业编号与技能不足均拒绝，不改变真实资源目录");
         That(InventoryExpansionService.Plan(role with { Job = 1, Level = 10, Skills = [new(999, 1)] },
-            65, qualified, 1000).Accepted, "完整合成模板资格满足时允许规划");
+            65, qualified, 1000).Accepted &&
+            InventoryExpansionService.Plan(role with { Job = 0, Level = 10, Skills = [new(999, 1)] },
+                65, qualified, 1000).Accepted, "完整合成模板资格满足时允许规划，不重复匹配usable job");
         RunRepository(ticket, definition!);
     }
 

@@ -6,6 +6,16 @@
 
 ## 命令
 
+现行两女平衡使用 `prepare-support-balanced-tiers current.pvf verified-overdrive-report.json new-output`，
+专项验证为测试项目 `--balanced-tiers current.pvf verified-overdrive-report.json new-output`。
+它核对134个专用模板、实际装备和已验证的装备加级，保留学习/被动/装备/AI/KEY，替换旧主BUFF保底加值，
+以奶爸同档基础力智4950/7750/14750、三攻850/1250/2350重算原生百分比修正；
+觉醒以奶爸有效40级及体精5350/6400/8650、原生分母750为同档基准，修正两女一觉的力智列。
+配套客户端须校准两女实际适用智力7500/9000/11000，避免后续被动和装备重复提高施法属性。
+小魔女按偏爱之前平衡；偏爱、圣歌及装备原生追加效果继续另算，不预先从基础奶量扣除。
+报告列出的是同档基础公式结果，装备触发、持续技能叠加和游戏最终面板仍须实机验收。
+历史 `prepare-support-effective-tiers` 用于旧输入迁移，不得在平衡后的候选上重叠应用。
+
 ```text
 SupportApcResourcePatch inspect base.pvf --ids
 SupportApcResourcePatch audit-migration historical-before.pvf historical-after.pvf current.pvf audit.json
@@ -15,7 +25,83 @@ SupportApcResourcePatch prepare-templates current.pvf new-template-directory
 SupportApcResourcePatch pair-resources map-manifest.json template-plan.json client-contract.json completed-manifest.json
 SupportApcResourcePatch export-evidence current.pvf template-plan.json new-evidence-directory
 SupportApcResourcePatch prepare-overdrive current.pvf Tools/SupportApcResourcePatch/OverdriveConfiguration.json new-output-directory
+SupportApcResourcePatch prepare-combat current.pvf new-output-directory
+SupportApcResourcePatch prepare-female-restore current.pvf restore-config.json new-output-directory
+SupportApcResourcePatch audit-profile-delta source.pvf candidate.pvf delta.json new-report.json
 ```
+
+## 两女专用资源恢复
+
+`prepare-female-restore`按配置中的有序历史token计划恢复两女专属模板、AI、KEY与注册，
+字符串按当前池重新登记，保留现行奶爸、光兵资源。地图仅取历史迁移证据、当前正式准入
+和当前唯一9986友方普通行精确匹配的交集；禁止模式共用地图跳过。两行追加到块尾，原行及ordinal保留。
+恢复报告逐图给出补齐或跳过理由；显示world须按同一批准集合同步端点，不能全图复制。
+
+`audit-profile-delta`逐token回读目标，按原生MAP八字段结构核验原行与追加行，
+逐份核对非目标资源raw、类型、大小及资源数量闭包。审计通过仍需服务端资源测试、
+客户端插件与native/wide完整配套验证，不自动成为可发行候选。
+
+## 魔兽两女地图补齐
+
+魔兽5335–5339不使用普通`DungeonDefinition.Mazes`列表；不能把列表为空当成没有实际地图。
+先用`Tools/Export-RevisedBeastCompanionMaps.ps1 -PvfPath <最终累计PVF> -ServerAssembly <正式DfoServer.dll> -OutputPath <新批准JSON>`，
+通过正式`RevisedBeastMaze`解析五副本三档，核准20张可达地图及原raw摘要。
+再运行`prepare-female-beast-maps <同一PVF> <批准JSON> <不存在的新输出目录>`。
+只复制现存唯一光兵友方行的坐标、阵营和品级，在末尾追加74990/19973；保留王富贵、光兵序号及所有非演员token。
+工具拒绝摘要变化、缺失两女模板、非本模式路径、镜像、重复地图、异常原行及不完整三档覆盖；重复执行不会覆盖既有产物。
+候选重包后仍须`audit-profile-delta`逐资源raw和全部目标token回读；未部署，实机表现待QA。
+回归入口：`dotnet run --project Tools/SupportApcResourcePatch.Tests -c Release -- --female-beast <最终累计PVF> <批准JSON> <新输出目录>`。
+
+## 现行四职业调度、地图与自然档次
+
+按当前累计输入依次生成差量；这些命令不覆盖输入，输出目录必须不存在：
+
+```text
+SupportApcResourcePatch export-support-map-eligibility DfoServer.dll current.pvf eligibility.json
+SupportApcResourcePatch prepare-paired-companion-maps current.pvf eligibility.json new-map-output
+SupportApcResourcePatch prepare-support-behavior current.pvf new-behavior-output
+SupportApcResourcePatch prepare-support-auxiliary behavior.pvf new-auxiliary-output
+SupportApcResourcePatch prepare-support-natural-tiers auxiliary.pvf verified-overdrive-report.json new-tier-output
+SupportApcResourcePatch prepare-support-effective-tiers current.pvf verified-natural-tier-report.json new-effective-output
+SupportApcResourcePatch prepare-support-opening current.pvf new-opening-output
+SupportApcResourcePatch prepare-support-damage current.pvf new-damage-output
+```
+
+地图准入通过指定的正式服务端程序集解析，包含两活动及魔兽三档专用迷宫；只在允许且没有被禁止模式共用、已有王富贵或光兵专用友方行的地图末尾补缺失两女，原行及序号不变。解析错误单独输出，不默认为允许。
+
+四职业现行行为不调度普攻，原KEY及其序号保留，新KEY仅在末尾追加。攻击使用学习门槛低于50的主动小技能；保留增益觉醒及辅助职责，近敌350×100，客户端靠近真人500×250；房内索敌使用有限范围1048576。奶妈补36/91，小魔女补341/344/349与实际前置；增益按缺失或将到期补，净化仅在可解除异常时使用，原生冷却、执行态、人偶、复活和维持态门禁继续生效。客户端仅对专用支援身份禁止光兵念气波12、奶妈二觉93、奶爸正义审判81及原有光之复仇23；技能定义、学习与KEY保留。
+
+女性主BUFF按实际装备技能加成反算学习等级，有效档次为20/30/35；职业被动按原学习基线、增加5级、增加10级且不超过真实上限。自然档次命令用于从旧资源迁移，不应重复应用于现行分档资源。
+
+现行累计输入再执行`prepare-support-effective-tiers`，以已核验自然档次报告复核134个模板、档位和主BUFF学习/装备等级。配套客户端将专用两女最终适用智力校准为6000/7200/9000；工具依据普通副本真实SKL基础列及智力分母，对每个专用AIC主BUFF五列追加原生`skill data up`正向加值。未计圣歌、偏爱和装备额外正增幅时，公式下限为力智4950/7750/14750、三攻850/1250/2350，与奶爸同档一致；整数基础列留一格裕量。保留装备、学习、被动、AI、KEY、持续时间及所有共享玩家SKL。已有AIC修正时拒绝重复叠加，必须明确协调。两端需配套更新，最终游戏面板与自然行为仍须实机验收。
+
+`prepare-support-opening`读取当前134个女性模板的实际KEY下标，仅重建已有84份女性AI：奶妈先勇气祝福、守护祝福，小魔女先禁忌诅咒、偏爱，再沿原条件治疗和战斗。保留AIC、KEY、地图、技能定义、等级和装备；缺失或不一致的共享AI拒绝生成。该顺序调整不代表已经实机确认所有女性增益识别、挂机和重复施法问题均已解决。
+
+`prepare-support-damage`只调整当前168个专用模板的`attack damage rate`为1.00，撤销原来的0.10额外折扣；装备、技能、职业、增益、AI和原生伤害计算保持。按当前名册验证身份、职业、成长、等级及旧倍率，输出逐资源并发保护的差量，拒绝未知倍率和覆盖已有输出。后续模板生成入口也使用1.00。专项验证入口为测试项目的`--damage <最终累计PVF> <新输出目录>`；写包后须回读所有模板，并完成非目标raw保持审计。伤害插件准入由客户端DpsMeter配套实现。
+
+专项入口为测试项目的`--behavior`、`--paired-maps`、`--auxiliary`、`--natural-tiers`、`--effective-tiers`、`--opening`。各步写包后必须逐资源raw审计；下述旧生成器仅供历史输入迁移，不能覆盖现行累计调度。
+
+## 两职业战斗动作差量
+
+`prepare-combat` 只读最终累计输入，输出 `support-profile-delta-v1` 的 `delta.json` 和逐模板
+`combat-report.json`，不重包、不覆盖PVF。只处理注册的奶爸20900、20903至20905与光兵9986、9600至9628；
+每项先核对职业和原KEY完整顺序，任一缺失或不匹配即拒绝。保留全部原KEY下标，在末尾追加
+`support_attack.key`，已存在同一追加项时不重复添加；输出目录必须不存在。
+
+辅助技能优先级保持，光兵不再生成念气波12的施放分支。两职业在辅助和技能分支结束后增加
+100×50范围的原生普攻KEY，先沿攻击目标转向，再使用`x`输入；没有近身有效敌人时保持待机，
+不对远处目标挥空拳。原KEY中的念气波资源及学习等级保留，但新动作图没有调用。
+
+战斗场景查询继续使用原生`enemy number of in attack area()`，其18号操作枚举当前场景的
+战斗对象，检查类型掩码0x11、存活和敌对关系，不按普通、精英、绿名或Boss品级过滤。
+两职业查询矩形扩为四向1,048,576单位的有限范围；原生将浮点边界转为有符号坐标，不能用
+无穷或浮点最大值代替。觉醒决策取消额外600距离门禁，实际技能命中仍由原生技能决定。
+视野0和跟随目的地5保持，未改变追随、三档属性、装备、技能等级、外观、地图或真人资源。
+
+专项入口：`dotnet run --project Tools/SupportApcResourcePatch.Tests -c Release -- <最终累计PVF> <不存在的新输出目录>`。
+它解释实际生成的规则及导入链，覆盖近身普攻、远敌觉醒、增益优先、无念气波、维持保护与
+敌对/死亡/类型边界，并逐token证明34份AIC的非KEY内容不变。解释回放不是游戏实机验收；
+最终PVF还须由资源owner累计装配、完整回读，客户端自然施放与绿名实战表现待QA。
 
 ## 当前注册模板强化差量
 

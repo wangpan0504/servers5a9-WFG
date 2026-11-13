@@ -14,7 +14,7 @@ internal static class PartyProjection
         void Actor(PublicCharacterSnapshot identity) => Post(NotiPacketType.USERINFO,
             TownPackets.Actor(identity.Character, identity.PvpGrade, identity.Channel, DateTimeOffset.UtcNow.ToUnixTimeSeconds(), identity.AdventureName,
                 identity.Phase is SessionPhase.Dungeon or SessionPhase.Settlement ? ActorSceneState.Dungeon : ActorSceneState.Town,
-                identity.PremiumPcRoom), "party_actor");
+                identity.PremiumPcRoom, returningAdventurerType: identity.ReturningAdventurerType, marriage: context.MarriageAppearance), "party_actor");
         if (notice.Kind == PartyNoticeKind.SettlementCard && notice.Dungeon is { } dungeon)
         {
             if (context.Stop.IsCancellationRequested || context.PartyCardTemplate is not { } template ||
@@ -59,7 +59,7 @@ internal static class PartyProjection
                     var body = TownPackets.Actor(current, changed.Identity.PvpGrade, changed.Identity.Channel,
                             adventureName: changed.Identity.AdventureName,
                             sceneState: changed.Identity.Phase is SessionPhase.Dungeon or SessionPhase.Settlement
-                                ? ActorSceneState.Dungeon : ActorSceneState.Town, premiumPcRoom: changed.Identity.PremiumPcRoom);
+                                ? ActorSceneState.Dungeon : ActorSceneState.Town, premiumPcRoom: changed.Identity.PremiumPcRoom, returningAdventurerType: changed.Actor.Session.ReturningAdventurerType, marriage: context.MarriageAppearance);
                     actorPrepared = true;
                     return body;
                 }
@@ -107,6 +107,9 @@ internal static class PartyProjection
                 Post(NotiPacketType.USER_UDP_IP_PORT, Endpoints(), "party_endpoints");
             }
             if (notice.Kind == PartyNoticeKind.Endpoints) return;
+            // 原生WALKOUT先按旧槽查Actor；清名册后再通知会静默。两帧共用原接收者守卫。
+            if (notice.Kind == PartyNoticeKind.Removed && notice.RemovalReason == PartyRemovalReason.Kicked)
+                Post(NotiPacketType.WALKOUT, PartyPackets.Kicked(notice.Recipient.Slot), "party_kicked");
             Post(NotiPacketType.PARTY_INFO, PartyPackets.Information(party.Id, channel.ServerIndex, checked((byte)channel.Number),
                 party.Members.Select(m => (m.Slot, m.Actor.Character.Id)).ToArray(), party.Leader,
                 notice.Kind == PartyNoticeKind.Removed, party.Settings), "party_info");

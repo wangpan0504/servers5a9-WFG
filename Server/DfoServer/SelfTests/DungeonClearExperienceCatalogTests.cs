@@ -65,7 +65,14 @@ internal static class DungeonClearExperienceCatalogTests
         Reject<NotSupportedException>(() => catalog.Calculate(Dungeon(level: 0), 0, 0), "零基准等级拒绝");
         Reject<NotSupportedException>(() => catalog.Calculate(Dungeon(level: 4), 0, 0), "表外基准等级拒绝");
         Reject<NotSupportedException>(() => catalog.Calculate(dungeon, 5, 0), "未知难度不夹取");
-        Reject<InvalidDataException>(() => catalog.Calculate(Dungeon(weight: Integer(0)), 0, 0), "显式零权重拒绝");
+        foreach (var zero in new[] { Integer(0), Floating(0), Floating(-0.0f) })
+        {
+            var reward = catalog.Calculate(Dungeon(weight: zero), 4, 99);
+            That(reward.BaseExperience == 0 && reward.RankExperience == 0 && reward.TotalExperience == 0,
+                "显式零通关经验权重保留零基础与评分奖励，不中断正常结算");
+        }
+        Reject<InvalidDataException>(() => catalog.Calculate(Dungeon(weight: Floating(float.Epsilon)), 0, 0),
+            "正权重转换下溢不冒充显式零声明");
         Reject<InvalidDataException>(() => catalog.Calculate(Dungeon(weight: Floating(float.NaN)), 0, 0), "NaN权重拒绝");
         Reject<InvalidDataException>(() => catalog.Calculate(Dungeon(weight: Floating(float.NegativeInfinity)), 0, 0), "负无穷不能降为中性权重");
         Reject<InvalidDataException>(() => catalog.Calculate(Dungeon(weight: new PvfToken(6, 0)), 0, 0), "字符串权重拒绝");

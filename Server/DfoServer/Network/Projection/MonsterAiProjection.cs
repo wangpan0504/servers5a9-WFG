@@ -17,12 +17,12 @@ internal static class MonsterAiProjection
             (Game.Titles.FiendwarTitleFacts.IsTeamDungeon(receipt.Entry.DungeonId) || receipt.Entry.DungeonId is >= 5350 and <= 5358);
         bool dynamicRoom = counterRoom || receipt.Entry.DungeonId == EvildomWarChallengeEntryPolicy.DungeonId &&
             receipt.Entry.Difficulty == 2 && EvildomWarChallengeEntryPolicy.AllowsPartyCount(receipt.Entry.PartyMemberCount) && receipt.Entry.RaidEntry is null;
-        if (receipt.MonsterAi is not { } && !dynamicRoom && !antonRoom) return;
+        if (receipt.MonsterAi is not { } && receipt.HelperLanding is null && !dynamicRoom && !antonRoom) return;
         var profile = receipt.MonsterAi ?? MonsterAiProfile.Native;
         DungeonMap map = receipt.Snapshot.CurrentMap;
         uint serial = context.NextMonsterAiSerial();
         byte[] body = MonsterAiPackets.Encode(serial, receipt.Entry.DungeonId, checked((uint)map.Id),
-            receipt.MapSeed, map.Position, profile);
+            receipt.MapSeed, map.Position, profile, receipt.HelperLanding);
         context.FiendwarCounterRoom = dynamicRoom ? new(serial, receipt) : null;
         if (antonRoom)
         {

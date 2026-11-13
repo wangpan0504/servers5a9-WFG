@@ -28,14 +28,15 @@ namespace DfoServer.Testing;
 /// <item>超长文本：入站按 200 字节截断，下行正文 = 8 字节头 + 200 字节文本，不断线。</item>
 /// <item>每连接节流：同一连接 1 秒内第 6 条被丢弃并记 <c>chat_throttled</c>。</item>
 /// <item>两种喇叭：槽位道具不符/为空拒绝且不扣；扣成功后库存 -1，且每个在线会话各收一帧
-/// <c>NOTI 0x0076</c> 喇叭页签行（<c>[type][B=0][C=0][D=0][E=0][str1 发言人][str2 正文][str3 占位]</c>）；
-/// 服务器喇叭发 <c>0x0E</c>（D&amp;F 官方标签）并投全服，频道喇叭发 <c>0x0B</c>（Ch. 频道标签）只投同频道；
+/// <c>NOTI 0x0076</c> 喇叭页签行（真实来源身份、发言人、正文、账号冒险团目标）；
+/// 服务器喇叭发type11并投同分组全部频道，频道喇叭发type13只投同频道，GM1120发type14；
 /// 喇叭不再弹旧的 <c>NOTI 0x06AD</c> 公告框。</item>
 /// </list>
 /// 期望值来自实测收包样本、反汇编结论与仓库既有背包查询，不调用服务端 Parser/Builder 反算。
 /// </summary>
-internal static class ChatTcpTests
+internal static partial class ChatTcpTests
 {
+    const string AlphaAdventureTarget = "AdventureTarget";
     const ushort CommandSendMessage = 0x0011;
     const ushort CommandItemHyperlink = 0x01A8;
     const ushort NoticeMessage = 0x0C;
@@ -55,6 +56,8 @@ internal static class ChatTcpTests
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
         int before = Count;
+        ChatServiceTests.OfficialMegaphoneRules();
+        ChatServiceTests.MegaphoneWire();
         var clock = new DailyBoosterTestClock(new DateTimeOffset(2026, 1, 15, 12, 0, 0, TimeSpan.Zero));
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "chat"), resources: resources, clock: clock);
         var repository = new CharacterRepository(fixture.Database);
@@ -80,6 +83,7 @@ internal static class ChatTcpTests
                         .Add(new(0, new(InventoryListType.Main, 68), InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(37), 1)))
                         .Add(new(0, new(InventoryListType.Main, 69), InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(36), 2)))
                         .Add(new(0, new(InventoryListType.Main, 70), InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(37), 2)))
+                        .Add(new(0, new(InventoryListType.Main, 71), InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(1120), 1)))
                 };
             if (name == "ChatD")
                 inventory = inventory with { Items = inventory.Items.Add(new(0,new(InventoryListType.Main,68),
@@ -87,6 +91,7 @@ internal static class ChatTcpTests
             profiles[name] = repository.Create(owner, candidate with { Level = 20, InitialLearning = learning, Inventory = inventory });
         }
 
+        OfficialMegaphoneSessions(fixture, resources, clock);
         await fixture.StartAsync();
 
         // 公会成员表：A、B 在选角前入会；C 的成员行在它选角之后才写入，用来验证"投递前锁内复核会话快照"。
@@ -220,7 +225,7 @@ internal static class ChatTcpTests
         delta.NoFrame(400, "公会聊天不投非成员", (0,65),(0,NoticeMessage));
 
         alpha.Send(CommandItemHyperlink,QuoteRequest(6,mixedQuote,equipment,stackable));
-        byte[] guildQuote=NamedLinkBody(6,"ChatA",mixedExpected,equipment,stackable);
+        byte[] guildQuote=NamedLinkBody(6,"ChatA",mixedExpected,"",equipment,stackable);
         Same(alpha.Expect(0,371).Body,guildQuote,"公会引用371包含前置标志、明确发言人及完整记录");
         Same(beta.Expect(0,371).Body,guildQuote,"公会队友收到完整装备及道具记录，非成员不得收到");
         alpha.Barrier();beta.Barrier();gamma.Barrier();delta.Barrier();
@@ -273,11 +278,30 @@ internal static class ChatTcpTests
         That(CountSlot(68) == channelMegaphoneBefore && channelMegaphoneBefore == 1, "槽位不匹配不扣道具");
 
         // ⑨ 频道喇叭（type 13）：槽 68 扣 1 个，同频道的 A、B、C 各收一帧 0x76 喇叭行
-        // （type 0x0B = Ch. 频道标签，str1=ChatA、str2=频道喇叭）；另一频道的 D 不收。
+        // （type13，str1=ChatA、str2=频道喇叭）；另一频道的D不收。
         NextChatWindow();
+        // 第8项先红：直接修改本组临时账号资料，真实请求的第三串必须是账号名而非固定X。
+        const string adventureTarget = AlphaAdventureTarget;
+        fixture.Sql("UPDATE account_adventures SET name=$p0,name_initialized=1 WHERE account='10000'", adventureTarget);
+        That(Convert.ToString(fixture.Query("SELECT name FROM account_adventures WHERE account='10000' AND name_initialized=1")[0][0]) == adventureTarget,
+            "item8_adventure_target_fixture: 临时账号已初始化独立冒险团名");
         alpha.Send(CommandSendMessage, SendBody(13, 0, 68, "频道喇叭"));
-        byte[] channelMegaphone = MegaphoneBody(13, "ChatA", "频道喇叭", 2, 10, alpha.Id);
-        Same(alpha.Expect(0, NoticeMegaphone).Body, channelMegaphone, "频道喇叭 0x76 正文");
+        byte[] channelMegaphone = MegaphoneBody(13, "ChatA", "频道喇叭", 2, 10, alpha.Id, AlphaAdventureTarget);
+        byte[] actualChannelMegaphone = alpha.Expect(0, NoticeMegaphone).Body;
+        int targetOffset = 6;
+        for (int index = 0; index < 2; index++)
+        {
+            That(targetOffset <= actualChannelMegaphone.Length - 4, "item8_adventure_target_frame: 前序字符串长度完整");
+            int length = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(actualChannelMegaphone.AsSpan(targetOffset)));
+            targetOffset = checked(targetOffset + 4 + length);
+        }
+        That(targetOffset <= actualChannelMegaphone.Length - 4, "item8_adventure_target_frame: 第三串长度完整");
+        int targetLength = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(actualChannelMegaphone.AsSpan(targetOffset)));
+        That(targetLength == actualChannelMegaphone.Length - targetOffset - 4, "item8_adventure_target_frame: 第三串恰为帧尾");
+        string actualAdventureTarget = Text.GetString(actualChannelMegaphone, targetOffset + 4, targetLength);
+        That(actualAdventureTarget == adventureTarget,
+            $"item8_adventure_target_real_account: 实际目标='{actualAdventureTarget}', 期望账号冒险团名='{adventureTarget}'（不是角色名或X）");
+        Same(actualChannelMegaphone, channelMegaphone, "频道喇叭 0x76 正文");
         alpha.Expect(0, NoticeUpdateItemList); // 本人背包差量：槽 68 数量减 1
         Same(beta.Expect(0, NoticeMegaphone).Body, channelMegaphone, "同频道接收者收到 0x76 喇叭行");
         Same(gamma.Expect(0, NoticeMegaphone).Body, channelMegaphone, "同频道接收者（第三个）收到 0x76");
@@ -285,10 +309,10 @@ internal static class ChatTcpTests
         That(CountSlot(68) == 0, "频道喇叭扣减后库存为 0");
 
         // ⑩ 服务器喇叭（type 11）：槽 67 扣 1 个（2→1），全服 4 个在线会话各收一帧 0x76 喇叭行
-        // （type 0x0E = D&F 官方标签，客户端会忽略 str1），不弹 0x06AD 公告框。
+        // （type11保留真实str1），不弹0x06AD公告框；官方type14仅用于1120。
         NextChatWindow();
         alpha.Send(CommandSendMessage, SendBody(11, 0, 67, "服务器喇叭"));
-        byte[] serverMegaphone = MegaphoneBody(11, "ChatA", "服务器喇叭", 2, 10, alpha.Id);
+        byte[] serverMegaphone = MegaphoneBody(11, "ChatA", "服务器喇叭", 2, 10, alpha.Id, AlphaAdventureTarget);
         Same(alpha.Expect(0, NoticeMegaphone).Body, serverMegaphone, "服务器喇叭 0x76 正文");
         alpha.Expect(0, NoticeUpdateItemList);
         Same(beta.Expect(0, NoticeMegaphone).Body, serverMegaphone, "服务器喇叭投同频道在线");
@@ -324,7 +348,7 @@ internal static class ChatTcpTests
         foreach(var (type,slot,recipients) in new[]{((byte)11,(uint)69,4),((byte)13,(uint)70,3)})
         {
             alpha.Send(CommandItemHyperlink,QuoteWithArgument(type,slot,mixedQuote,equipment,stackable));
-            byte[] expected=LinkedMegaphoneBody(type,alpha.Id,10,"ChatA",mixedExpected,equipment,stackable);
+            byte[] expected=LinkedMegaphoneBody(type,alpha.Id,10,"ChatA",mixedExpected,AlphaAdventureTarget,equipment,stackable);
             foreach(var peer in new[]{alpha,beta,gamma,delta}.Take(recipients))
                 Same(peer.Expect(0,372).Body,expected,"喇叭多引用按真实来源逐字节保留记录，表情资格过滤不改物品核心");
             alpha.Expect(0,NoticeUpdateItemList);
@@ -332,14 +356,14 @@ internal static class ChatTcpTests
             That(CountSlot((short)slot)==1,"一次引用发送只扣一个对应喇叭，不重复消费");
         }
         alpha.Send(CommandItemHyperlink,QuoteWithArgument(11,69,mixedQuote));
-        byte[] quoteFallback=MegaphoneBody(11,"ChatA",Text.GetString(mixedExpected),2,10,alpha.Id);
+        byte[] quoteFallback=MegaphoneBody(11,"ChatA",Text.GetString(mixedExpected),2,10,alpha.Id, AlphaAdventureTarget);
         foreach(var peer in new[]{alpha,beta,gamma,delta})
             Same(peer.Expect(0,NoticeMegaphone).Body,quoteFallback,"缺记录仍以原喇叭通道回退，不把喇叭变成普通聊天");
         alpha.Expect(0,NoticeUpdateItemList);
         alpha.Barrier();beta.Barrier();gamma.Barrier();delta.Barrier();
         That(CountSlot(69)==0,"喇叭引用降级后同样只消费本次一件源物品");
         delta.Send(CommandItemHyperlink,QuoteWithArgument(13,68,mixedQuote,equipment,stackable));
-        Same(delta.Expect(0,372).Body,LinkedMegaphoneBody(13,delta.Id,11,"ChatD",mixedExpected,equipment,stackable),
+        Same(delta.Expect(0,372).Body,LinkedMegaphoneBody(13,delta.Id,11,"ChatD",mixedExpected,"",equipment,stackable),
             "其他频道的引用喇叭保留自己的频道，只向该频道投递");
         delta.Expect(0,NoticeUpdateItemList);
         delta.Barrier();alpha.Barrier();beta.Barrier();gamma.Barrier();
@@ -354,7 +378,7 @@ internal static class ChatTcpTests
                 w.Write((byte)2);w.Write(equipment);w.Write(stackable);
             });
             alpha.Send(CommandItemHyperlink,request);
-            Same(delta.Expect(0,371).Body,NamedLinkBody(mode==40?(byte)36:mode,"ChatA",mixedExpected,equipment,stackable),
+            Same(delta.Expect(0,371).Body,NamedLinkBody(mode==40?(byte)36:mode,"ChatA",mixedExpected,AlphaAdventureTarget,equipment,stackable),
                 "私聊和一对一引用按名字跨频道只投目标，40回复归一36且不丢装备或道具记录");
             alpha.Barrier();beta.Barrier();gamma.Barrier();delta.Barrier();
         }
@@ -363,6 +387,28 @@ internal static class ChatTcpTests
         Same(beta.Expect(0,NoticeHyperLink).Body,HyperLinkBody(3,alpha.Id,"ChatA",mixedExpected,equipment,stackable),
             "原角色ID兼容入口的引用仍只投目标，不丢目标参数或降为公开广播");
         alpha.Barrier();beta.Barrier();gamma.Barrier();delta.Barrier();
+
+        // GM1120沿同一真实请求分派接入，重复文字/引用均不产生库存提交。
+        OfficialMegaphoneTcp(fixture, alpha, beta, gamma, delta, NextChatWindow, mixedQuote, mixedExpected, equipment, stackable);
+
+        // 复用当前无限1120源及真实分派，覆盖超过旧16B门的完整目标与无初始化/坏旧数据。
+        foreach (var (target, initialized, expectedTarget) in new[]
+        {
+            (new string('测', 8) + "A", 1, new string('测', 8) + "A"),
+            (new string('测', 16), 1, new string('测', 16)),
+            ("Uninitialized", 0, ""),
+            ("Illegal Target", 1, "")
+        })
+        {
+            NextChatWindow();
+            fixture.Sql("UPDATE account_adventures SET name=$p0,name_initialized=$p1 WHERE account='10000'", target, initialized);
+            alpha.Send(CommandSendMessage, SendBody(14, 0, 71, "长名目标"));
+            foreach (var peer in new[] { alpha, beta, gamma, delta })
+                Same(peer.Expect(0, NoticeMegaphone).Body, MegaphoneBody(14, "ChatA", "长名目标", 2, 10, alpha.Id, expectedTarget),
+                    "真实账号17B/32B目标完整，未初始化或坏名为空，不截成别名");
+            alpha.Barrier(); beta.Barrier(); gamma.Barrier(); delta.Barrier();
+        }
+        fixture.Sql("UPDATE account_adventures SET name=$p0,name_initialized=1 WHERE account='10000'", AlphaAdventureTarget);
 
         // 队伍聊天使用正式邀请/接受名册，覆盖同场景旁观者、跨频道旁观者以及退队后的隔离。
         NextChatWindow();
@@ -465,12 +511,12 @@ internal static class ChatTcpTests
                 row.GetProperty("Detail").GetProperty("TextLength").GetInt32() == 200 &&
                 row.GetProperty("Detail").GetProperty("Truncated").GetBoolean()),
             "超长普通聊天按 200 字节截断并记 chat_send(Truncated=true)");
-        That(events.Count(row => row.GetProperty("Kind").GetString() == "chat_throttled") == 1,
-            "同一连接 1 秒内第 6 条记一次 chat_throttled");
+        That(events.Count(row => row.GetProperty("Kind").GetString() == "chat_throttled") == 2,
+            "普通消息与无限GM喇叭各自的第6条均沿同一连接限频拒绝");
         That(events.Count(row => row.GetProperty("Kind").GetString() == "chat_whisper_offline") == 1,
             "悄悄话目标不存在记 chat_whisper_offline");
-        That(events.Count(row => row.GetProperty("Kind").GetString() == "chat_megaphone_rejected") == 3,
-            "文字与引用的两个错误道具槽和一个越界槽各记一次chat_megaphone_rejected");
+        That(events.Count(row => row.GetProperty("Kind").GetString() == "chat_megaphone_rejected") == 7,
+            "原有3个消费拒绝及GM14文字空/错/越界槽、引用错源各记录一次拒绝");
         var normalDeliveries = events.Where(row => row.GetProperty("Kind").GetString() == "chat_delivered" &&
             row.GetProperty("Detail").GetProperty("Kind").GetString() == "Normal").ToArray();
         That(normalDeliveries.All(row=>!row.GetProperty("Detail").GetProperty("LayerFallback").GetBoolean()),
@@ -606,7 +652,7 @@ internal static class ChatTcpTests
     /// <c>NOTI 0x000C</c> 正文 = <c>[u8 显示 type][u16 层 id][u8 v=0][u32 CP936 字节数][CP936 文本]</c>；
     /// 物品链接的文本段是原始字节，测试侧不重新编码。
     /// </summary>
-    static byte[] NamedLinkBody(byte type,string speaker,byte[] text,params byte[][] records) => Build(w=>
+    static byte[] NamedLinkBody(byte type,string speaker,byte[] text,string adventureName,params byte[][] records) => Build(w=>
     {
         w.Write(type);w.Write((byte)0);
         if(type==6) w.Write(new byte[2]);
@@ -614,17 +660,17 @@ internal static class ChatTcpTests
         w.Write((uint)name.Length);w.Write(name);w.Write((byte)2);
         w.Write((uint)text.Length);w.Write(text);
         w.Write((byte)records.Length);foreach(var record in records)w.Write(record);
-        w.Write(0u);
+        byte[] adventure=Text.GetBytes(adventureName);w.Write((uint)adventure.Length);w.Write(adventure);
     });
 
-    static byte[] LinkedMegaphoneBody(byte type,ushort actor,byte channel,string speaker,byte[] text,params byte[][] records) => Build(w=>
+    static byte[] LinkedMegaphoneBody(byte type,ushort actor,byte channel,string speaker,byte[] text,string adventureTarget,params byte[][] records) => Build(w=>
     {
         w.Write(type);w.Write(new byte[]{2,0,channel});w.Write(actor);
         byte[] name=Text.GetBytes(speaker);
         w.Write((uint)name.Length);w.Write(name);
         w.Write((uint)text.Length);w.Write(text);
         w.Write((byte)records.Length);foreach(var record in records)w.Write(record);
-        w.Write(1u);w.Write((byte)'X');
+        byte[] target=Text.GetBytes(adventureTarget);w.Write((uint)target.Length);w.Write(target);
     });
 
     static byte[] LinkMessageBody(byte type, ushort layer, byte[] text)
@@ -651,14 +697,14 @@ internal static class ChatTcpTests
 
     /// <summary>
     /// <c>NOTI 0x0076</c> 喇叭正文 = <c>[u8 type][u8 B=0][u8 C=0][u8 D=0][u16 E=0]</c> +
-    /// 三段 <c>[u32 CP936 字节数][CP936 字节]</c>（发言人 / 正文 / 占位）。
-    /// 测试侧按文档布局自行编码，不调用服务端 Builder；<c>str3</c> 用生产占位 <c>X</c>。
+    /// 三段 <c>[u32 CP936 字节数][CP936 字节]</c>（发言人/正文/完整账号冒险团名）。
+    /// 测试侧按明确账号fixture自行编码，不调用服务端Builder反算期望；无账号名为长度0。
     /// </summary>
-    static byte[] MegaphoneBody(byte type, string speaker, string text, byte server = 0, byte channel = 0, ushort actor = 0)
+    static byte[] MegaphoneBody(byte type, string speaker, string text, byte server = 0, byte channel = 0, ushort actor = 0, string adventureTarget = "")
     {
         byte[] speakerBytes = Text.GetBytes(speaker);
         byte[] textBytes = Text.GetBytes(text);
-        byte[] tagBytes = Text.GetBytes("X");
+        byte[] tagBytes = Text.GetBytes(adventureTarget);
         byte[] body = new byte[6 + 12 + speakerBytes.Length + textBytes.Length + tagBytes.Length];
         body[0] = type;
         body[1] = server;

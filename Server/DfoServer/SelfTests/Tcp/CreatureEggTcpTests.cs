@@ -28,7 +28,7 @@ internal static class CreatureEggTcpTests
                 Level = 25, AcceptedStoryLevel = 1, Skills = resources.Characters.Get(0).Skills,
                 Inventory = new([
                     new(0, Pet(0), core) { Creature = detail },
-                    new(0, Pet(1), core) { Creature = detail with { Name = "Second", Satiety = 100, Experience = 0, Level = 1, TailFlag = 0 } },
+                    new(0, Pet(1), core with { ItemId = 2681358 }) { Creature = detail with { Name = "Second", Satiety = 100, Experience = 0, Level = 1, TailFlag = 0 } },
                     new(0, Pet(2), core with { ItemId = outputId }) { Creature = detail with { Name = "Adult" } }], Gold: 4321)
             });
             original = repository.List(owner).Single();
@@ -85,7 +85,7 @@ internal static class CreatureEggTcpTests
                 peer.Expect(0, 105, savedDetails);
                 var changed = Row(peer.Expect(0, 14).Body, slot);
                 var expected = Row(full, slot);
-                BinaryPrimitives.WriteInt32LittleEndian(expected.AsSpan(2), outputId);
+                BinaryPrimitives.WriteInt32LittleEndian(expected.AsSpan(2), slot == 1 ? 2681359 : outputId);
                 expected[13] = 0;
                 CompareExceptRemaining(changed, expected, "105保留原详情后写同UID产物，123B只改模板/宠物类型及实时剩余秒");
                 That(U32(changed, 6) == original.Inventory.Find(Pet(slot))!.Uid && U32(changed, 22) > 0,
@@ -115,7 +115,7 @@ internal static class CreatureEggTcpTests
             foreach (short slot in new short[] { 0, 1 })
             {
                 var previous = original.Inventory.Find(Pet(slot))!;
-                That(saved.Inventory.Find(Pet(slot)) == previous with { Core = previous.Core with { ItemId = outputId, SealFlag = 0 } },
+                That(saved.Inventory.Find(Pet(slot)) == previous with { Core = previous.Core with { ItemId = slot == 1 ? 2681359 : outputId, SealFlag = 0 } },
                     "重开仓储保留原UID、核心和完整详情，原2038期限不按无期限PVF目标重置");
             }
             That(saved.Inventory.Find(Pet(2)) == original.Inventory.Find(Pet(2)) && saved.Inventory.Gold == original.Inventory.Gold &&

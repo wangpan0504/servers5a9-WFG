@@ -96,6 +96,13 @@ internal static class DungeonPickupProtocolTests
         }
         Reject<ArgumentOutOfRangeException>(() => DungeonPickupPackets.SinglePlayerGoldNotification(1, 2, 0),
             "未产生已提交金币增量不得编码金币拾取成功");
+        var bonusGold = DungeonPickupPackets.IndependentGoldNotification(1, 2, 154, 3, 53);
+        That(bonusGold.Length == 55 && bonusGold.AsSpan(6, 15).ToArray().All(value => value == 0) &&
+            bonusGold.AsSpan(21, 14).SequenceEqual(new byte[] { 1, 154, 0, 0, 0, 1, 53, 0, 0, 0, 0, 0, 0, 0 }) &&
+            bonusGold.AsSpan(35).ToArray().All(value => value == 0),
+            "金币原生扩展只向真实成员写总额及已含在总额内的装备附加额，基金与其余成员保持零");
+        Reject<ArgumentOutOfRangeException>(() => DungeonPickupPackets.SinglePlayerGoldNotification(1, 2, 10, 11),
+            "附加展示金额不能超过实际到账总额");
         var singleGold = DungeonPickupPackets.SinglePlayerGoldNotification(uint.MaxValue, ushort.MaxValue, 1);
         That(singleGold.AsSpan(0, 12).SequenceEqual(new byte[] { 255, 255, 255, 255, 255, 255, 1, 1, 0, 0, 0, 1 }) &&
             singleGold.AsSpan(12).ToArray().All(value => value == 0),

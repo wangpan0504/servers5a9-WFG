@@ -20,6 +20,7 @@ internal sealed partial class CharacterRepository
     {
         var expected = plan.Expected; var clear = plan.AuthoritativeClear; var reward = plan.ExperienceReward;
         uint? goldMailId = null, resourceMailId = null;
+        AdventureProgressionCommit? adventureCommit = null;
         var accepted = expected.ActiveMainQuests.SingleOrDefault(row => row.AcceptanceId == plan.AcceptanceId);
         var active = accepted ?? plan.CouponActive;
         var closed = plan.ClosedChildren.Select(row => row.AcceptanceId).ToHashSet();
@@ -205,7 +206,7 @@ internal sealed partial class CharacterRepository
         if (CreditAdventure(db, tx, owner.Account, expected.Id, AdventureCreditSource.Earned, plan.TotalRequestedExperience,
                 EffectivePosition(expected.Level, expected.Learning.Experience), expected.Level, plan.TargetLevel,
                 DateTimeOffset.UtcNow) is { } credit)
-            WriteAdventureCredit(db, tx, owner.Account, credit, AdventureCreditSource.Earned, adventureCatalog!);
+            adventureCommit = WriteAdventureCredit(db, tx, owner.Account, credit, AdventureCreditSource.Earned, adventureCatalog!);
         command.Parameters.AddWithValue("$slot", plan.QuestSlot);
         command.CommandText = "DELETE FROM character_active_main_quests WHERE character_id=$id AND slot=$slot AND quest_id=$quest AND acceptance_id=$acceptance";
         if (command.ExecuteNonQuery() != (accepted is null ? 0 : 1)) throw new InvalidOperationException("原接取活动任务不能原子清槽");
@@ -302,12 +303,21 @@ internal sealed partial class CharacterRepository
             resourceMailId = mailId;
         }
         ApplyBattlePassQuestCompletion(db, tx, owner.Account, plan);
+        if (quests is not null)
+            foreach (int id in plan.NewCompletedQuestIds)
+                if (quests.TryGet(id, out var returningQuest) &&
+                    DfoServer.Game.Quests.QuestEventProgress.EffectiveGrade(returningQuest, quests) is { } returningGrade)
+                    RecordReturningEvent(db, tx, owner.Account, plan.TargetLevel, "quest clear - grade", returningGrade);
+        if (plan.TotalRequestedExperience > 0)
+            ApplyBattlePassExperienceGain(db, tx, owner.Account, "quest_completion",
+                FormattableString.Invariant($"{expected.Id}:{plan.AcceptanceId:N}"), plan.TotalRequestedExperience,
+                plan.BattlePassCompletion?.Clock.GetUtcNow());
         tx.Commit();
         return Result(committed, grantedItems, false, true, checked((uint)(plan.TargetLearning.Experience - expected.Learning.Experience)));
 
         QuestCompletionCommit Result(Character character, ImmutableArray<QuestGrantedItem> rows, bool duplicate, bool projection, uint gained) =>
             new(character, clear, reward, rows, duplicate, projection, expected.Level, expected.Learning) {
-                QuestId = plan.QuestId, AcceptanceId = plan.AcceptanceId, ConditionType = plan.ConditionType,
+                Adventure = adventureCommit, QuestId = plan.QuestId, AcceptanceId = plan.AcceptanceId, ConditionType = plan.ConditionType,
                 GoldAmount = plan.GoldAmount, MailedGoldAmount = plan.MailedGoldAmount, GoldMailId = goldMailId, ResourceMailId = resourceMailId,
                 GainedExperience = gained, StagePlan = plan.StagePlan, OrdinaryExperience = plan.OrdinaryExperience,
                 ContractExperience = plan.ContractExperience, TotalRequestedExperience = plan.TotalRequestedExperience, TpAmount = plan.TpAmount, HellChallenge = plan.HellChallenge, Consumed = plan.Consumed, Currencies = plan.Currencies,

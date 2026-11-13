@@ -42,7 +42,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
     Strongway2019Projection? strongwayProjection = null,
     Strongway2019RewardProjection? strongwayRewards = null,
     DfoServer.Game.Raids.AntonRaidStart? raidStart = null,
-    Func<Exception,bool>? altarProjectionBusy = null) : IGameCommandModule
+    Func<Exception,bool>? altarProjectionBusy = null, SecretShopService? secretShop = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -66,6 +66,27 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         commands.Register(CmdPacketType.DIE_BLOOD_MONSTER, AltarDeathAsync, nameof(DungeonHandler));
         commands.Register(CmdPacketType.BLOOD_ROUND_UI_PREPARE_FINISH_, AltarPreparedAsync, nameof(DungeonHandler), UserStateRequirement.DungeonContext);
         commands.Register(CmdPacketType.SELECT_ULTIMATE_DIFFICULTY, AltarDifficultyAsync, nameof(DungeonHandler), UserStateRequirement.DungeonContext);
+        commands.Register(CmdPacketType.SELECT_TOWER_OF_DAZZLEMENT_REWARD, SelectDazzlementRewardAsync, nameof(DungeonHandler), UserStateRequirement.WorldReady);
+    }
+
+    async Task<CommandResult> SelectDazzlementRewardAsync(GameConnectionContext context, Packet request)
+    {
+        byte[] body = request.Body;
+        if (body.Length == 0 || body[0] > DazzlementTowerProgress.MaxSelectionLimit || body.Length != 1 + body[0])
+        {
+            await context.Reply(CmdPacketType.SELECT_TOWER_OF_DAZZLEMENT_REWARD, DazzlementTowerPackets.SelectRewardReply(19), "dazzlement_reward_select_rejected");
+            return CommandResult.Handled;
+        }
+        byte[] slots = body[1..];
+        if (slots.Distinct().Count() != slots.Length || slots.Any(slot => slot >= DazzlementTowerProgress.MaxStashCards))
+        {
+            await context.Reply(CmdPacketType.SELECT_TOWER_OF_DAZZLEMENT_REWARD, DazzlementTowerPackets.SelectRewardReply(19), "dazzlement_reward_select_rejected");
+            return CommandResult.Handled;
+        }
+        await context.Reply(CmdPacketType.SELECT_TOWER_OF_DAZZLEMENT_REWARD, DazzlementTowerPackets.SelectRewardReply(1, slots), "dazzlement_reward_selected");
+        await context.Notify(NotiPacketType.TOWER_OF_DAZZLEMENT_INFO, DazzlementTowerPackets.SelectedRewards(slots), "dazzlement_selected_rewards");
+        log.Write("dazzlement_reward_selected", new { Connection = context.Id, Character = context.Session.Selected?.Id, Slots = slots });
+        return CommandResult.Handled;
     }
 
     async Task<CommandResult> SequentialInfoAsync(GameConnectionContext context, Packet request)
@@ -112,10 +133,18 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         if (receipt is not null)
         {
             bool altar = !receipt.AutomaticRevival && receipt.Monsters.Altar is not null && altarRewards is not null;
+            bool partyAlive = context.Session.PartyDungeon is { } currentParty &&
+                currentParty.Members.Any(m => m.IsCurrent() && ReferenceEquals(m.Actor.Session.PartyDungeon, currentParty) &&
+                    m.Actor.Session.CurrentDungeonDeathReturn() is null);
             if (context.Death is not null)
             {
-                if (receipt.AutomaticRevival || altar || context.Session.PartyDungeon is not null) await context.Death.StopAsync();
-                else await context.Death.StartAsync();
+                if (receipt.AutomaticRevival || altar || partyAlive) await context.Death.StopAsync();
+                else
+                {
+                    if (receipt.Entry.IsRevisedBeast && items is not null && goldLimits is not null && pieces is not null)
+                        context.Death.ConfigureRevisedBeast(() => RevisedBeastProjection.PublishAsync(context, items, goldLimits, pieces, log, rooms));
+                    await context.Death.StartAsync();
+                }
             }
             bool Guard() => context.Session.CanPublishFormalDungeon(receipt);
             await context.Notify(NotiPacketType.DIE_STATE, DungeonPackets.CharacterLife(receipt.Character.Id, (byte)0),
@@ -198,6 +227,9 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         var before = context.Owner.Execute(() => (context.Session.Selected, context.Session.Ready,
             context.Session.SelectionEpoch, context.Session.Phase, context.Session.CurrentDungeonSelection));
         var character = before.Selected;
+        if (character is not null && before.Ready && before.Phase == SessionPhase.Dungeon &&
+            context.Session.ChannelEntry?.Type == 23 && antonRaid is { Enabled: true })
+            return await SelectAntonAsync(context, selection);
         if (character is not null && before.Ready && !context.BlocksTownActions &&
             before.Phase is SessionPhase.Town or SessionPhase.MapSelect or SessionPhase.Loading &&
             context.Session.ChannelEntry?.Type == 45 && fiendwarRaid is not null)
@@ -277,9 +309,15 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         // 03BBA474..03BBA48C把目标匹配结果写offset20；offset7仍是普通挑战深渊模式1。
         bool legend = hell && selection.Unknown20 == 1 &&
             before.CurrentDungeonSelection?.HellLegendDungeonId == selection.DungeonIndex;
-        // 已退役的专属入口拒绝，不允许落入普通入场。普通难度4、MAZE0不受影响。
-        if (selection.DungeonIndex is >= 5335 and <= 5339 ||
-            selection.DungeonIndex is >= 310 and <= 314 && selection.Parameter == 4 && selection.Unknown7 == 2)
+        bool beastChannel = BeastChannel.IsEntry(context.Session.ChannelEntry);
+        bool beastId = selection.DungeonIndex is >= 5335 and <= 5339;
+        var revisedAdmission = beastId ? RevisedBeastAdmission.Check(context.Session.ChannelEntry, character,
+            checked((int)selection.DungeonIndex), selection.Parameter, context.Session.DungeonBusinessNow) : default;
+        bool revisedBeast = beastId && revisedAdmission.Accepted && !direct && !replay && !practice && !continuation &&
+            !hell && selection.Unknown7 == 0 && selection.Unknown8 == 0 && RevisedBeastSelection.IsQuestContext(selection.Unknown16);
+        if (beastChannel && !revisedBeast || beastId && !revisedBeast) return await RejectAsync("revised-beast-admission");
+        // 首版仍保持退役；改版仅走专属频道及当日资格。
+        if (selection.DungeonIndex is >= 310 and <= 314 && selection.Parameter == 4 && selection.Unknown7 == 2)
             return await RejectAsync();
         if (hell && before.CurrentDungeonSelection?.HellLegendDungeonId == selection.DungeonIndex && !legend)
             return await RejectAsync();
@@ -287,7 +325,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         // 仅当 DFO_SEAL_DOOR=1 时启用；rate 按百分数解读（推断）。随机失败/入场被拒时回退为普通入场。
         bool sealDoor = false;
         if (practice && selection.Unknown7 != 0) return await RejectAsync();
-        if (SealDoorEnabled && !practice && !hell && !legend && !direct && !continuation && selection.Unknown7 == 0 && selection.Unknown8 == 0 && selection.Unknown16 == 0 &&
+        if (SealDoorEnabled && !revisedBeast && !practice && !hell && !legend && !direct && !continuation && selection.Unknown7 == 0 && selection.Unknown8 == 0 && selection.Unknown16 == 0 &&
             selection.DungeonIndex != 5000 && selection.DungeonIndex != 7142 && SealDoorRate(selection.DungeonIndex) is > 0 and var sealRate &&
             System.Security.Cryptography.RandomNumberGenerator.GetInt32(100) < sealRate)
             sealDoor = true;
@@ -303,13 +341,16 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             selection.Unknown15 != 0 || selection.Unknown20 != (legend ? 1 : 0)))
             return await RejectAsync();
         bool multiplePartyMembers = context.Session.HasMultiplePartyMembers?.Invoke() == true;
+        bool mockBattle = context.MonsterMockBattle?.ContainsDungeon(selection.DungeonIndex) == true;
+        if (mockBattle && (multiplePartyMembers || direct || replay || practice || continuation || hell || legend || sealDoor || selection.Unknown16 != 0))
+            return await RejectAsync();
         // 一人真实Party也必须走共享PartyDungeonService；否则会落入单人Formal入口，英雄准入的partyAdmission被丢失。
         bool soloPartyEntry = context.Session.CurrentParty?.Invoke() is { Members.Length: 1 } soloParty &&
             selection.DungeonIndex is 5363 or 400000105 && soloParty.Members.Any(member =>
                 member.Slot == soloParty.Leader && ReferenceEquals(member.Actor.Session, context.Session));
         if (multiplePartyMembers || soloPartyEntry || context.Session.ReadEvildomWar() is not null)
         {
-            if (partyDungeons is null || direct || replay || practice || continuation || sealDoor)
+            if (partyDungeons is null || revisedBeast || direct || replay || practice || continuation || sealDoor)
                 return await RejectAsync();
             using var peers = await PartyDungeonProjection.AcquirePeersAsync(context, context.Session.CurrentParty?.Invoke()?.Members ?? []);
             (string Reason, byte MemberSlot)? partyRejection = null;
@@ -330,14 +371,15 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         FormalDungeonReceipt? receipt;
         try
         {
-            receipt = continuation ? context.Session.EnterFormalDungeonContinuation(selection.DungeonIndex,selection.Unknown16,selection.Parameter) :
+            receipt = mockBattle ? context.MonsterMockBattle!.Enter(selection, dungeons, rooms) :
+                continuation ? context.Session.EnterFormalDungeonContinuation(selection.DungeonIndex,selection.Unknown16,selection.Parameter) :
                 replay ? context.Session.EnterQuestReplay(selection.DungeonIndex,selection.Unknown16,selection.Parameter) :
                 (sealDoor ? context.Session.EnterFormalDungeon(selection.DungeonIndex, 0, selection.Parameter, dungeons, rooms,
                     drops, items, pieces: pieces, prepareDrops: prepareDrops,tutorials: tutorials,tutorialScenes: tutorialScenes,
                     hellParty: true, sealDoor: true, crackRewards: crackRewards) : null) ??
                 context.Session.EnterFormalDungeon(selection.DungeonIndex, hell || legend ? 0u : selection.Unknown16, selection.Parameter, dungeons, rooms,
                     drops, items, pieces: pieces, prepareDrops: prepareDrops,tutorials: tutorials,tutorialScenes: tutorialScenes,
-                    classExperience: experience, hellParty: hell || legend, hellLegend: legend, practice: practice, crackRewards: crackRewards);
+                    classExperience: experience, hellParty: hell || legend, hellLegend: legend, practice: practice, crackRewards: crackRewards, revisedBeast: revisedBeast);
         }
         catch (Exception error) when (selection.DungeonIndex == 530)
         {
@@ -346,7 +388,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             return await RejectAsync("formal-entry-exception");
         }
         log.Write("formal_dungeon_entry", new { Connection = context.Id, Accepted = receipt is not null, Replay = replay, Continuation = continuation,
-            Training = training, ClassExperience = experience, Practice = practice, HellParty = hell, HellLegend = legend,
+            RevisedBeast = revisedBeast, Training = training, ClassExperience = experience, Practice = practice, HellParty = hell, HellLegend = legend,
             SealDoor = sealDoor && receipt?.Entry.HellParty is not null, Request = selection, receipt?.Snapshot.Identity,
             RequestedDifficulty = selection.Parameter, ActualDifficulty = receipt?.Entry.Difficulty,
             BypassedQuestTerrain = receipt?.Entry.BypassedQuestTerrain,
@@ -359,6 +401,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         if (receipt is null) return await RejectAsync(!continuation && !replay ? context.Session.LastFormalDungeonRejection : null);
         await town.DetachAsync(context);
         bool Guard() => context.Session.CanPublishFormalDungeon(receipt);
+        if (receipt.Entry.IsRevisedBeast) await RevisedBeastCountProjection.RefreshAsync(context, rooms, Guard);
         if (receipt.Dazzlement is not null)
             await DazzlementTowerProjection.BindingsAsync(context, Guard);
         if (receipt.Entry.Hope is { } hope)
@@ -375,6 +418,8 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             await context.Notify(NotiPacketType.BLOOD_INFO, DungeonAltarPackets.Information(receipt.Entry), "formal_altar_information", Guard);
         else
             await context.Notify(NotiPacketType.DUNGEON_INFO, DungeonPackets.Information(receipt.Entry, receipt.Snapshot.BossPosition), "formal_dungeon_information", Guard);
+        // 28建立活动实例后先安装卡组；1767启用原生谋略战加载过渡，不能等37加载完成才发送。
+        if (context.MonsterMockBattle is { } mockBattleProjection) await mockBattleProjection.BattleInfoAsync(receipt, spawn: true);
         if (OrdinaryLukeProgress.Applies(receipt.Entry)) await OrdinaryLukeSequenceProjection.RefreshAsync(context, Guard);
         if (PreyNormalProgress.Applies(receipt.Entry)) await PreyNormalSequenceProjection.RefreshAsync(context, Guard);
         if (AntonNormalProgress.Applies(receipt.Entry)) await AntonNormalSequenceProjection.RefreshAsync(context, Guard);
@@ -399,7 +444,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
                 passiveItems: receipt.PassiveItems), "formal_start_map", Guard);
             if (context.Session.FormalBossRushView() is { } rush)
             {
-                await context.Notify(NotiPacketType.BOSS_RUSH_DUNGEON_INFO, BossRushPackets.DungeonInfo(rush.Bosses),
+                await context.Notify(NotiPacketType.BOSS_RUSH_DUNGEON_INFO, BossRushPackets.DungeonInfo(rush.Rooms),
                     "formal_boss_rush_info", Guard);
                 await context.Notify(NotiPacketType.BOSS_RUSH_DATA, BossRushPackets.Data(rush.Hud.Rank, rush.Hud.Score, rush.Hud.RemainMilliseconds),
                     "formal_boss_rush_data", Guard);
@@ -409,6 +454,8 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             await context.Notify(NotiPacketType.HELL_PARTY_MONSTER_INFO, hellInfo, "formal_hell_party_monster_info", Guard);
         await QuestProjection.DungeonTerrainBypassAsync(context, receipt.Entry, Guard);
         await PublishEntryAssetsAsync(context, receipt, Guard);
+        if (receipt.Entry.DungeonId == 316)
+            await RiftDailyProjection.RefreshParticularHellAsync(context, Guard);
         if (receipt.Entry.DungeonId == 530)
             await RiftDailyProjection.RefreshAsync(context, Guard, force: true);
         if (receipt.SpecialEntry?.Kind is DungeonSpecialEntryKind.Blood or DungeonSpecialEntryKind.Ultimate)
@@ -418,6 +465,8 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         else if (receipt.SpecialEntry is { Kind: DungeonSpecialEntryKind.Despair })
             await DungeonEnterCountProjection.RefreshDespairAsync(context, dungeons, Guard);
         await BossSelectionBuffProjection.PostAsync(context, canSend: Guard);
+        await HellLegendBuffProjection.PostAsync(context, canSend: Guard);
+        await DungeonEpicBuffProjection.PostAsync(context, canSend: Guard);
         if (receipt.Entry.Dimension is not null) await DimensionEntranceProjection.RefreshAsync(context, Guard, entranceOnly: false);
         if(receipt.BattlePassMissionClock is {} entryClock) await BattlePassMissionProjection.RefreshAsync(context,entryClock.GetUtcNow());
         return CommandResult.Handled;
@@ -430,7 +479,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
                 RejectReason = entryReason ?? context.Session.LastFormalDungeonRejection ?? "selection-rejected", MemberSlot = memberSlot, CharacterId = character.Id });
             bool CanSend() => context.Session.CanPublishFormalDungeonRejection(character, before.SelectionEpoch,
                 before.Phase, before.CurrentDungeonSelection);
-            // 结束本次入场等待，保留原选图和回城锚点；不发送成功或自动回城通知。
+            // 先结束本次入场等待；普通选图保留原锚点，首期直入失败由下方恢复准备区。
             // 区域任务提示由NOTI27的未完成队员名单驱动；强制入场只恢复等待，不误用次数上限0xAD。
             string? hellReason = hell || legend ? entryReason : null;
             DungeonSelectionError? altarError = selection.DungeonIndex is 11006 or 11007 ? entryReason switch
@@ -442,7 +491,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             byte[] rejection = altarError is { } code ? DungeonPackets.SelectionRejected(code) :
                 hellReason is { } why && why.StartsWith("hell-party-", StringComparison.Ordinal)
                 ? DungeonPackets.HellPartyRejected(why.StartsWith("hell-party-quest-required:", StringComparison.Ordinal) ? DungeonSelectionError.Silent :
-                    why == "hell-party-item-required" ? DungeonSelectionError.RequiredMaterials : DungeonSelectionError.NoAvailableDifficulty)
+                    why == "hell-party-item-required" ? DungeonSelectionError.GroupMaterials : DungeonSelectionError.NoAvailableDifficulty)
                 : entryReason == "fatigue-exhausted" || entryReason?.StartsWith("start-fatigue-insufficient:", StringComparison.Ordinal) == true
                 ? DungeonPackets.SelectionRejected(DungeonSelectionError.MemberFatigueOrClearCondition, memberSlot ?? 0)
                 : entryReason?.StartsWith("entry-item-required:", StringComparison.Ordinal) == true ||
@@ -452,6 +501,20 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
                 ? DungeonPackets.SelectionRejected(party ? DungeonSelectionError.GroupMaterials : DungeonSelectionError.RequiredMaterials, memberSlot ?? 0)
                 : DungeonPackets.SelectionRejected();
             await context.Reply(CmdPacketType.SELECT_DUNGEON, rejection, hell ? "formal_hell_party_rejected" : "formal_dungeon_rejected", CanSend);
+            if (!party && selection.DungeonIndex is 5359 or 5363 &&
+                entryReason?.StartsWith("strongway2019-", StringComparison.Ordinal) == true)
+            {
+                // ACK写出期间可能发生换角或接管，必须在同一owner内复核旧选择再消费返回锚点。
+                var returned = context.Owner.Execute(() => context.Owner.IsCurrent && CanSend()
+                    ? context.Session.ReturnFromDungeonSelection() : null);
+                if (returned is not null)
+                {
+                    await town.ReturnFromDungeonSelectionAsync(context, returned);
+                    await context.Notify(NotiPacketType.AAS_TIPS, ServerNoticePackets.Build("强者之路",
+                        Strongway2019EntryRejectionText(entryReason)), "strongway2019_entry_rejected_notice",
+                        () => context.Session.CanPublishDungeonSelection(returned, returning: true));
+                }
+            }
             return CommandResult.Handled;
         }
     }
@@ -482,28 +545,46 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         bool Guard() => published = context.Session.CanPublishFormalDungeon(receipt);
         await context.Reply(CmdPacketType.FINISH_LOADING, [1], "formal_loading_ack", Guard);
         await context.Notify(NotiPacketType.FINISH_LOADING, DungeonPackets.LoadingNotice(), "formal_loading_notice", Guard);
+        // 1486按当前地图虚函数启动计时；进图29之后仍可能未安装地图，必须等真实37完成。
+        if (receipt.BossRushStart is { } rush)
+            await context.Notify(NotiPacketType.DUNGEON_TIMEOUT_TIME,
+                BossRushPackets.Timeout(Math.Max(1, (rush.RemainMilliseconds + 999) / 1000)),
+                "formal_boss_rush_timeout", Guard);
+        await DungeonPotionProjection.LoadedAsync(context, Guard);
         await context.Notify(NotiPacketType.USER_STATE, DungeonPackets.DungeonPlayerState(receipt.Character.Id), "formal_player_state", Guard);
+        RaidCombatProjection.PostPreyDungeonTime(context, receipt);
         // 进入副本重建Actor后补发网吧特权buff，否则buff栏在副本内是空的。
         await PcRoomBuffProjection.PostAsync(context, Guard);
+        AdventurerBenefitProjection.Post(context, force: true);
         town.GuildEconomy?.Post(context, force: true);
         await GuildTrainingProjection.PostAsync(context);
         await BossSelectionBuffProjection.PostAsync(context, force: true, canSend: Guard);
+        await HellLegendBuffProjection.PostAsync(context, force: true, canSend: Guard);
+        await DungeonEpicBuffProjection.PostAsync(context, force: true, canSend: Guard);
         if (receipt.ScriptedReturnId != Guid.Empty)
         {
             if (published) context.Session.ConfirmScriptedReturnLoading(receipt);
             return CommandResult.Handled;
         }
+        if (context.MonsterMockBattle is { } mockBattle) await mockBattle.BattleInfoAsync(receipt, spawn: false);
         if (receipt.Entry.UsesFatigue)
             await context.Notify(NotiPacketType.FATIGUE, FatiguePackets.Current(context.Session.FatigueForClient(receipt.Character)), "formal_room_fatigue", Guard);
+        if (!receipt.FatigueEnergySlots.IsEmpty)
+            await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(receipt.Character.Inventory,
+                InventoryListType.Main, [.. receipt.FatigueEnergySlots]), "room_quick_slot_energy", Guard);
         if (context.Elevator is not null) await context.Elevator.StartAsync(receipt);
         if (context.LostLand is not null) await context.LostLand.StartAsync(receipt);
         if (context.Altar is not null && context.Session.StartDungeonAltar(receipt) is { } altar)
             await context.Altar.WakeAsync(altar);
         if (receipt.HellPartyRoomCleared)
             await context.Notify(NotiPacketType.HELL_PARTY_CLEAR, DungeonPackets.HellPartyCleared(), "formal_hell_party_clear", Guard);
+        var deferredClear = context.Session.CompletePendingCinematicClear();
+        if (deferredClear?.Commit?.Plan.SceneClear is not null)
+            await EnableSettlementAsync(context);
         if (receipt.Snapshot.Phase == SinglePlayerDungeonPhase.Settlement)
             await EnableSettlementAsync(context);
         await PublishEpicPieceShopAsync(context, prepare: false);
+        await PublishSecretShopAsync(context, prepare: false);
         if(receipt.BattlePassMissionClock is {} loadingClock) await BattlePassMissionProjection.RefreshAsync(context,loadingClock.GetUtcNow());
         return CommandResult.Handled;
     }
@@ -583,6 +664,10 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         var target = result.ReportedTarget;
         log.Write("formal_dungeon_death", new { Connection = context.Id, Recognized = true, context.Session.Phase,
             result.Outcome, ObjectKey = objectKey, Report = audit,
+            result.EquipmentRarityBonus.RarePercent, result.EquipmentRarityBonus.UniquePercent,
+            result.EpicPieceBonus,
+            result.HellRewardEpicPotionPercent,
+            result.DungeonEpicBuffIds, result.DungeonEpicBonusPercent, result.BossDropPercent,
             Target = target is null ? null : new { target.MonsterId, target.SpawnType, target.Team, target.IsFriendly, target.IsBlocking, target.CanReportDeath },
             result.Receipt?.Snapshot.Identity, result.Reward, result.GainedExperience, result.ProficiencyGained, result.ClearFact, result.RoomClearFact,
             DirectItems = result.DirectPickup.GroundKeys.Length });
@@ -602,6 +687,15 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             if (result.Outcome == DungeonRunOutcome.Duplicate && context.Session.CurrentTagEvildomClear() is { } clearedTag)
             {
                 if (tagEvildomRun is not null) await tagEvildomRun.ClearAsync(context, clearedTag);
+            }
+            else if (result.Outcome == DungeonRunOutcome.Duplicate && context.Session.CurrentFormalDungeonScene()?.Entry.IsRevisedBeast == true)
+            {
+                if (items is not null && goldLimits is not null && pieces is not null)
+                {
+                    if (context.Session.Phase == SessionPhase.Dungeon)
+                        await RevisedBeastProjection.PublishAnneAsync(context, items, goldLimits, pieces, log, rooms);
+                    else await RevisedBeastProjection.PublishAsync(context, items, goldLimits, pieces, log, rooms);
+                }
             }
             else if (result.Outcome == DungeonRunOutcome.Duplicate) await EnableSettlementAsync(context, result.MonsterKey);
             return CommandResult.Handled;
@@ -628,8 +722,23 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         DungeonDropPacketItem[] dropRows = grounds.Select(drop => new DungeonDropPacketItem(drop.Reservation.GroundKey,
             drop.Reservation.RecordSlot, drop.Content.Item, 0, 0) { GoldAmount = drop.GoldAmount }).ToArray();
         int enteredDungeon = checked((int)receipt.Entry.DungeonId);
-        await context.Notify(NotiPacketType.DIE_MONSTER,
-            ExclusiveDropPackets.MonsterDeath(result.MonsterKey, dropRows, enteredDungeon, result.BossPositionUpdate), "formal_monster_death", Guard);
+        if (receipt.Entry.IsRevisedBeast && receipt.Entry.RevisedBeastEncounter is { } encounter &&
+            target is not null && !encounter.UsesOrdinaryBossDeath(target.MonsterId))
+            await context.Reply(CmdPacketType.DIE_MONSTER, RevisedBeastPackets.RetireAnne(result.MonsterKey), "revised_beast_anne_retired", Guard);
+        else
+            await context.Notify(NotiPacketType.DIE_MONSTER,
+                ExclusiveDropPackets.MonsterDeath(result.MonsterKey, dropRows, enteredDungeon, result.BossPositionUpdate), "formal_monster_death", Guard);
+        if (receipt.Entry.IsRevisedBeast)
+        {
+            if (items is not null && goldLimits is not null && pieces is not null)
+            {
+                if (receipt.Snapshot.Phase == SinglePlayerDungeonPhase.Dungeon)
+                    await RevisedBeastProjection.PublishAnneAsync(context, items, goldLimits, pieces, log, rooms);
+                else if (receipt.Snapshot.Phase == SinglePlayerDungeonPhase.Settlement)
+                    await RevisedBeastProjection.PublishAsync(context, items, goldLimits, pieces, log, rooms);
+            }
+            return CommandResult.Handled;
+        }
         if (result.BossRushHud is { } hud)
             await context.Notify(NotiPacketType.BOSS_RUSH_DATA, BossRushPackets.Data(hud.Rank, hud.Score, hud.RemainMilliseconds),
                 "formal_boss_rush_data", Guard);
@@ -687,10 +796,17 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         // 直入包只发布已提交的真实实例差量；不发送依赖既有地面对象的NOTI39或伪造拾取ACK。
         var directCurrencySlots = result.DirectPickup.ChangedCurrencies.Select(ItemSlotBoundService.CurrencySlot)
             .Where(slot => slot.HasValue).Select(slot => new InventorySlot(InventoryListType.Main, slot!.Value));
-        foreach (var changed in result.QuestDropSlots.Concat(result.DirectPickup.ChangedSlots).Concat(directCurrencySlots)
+        foreach (var changed in result.QuestDropSlots.Concat(result.DirectPickup.ChangedSlots)
+            .Concat(result.SpecialClearRewardSlots).Concat(directCurrencySlots)
             .Distinct().GroupBy(slot => slot.List))
             await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(receipt.Character.Inventory,
                 changed.Key, [.. changed]), "formal_death_items", Guard);
+        if (result.SpecialClearRewardMailOverflow)
+            context.Session.NotifyMailbox(receipt.Character.Id, restoreOnTown: true);
+        if (!result.SpecialClearRewards.IsEmpty)
+            await context.Notify(NotiPacketType.SIMPLE_CLEAR_REWARD_INFO,
+                DungeonPackets.SimpleClearRewardInfo(result.SpecialClearRewards),
+                "formal_special_clear_reward", Guard);
         if (result.DirectPickup.ChangedCurrencies.Any(kind => kind is >= CurrencyKind.Cera and <= CurrencyKind.HappyTokenCera))
             await context.Notify(NotiPacketType.CERA, CurrencyPackets.Cera(receipt.Character.Inventory.AccountWallet),
                 "formal_direct_currency", Guard);
@@ -725,7 +841,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
                 "formal_growth_skill_switch_inventory");
         await levelProjection.RefreshAsync(context, receipt.Character,
             previousLevel, "formal_level_committed", Guard,
-            previousLearning: previousCharacter?.Learning);
+            previousLearning: previousCharacter?.Learning, adventureProgress: result.Adventure);
         bool closed = quests is not null && await quests.CloseReadyChildrenAsync(context);
         if (!closed && result.PreviousQuests is { } previous)
         {
@@ -743,6 +859,8 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             await EnableSettlementAsync(context, result.MonsterKey);
         await PublishEpicPieceShopAsync(context, prepare: true);
         if(result.BattlePassMissionClock is {} deathClock) await BattlePassMissionProjection.RefreshAsync(context,deathClock.GetUtcNow());
+        if (result.Reward is { AppliedVariousBuffs.IsDefaultOrEmpty: false })
+            await DungeonEpicBuffProjection.PostAsync(context);
         return CommandResult.Handled;
     }
 
@@ -763,9 +881,10 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         bool Guard() => context.Session.CanPublishFormalDungeon(receipt);
         var destination = commit.Currency is { } kind
             ? new InventorySlot(InventoryListType.Main, CurrencyPackets.PickupSlot(kind)) : commit.Destination;
-        // 普通consumer不使用这九个局部值。本服无扩展贡献，明确投影零，不作Builder默认。
+        // 总额来自已提交回执，附加额仅拆分展示，不再放大地面金币或余额。
         var notice = commit.Currency == CurrencyKind.Gold
-            ? DungeonPickupPackets.SinglePlayerGoldNotification(parsed.GroundObjectKey, receipt.Character.Id, checked((uint)commit.Amount))
+            ? DungeonPickupPackets.SinglePlayerGoldNotification(parsed.GroundObjectKey, receipt.Character.Id, checked((uint)commit.Amount),
+                checked((uint)(commit.Amount - result.Ground!.GoldAmount)))
             : DungeonPickupPackets.OrdinaryNotification(parsed.GroundObjectKey,
                 receipt.Character.Id, new byte[8], receipt.Character.Id,
                 commit.EpicPiece is not null || commit.AccountMaterial is not null
@@ -781,8 +900,15 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         else if (commit.AccountMaterial is not null)
             await town.AccountMaterialsAsync(context, receipt.Character, canSend: Guard);
         else
+        {
             await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(receipt.Character.Inventory,
                 destination.List, [destination]), "formal_pickup_inventory", Guard);
+            if (destination.List == InventoryListType.AccountCommon &&
+                receipt.Character.Inventory.Find(destination) is { } created && created.Core.Count == commit.Amount)
+                await town.SyncCommonCalendarSlotsAsync(context,
+                    receipt.Character.Inventory with { Items = receipt.Character.Inventory.Items.Remove(created) },
+                    receipt.Character, Guard);
+        }
         await context.Reply(CmdPacketType.GET_ITEM, DungeonPickupPackets.Accepted(), "formal_pickup_ack", Guard);
         if (result.PreviousQuests is { } previousQuests)
             await QuestProjection.ProgressAsync(context,previousQuests,receipt.Character,Guard,"formal_pickup_quest_conditions");
@@ -881,6 +1007,8 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
                 () => context.Reply(CmdPacketType.GIVEUP_GAME, DungeonPackets.GiveUpAccepted(), "formal_giveup_ack"));
         }
         bool tag = context.Session.HasFormalTagEvildom;
+        if (context.Session.CurrentFormalDungeonScene()?.Entry.IsRevisedBeast == true && items is not null && goldLimits is not null && pieces is not null)
+            await RevisedBeastProjection.PublishAsync(context, items, goldLimits, pieces, log, rooms);
         var receipt = context.Session.ReturnFromFormalDungeon();
         if (receipt is null) return CommandResult.Unhandled;
         if (context.LostLand is not null) await context.LostLand.StopAsync();

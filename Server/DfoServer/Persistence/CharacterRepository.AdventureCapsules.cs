@@ -19,8 +19,8 @@ internal sealed partial class CharacterRepository
             expected.Level < catalog.Capsule.MinimumLevel || expected.Level > catalog.Capsule.MaximumLevel ||
             growth.CharacterId != expected.Id || growth.Revision != expected.Revision || !SameLearning(growth.Before, expected.Learning) ||
             growth.Learning.Experience - growth.Before.Experience != catalog.Capsule.GrantedExperience ||
-            plan.Before.State.CapsuleExperience < catalog.Capsule.MinimumExperience ||
-            plan.After.CapsuleExperience != plan.Before.State.CapsuleExperience - catalog.Capsule.MinimumExperience)
+            plan.Before.State.CapsuleExperience < catalog.Capsule.GaugeExperience ||
+            plan.After.CapsuleExperience != plan.Before.State.CapsuleExperience - catalog.Capsule.GaugeExperience)
             throw new InvalidDataException("胶囊计划的账号扣除或角色成长越界");
         using var db = database.Open(); using var write = db.BeginWrite("CharacterRepository.CommitAdventureCapsule", deferred: true);
         using var tx = write.Transaction;
@@ -58,6 +58,8 @@ internal sealed partial class CharacterRepository
         command.Parameters.AddWithValue("$account", owner.Account); command.Parameters.AddWithValue("$event", Guid.NewGuid().ToString("N"));
         command.Parameters.AddWithValue("$character", expected.Id); command.Parameters.AddWithValue("$before", current.State.Revision);
         command.Parameters.AddWithValue("$revision", current.State.Revision + 1); command.ExecuteNonQuery();
+        ApplyBattlePassExperienceGain(db, tx, owner.Account, "adventure_capsule",
+            FormattableString.Invariant($"{expected.Id}:{current.State.Revision}:{expected.Revision}"), growth.GainedExperience, now);
         var committed = ReadAdventure(db, tx, owner.Account, catalog, now);
         character = Require(db, tx, owner.Account, expected.Name);
         tx.Commit(); return new AdventureCapsuleCommit(committed, character);

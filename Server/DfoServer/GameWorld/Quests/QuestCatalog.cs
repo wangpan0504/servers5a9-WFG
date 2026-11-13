@@ -62,10 +62,12 @@ internal sealed class QuestCatalog
         return null;
     }
 
-    public static QuestCatalog Load(PvfArchive pvf)
+    public static QuestCatalog Load(PvfArchive pvf, bool epicRoad2019Enabled = false)
     {
 
-        var paths = Index(pvf);
+        IReadOnlyDictionary<int, string> paths = Index(pvf);
+        if (epicRoad2019Enabled)
+            paths = Events.EpicRoad2019ResourceIndex.Restore(pvf, "n_quest", paths);
         var maps = MapIndex(pvf);
         var cinematicTokens = pvf.ReadTokens("cinematic/cinematic.lst");
         var cinematics = new Dictionary<int,string>();

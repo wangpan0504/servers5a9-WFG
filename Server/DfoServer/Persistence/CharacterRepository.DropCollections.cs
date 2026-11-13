@@ -72,7 +72,13 @@ internal sealed partial class CharacterRepository
         ItemTemplate? template = null;
         if (!ground.IsGold && items is not null) items.TryGet(ground.Core.ItemId, out template);
         var material = template?.AccountMaterial;
-        int amount = ground.IsGold ? ground.GoldAmount : ground.Core.Count;
+        // 地面保留原金额；首笔提交复验穿戴加成，回执保存本次实际到账量。
+        if (plan.CharacterPrecondition?.IsExpired() == true) throw new InventoryQualificationExpiredException();
+        long awarded = ground.IsGold
+            ? EquipmentGoldBonusPolicy.Capture(expected, ground.GoldAmount, DateTimeOffset.UtcNow.ToUnixTimeSeconds()).Amount
+            : ground.Core.Count;
+        if (awarded > int.MaxValue) throw new InvalidDataException("金币拾取的实际增量越界");
+        int amount = (int)awarded;
         InventorySlot destination = new(InventoryListType.Main, 0);
         if (piece is not null)
         {
@@ -114,7 +120,7 @@ internal sealed partial class CharacterRepository
             var after = plan.AfterIndex.Find(destination) ?? throw new InvalidDataException("集合拾取缺少目的物品");
             var before = plan.BeforeIndex.Find(destination);
             if (!ItemSlotBoundService.Allows(plan.After, destination, ground.Core.Kind) ||
-                destination != PickupSlot(plan.After, ground.Core, destination.Index) || after.Avatar is not null || after.Creature is not null ||
+                destination != PickupSlot(plan.After, ground.Core, destination.Index, template) || after.Avatar is not null || after.Creature is not null ||
                 (before is null ? after.Uid != 0 || after.Core != ground.Core :
                     !ground.Core.IsStackable || after.Uid != before.Uid ||
                     after.Core != (before.Core with { Value = checked(before.Core.Value + amount) }) ||
@@ -140,8 +146,10 @@ internal sealed partial class CharacterRepository
         return new(committed, false, destination, actual?.Uid ?? 0, true, currency, amount) { EpicPiece = epicPiece, AccountMaterial = accountMaterial };
     }
 
-    static InventorySlot PickupSlot(InventorySnapshot inventory, ItemCore core, short index)
+    static InventorySlot PickupSlot(InventorySnapshot inventory, ItemCore core, short index, ItemTemplate? template)
     {
+        if (template?.AccountCommonItem == true)
+            return new(InventoryListType.AccountCommon, index);
         var slot = new InventorySlot(ItemSlotBoundService.List(core.Kind), index);
         return slot.List == InventoryListType.Main || ItemSlotBoundService.Allows(inventory, slot, core.Kind)
             ? slot : new(InventoryListType.Main, index);

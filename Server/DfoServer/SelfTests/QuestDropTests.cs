@@ -133,6 +133,7 @@ internal static class QuestDropTests
 
     public static void Run(TownCatalog towns,PvfArchive pvf,CharacterCatalog characters,ItemResources items)
     {
+        EquipmentQuestDropBonusTests.RunResources(items.Items);
         int before = Count;
         var original = global::DfoServer.Testing.SelfTestCatalogs.Quests(pvf); var skills = global::DfoServer.Testing.SelfTestCatalogs.SkillLearning(pvf);
         That(original.All.All(quest => quest.TargetRegistration is not null), "当前注册PVF的全部任务类型都有明确注册，不等同全部业务已实现");
@@ -144,9 +145,22 @@ internal static class QuestDropTests
         var seeking = QuestEligibilityTests.Quest(29987) with { Condition = "[seeking]", IntData = [10165055,2],
             Attributes = ["not give exp quest"], Definition = new([]) { Job = "[all]", Drops = [new(1,1,3,-1,10165055,2,50,5)] } };
         var catalog = new QuestCatalog(original.All.Append(seeking).ToDictionary(quest => quest.Id));
-        foreach (bool lost in new[] { false,true })
+        foreach (var (lost, potion) in new[] { (false, false), (true, false), (false, true), (true, true) })
         {
-            using var f = new QuestSceneTests.Fixture(towns,characters,skills,growth,catalog,false,1,[],loseGrowth: lost);
+            const int potionId = 490000010;
+            var consumable = new RecoveryConsumableCatalog([new RecoveryConsumableDefinition(potionId, 1, 1800000, 770)
+                { EffectMilliseconds = 1800000, EffectMaintenance = 7, CooltimeMaintenance = 7,
+                    TreasureHunterPotion = new(5000) }]);
+            using var f = new QuestSceneTests.Fixture(towns,characters,skills,growth,catalog,false,1,[],loseGrowth: lost,
+                consumables: potion ? consumable : null, inventorySetup: potion ? actor => new(actor.Inventory,actor.Inventory with
+                { Items = actor.Inventory.Items.Add(new(0,new(InventoryListType.Main,65),InventoryRewardGrantService.Create(items.Items.Get(potionId),1))) },"treasure_seed") : null);
+            if (potion)
+            {
+                That(f.Session.UseConsumable(new(new(InventoryListType.Main,65),0,potionId,0),new(consumable)).Outcome ==
+                    ConsumableUseOutcome.Committed && f.Read().Inventory.ConsumableStates.Any(row =>
+                        row.Kind == ConsumableStateKind.Effect && row.ItemId == potionId),
+                    "实际Session复用普通药剂消费事务，不重复客户端模板副本限制；后续死亡读取已提交效果");
+            }
             That(f.Session.LeaveRoom(),"掉落测试从实际出生房间回城");
             foreach (ushort id in new ushort[] {3145,29987})
                 That(f.Session.ChangeQuest(id,QuestLifecycleAction.Accept,catalog,items.Items,items.GoldLimits,items.EpicPieces)?.Commit is not null,"任务掉落正常接取并保留独立身份");
@@ -186,20 +200,23 @@ internal static class QuestDropTests
             var identity = receipt.Snapshot.Identity;
             var bound = receipt.Entry;
             var stale = previous with { ActiveMainQuests = previous.ActiveMainQuests.Select(row => row.QuestId == 29987 ? row with { AcceptanceId = Guid.NewGuid() } : row).ToArray() };
-            var ignored = QuestDropPlan.Create(stale,bound,preloaded,Guid.NewGuid(),identity,receipt.Snapshot.CurrentMap.Id,1,1,false,Draw,DateTimeOffset.UtcNow);
+            var ignored = QuestDropPlan.Create(stale,bound,preloaded,Guid.NewGuid(),identity,receipt.Snapshot.CurrentMap.Id,1,1,false,Draw,DateTimeOffset.UtcNow,
+                potion ? consumable.TreasureHunterPotions : null);
             That(!ignored.Inventory.Changed && ignored.Outcomes.Length == 0 && draws == 2,"旧副本死亡不能向放弃重接后的新身份发任务物品");
-            var capped = QuestDropPlan.Create(actual,bound,preloaded,Guid.NewGuid(),identity,receipt.Snapshot.CurrentMap.Id,1,1,false,Draw,DateTimeOffset.UtcNow);
+            var capped = QuestDropPlan.Create(actual,bound,preloaded,Guid.NewGuid(),identity,receipt.Snapshot.CurrentMap.Id,1,1,false,Draw,DateTimeOffset.UtcNow,
+                potion ? consumable.TreasureHunterPotions : null);
             That(!capped.Inventory.Changed && draws == 2,"达到寻物需求后不继续超量发放，也不浪费随机结果");
             var template = items.Items.Get(10165055); var range = ItemSlotBoundService.Range(template.Kind,previous.Inventory.Expansion);
             var full = previous with { Inventory = previous.Inventory with { Items = previous.Inventory.Items.Concat(
                 Enumerable.Range(range.Start,range.End - range.Start + 1).Select(slot => new InventoryItem(slot + 1000,new(InventoryListType.Main,(short)slot),
                     InventoryRewardGrantService.Create(template) with { ItemId = 99990123 }))).ToImmutableArray() } };
-            var refused = QuestDropPlan.Create(full,bound,preloaded,Guid.NewGuid(),identity,receipt.Snapshot.CurrentMap.Id,1,1,false,Draw,DateTimeOffset.UtcNow);
+            var refused = QuestDropPlan.Create(full,bound,preloaded,Guid.NewGuid(),identity,receipt.Snapshot.CurrentMap.Id,1,1,false,Draw,DateTimeOffset.UtcNow,
+                potion ? consumable.TreasureHunterPotions : null);
             That(!refused.Inventory.Changed && refused.Outcomes is [{ Rolled: 2, Granted: 0, Error: 17 }],"满任务页记录未入库结果，不能生成寻物进度或丢弃既有物品");
             f.Session.ReturnFromFormalDungeon(); f.Session.ReturnToRoster(); f.Session.Select(0); f.Session.MarkReady();
             That(f.Session.Selected!.Inventory.Items.Single(item => item.Core.ItemId == 10165055).Uid == actual.Inventory.Items.Single(item => item.Core.ItemId == 10165055).Uid &&
                 f.Session.Selected.ActiveMainQuests.Single(row => row.QuestId == 29987).ConditionState == 0,"重登恢复同一任务物品UID和实际寻物状态");
-            int Draw(int limit) { if (!dropping) return limit - 1; if (limit == 100) draws++; return 0; }
+            int Draw(int limit) { if (!dropping) return limit - 1; if (limit == 100) { draws++; return potion ? 60 : 0; } return 0; }
             FormalDungeonDeathResult Observe() => f.Session.ObserveFormalDungeonDeath(observation,kills,growth);
         }
         foreach (bool lost in new[] {false,true})

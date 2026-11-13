@@ -130,6 +130,7 @@ internal sealed partial class CharacterRepository
             """;
         if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("训练提交角色revision变化");
         uint proficiencyGained = 0;
+        AdventureProgressionCommit? adventureCommit = null;
         if (plan.Growth is { } progress)
         {
             WriteLearning(db, tx, expected.Id, progress.Learning);
@@ -151,7 +152,7 @@ internal sealed partial class CharacterRepository
                 CreditAdventure(db, tx, owner.Account, expected.Id, AdventureCreditSource.Earned, plan.Experience,
                     EffectivePosition(expected.Level, expected.Learning.Experience), expected.Level, progress.TargetLevel,
                     DateTimeOffset.UtcNow) is { } credit)
-                WriteAdventureCredit(db, tx, owner.Account, credit, AdventureCreditSource.Earned, adventureCatalog!);
+                adventureCommit = WriteAdventureCredit(db, tx, owner.Account, credit, AdventureCreditSource.Earned, adventureCatalog!);
         }
         command.Parameters.AddWithValue("$completed", plan.After.Completed); command.Parameters.AddWithValue("$reward", plan.After.RewardReceived);
         command.CommandText = "UPDATE character_tutorial_state SET completed=$completed,reward_received=$reward WHERE character_id=$id AND account=$account";
@@ -171,6 +172,6 @@ internal sealed partial class CharacterRepository
             throw new InvalidOperationException("训练持久结果与规划不一致");
         tx.Commit();
         if (plan.Death is { } savedDeath) CacheDungeonLoot(owner, expected, savedDeath, plan.Loot);
-        return new TutorialCheckpointResult(committed, false);
+        return new TutorialCheckpointResult(committed, false) { Adventure = adventureCommit };
     });
 }

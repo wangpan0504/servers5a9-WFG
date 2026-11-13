@@ -48,12 +48,31 @@ internal sealed partial class GameSession
             (byte)Math.Max(0, dimension.HiddenWeeklyLimit - hidden.WeeklyUsed));
     });
 
-    public InventoryResult UseDimensionEntryTicket(DfoServer.Game.Inventory.Models.InventorySlot position,
-        DimensionEntryTicketService service) => PlanAndCommitInventory(character => incounts?.Dimension is { } dimension
-            ? service.Plan(character, position, DimensionEntryTicketService.UnlimitedExtraEntries, towns.IsRoom(character.Position, character.CompletedQuests.ToHashSet())
-                ? "[seria room]" : "[village]") : InventoryResult.Reject(19), 19, usedItem: position);
+    public InventoryResult UseDimensionEntryTicket(InventorySlot position,
+        DimensionEntryTicketService service)
+    {
+        return PlanAndCommitInventory(character => incounts?.Dimension is { } dimension
+            ? service.Plan(character, position, dimension.ExtraLimit,
+                towns.IsRoom(character.Position, character.CompletedQuests.ToHashSet()) ? "[seria room]" : "[village]")
+            : InventoryResult.Reject(19), 19, requireTown: true, allowSettlement: false,
+            additionalGuard: HasRequiredBaseUsage, usedItem: position);
+
+        bool HasRequiredBaseUsage()
+        {
+            // 该活动变体明确要求先耗尽基础次数；其余六款仍允许预存追加额度。
+            // 捕获及提交前均在原owner内复核，防止规划期间日切或GM刷新后沿用旧资格。
+            if (Selected is not { } character || character.Inventory.Find(position)?.Core.ItemId != 490008217) return true;
+            return incounts?.Dimension is { } dimension &&
+                repository.LoadDungeonIncount(owner, character.Id, dimension.DailyRow.CountKey,
+                    DungeonIncountPolicy.Period(service.Clock.GetUtcNow(), incounts.WeeklyResetDay(dimension.DailyRow.CountKey)))
+                    .DailyUsed >= dimension.BaseDailyLimit;
+        }
+    }
 
     DateTimeOffset IncountNow() => (timeProvider ?? TimeProvider.System).GetUtcNow();
+    SingleDungeonAdmission? SingleDungeonBinding(DungeonEntryPlan entry) => !entry.IsPractice &&
+        incounts?.SingleGroups.FirstOrDefault(group => group.Id == 1 && group.Dungeons.Contains(checked((int)entry.DungeonId))) is { } group
+        ? SingleDungeonAdmission.At(group, timeProvider ?? TimeProvider.System) : null;
 
     DungeonIncountPeriod IncountPeriod(int dungeon) =>
         DungeonIncountPolicy.Period(IncountNow(), incounts?.WeeklyResetDay(dungeon) ?? DungeonIncountCatalog.DefaultWeeklyResetDay);
@@ -64,18 +83,8 @@ internal sealed partial class GameSession
                 ? row with { Limit = row.Limit + DimensionEntryTicketService.Extra(character.Inventory, IncountNow()) } : row : null;
 
     // 进入 dungeon 要记的账号次数：自身（Check）+ [enter add incount dungeon index] 连带副本（只记不拦）。
-    ImmutableArray<AccountIncountCharge> AccountCharges(int dungeon)
-    {
-        if (incounts is null) return [];
-        var now = IncountNow();
-        var charges = ImmutableArray.CreateBuilder<AccountIncountCharge>();
-        if (incounts.FindAccount(dungeon) is { Limit: > 0 } own)
-            charges.Add(new(dungeon, DungeonIncountPolicy.AccountPeriod(incounts, own, now), own.Limit, true));
-        foreach (int linked in incounts.Linked(dungeon))
-            if (incounts.FindAccount(linked) is { Limit: > 0 } other)
-                charges.Add(new(linked, DungeonIncountPolicy.AccountPeriod(incounts, other, now), other.Limit, false));
-        return charges.ToImmutable();
-    }
+    ImmutableArray<AccountIncountCharge> AccountCharges(int dungeon) =>
+        incounts is null ? ImmutableArray<AccountIncountCharge>.Empty : DungeonIncountPolicy.AccountCharges(incounts, dungeon, IncountNow());
 
     // 所有有次数上限的角色副本当前日/周剩余（NOTI 550 两个 u8），入城时逐个下发；同行副本取同一份使用量。
     // 账号表副本不下发：客户端世界地图上限只读 [dungeon incount info]，账号次数无已知下发包。
@@ -110,13 +119,13 @@ internal sealed partial class GameSession
     });
 
     DungeonEntryCost? EntryCost(Character expected, uint dungeonId, DungeonDefinition definition, EpicPieceCatalog? pieces, bool channelTown,
-        out string? rejection, DungeonIncountUsage? usageOverride = null)
+        out string? rejection, DungeonIncountUsage? usageOverride = null, DungeonIncountRow? rowOverride = null)
     {
         rejection = null;
         // 未装载 DungeonIncountInfo（旧测试夹具）时保持原行为：不计次也不消耗。
-        if (incounts is null || dungeonId > int.MaxValue) return null;
+        if (incounts is null && rowOverride is null || dungeonId > int.MaxValue) return null;
         int id = (int)dungeonId;
-        var row = IncountRow(dungeonId);
+        var row = rowOverride ?? IncountRow(dungeonId);
         var period = IncountPeriod(row?.CountKey ?? id);
         if (row is not null && !DungeonIncountPolicy.CanEnter(row, usageOverride ?? repository.LoadDungeonIncount(owner, expected.Id, row.CountKey, period)))
         {
@@ -124,7 +133,8 @@ internal sealed partial class GameSession
             return null;
         }
         var account = AccountCharges(id);
-        if (account.Any(charge => charge.Check && repository.LoadAccountDungeonIncount(owner, charge.Dungeon, charge.Period) >= charge.Limit))
+        if (account.Any(charge => charge.Check && repository.LoadAccountDungeonIncount(owner, charge.Dungeon, charge.Period) >=
+            checked(charge.Limit + repository.LoadAccountDungeonIncountExtra(owner, charge.Dungeon, charge.Period))))
         {
             rejection = "dungeon-account-incount-exhausted";
             return null;
@@ -132,7 +142,8 @@ internal sealed partial class GameSession
         // [required item] 第三列非 0（客户端 018E6EDC 选 47702「消耗%d个」）：与次数同一范围（任意城镇、非练习的普通入场）都在入场提交时扣除。
         // 频道专属城镇已由 ChannelTownDungeonRequirement 核对持有；其它城镇在这里按入场前背包核对，缺物品拒绝，与 400000016 相同。
         // 第三列为 0（只持有）在普通城镇仍不核对：只有频道专属城镇启用持有检查。
-        var consume = definition.RequiredItem is { Flag: not 0, Count: > 0 } required ? required : null;
+        var consume = DaybreakEntryCost.Select(id, definition.RequiredItem, expected.Inventory, pieces, IncountNow()) is
+            { Flag: not 0, Count: > 0 } required ? required : null;
         ImmutableArray<ItemMaterialCost> additional = [];
         if (definition.IsAncientInfinite)
         {
@@ -155,7 +166,7 @@ internal sealed partial class GameSession
             return null;
         }
         return row is null && account.IsEmpty && consume is null ? null
-            : new(id, row, period, consume, pieces) { Account = account, ChargeOnClear = incounts.ChargesOnClear(id), AdditionalMaterials = additional };
+            : new(id, row, period, consume, pieces) { Account = account, ChargeOnClear = rowOverride is null && incounts?.ChargesOnClear(id) == true, AdditionalMaterials = additional };
     }
 
     // [sub incount on clear dungeon]：通关结算提交后补记次数，不再拦截（本次已经打完）；周期按通关时刻重算。

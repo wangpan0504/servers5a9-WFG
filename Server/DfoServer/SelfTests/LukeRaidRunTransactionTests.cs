@@ -70,8 +70,10 @@ internal static class LukeRaidRunTransactionTests
                     var learning=SkillPointLedger.Synchronize(0,0,90,candidate.InitialLearning with
                         {Experience=resources.Growth.GetLevelStartExperience(90)},resources.Learning);
                     var character=repository.Create(owner,candidate with {Level=90,AcceptedStoryLevel=90,CompletedQuests=[2903,4872],InitialLearning=learning});
-                    var inventory=new InventoryService(items.Items,items.GoldLimits,items.EpicPieces);
-                    InventoryService.Commit(repository,owner,character,inventory.Grant(character,[new(definition.Resources.Script.EntryCost!.ItemId,1)]));
+                    // 门票期限与阶段使用同一时钟，避免多轮推进跨过六点后新门票已过期。
+                    InventoryService.Commit(repository,owner,character,InventoryRewardGrantService.TryGrantBatch(character,
+                        [new(definition.Resources.Script.EntryCost!.ItemId,1)],items.Items,items.GoldLimits,items.EpicPieces,
+                        utcNow:phaseClock.GetUtcNow()));
                     var funded=repository.LoadCharacter(owner,0)!;
                     InventoryService.Commit(repository,owner,funded,new(true,0,new(funded.Inventory,
                         funded.Inventory with {ReviveCoins=30},"fixture_raid_coins")));
@@ -106,7 +108,8 @@ internal static class LukeRaidRunTransactionTests
                     actualStart = new(raids, parties, repository, resources.Towns, items.EpicPieces,
                         policy with { ResourceRewards = privilegeRewards, Completion = completion }, phaseClock, items.Items, phaseTimers);
                 }
-                That(actualStart.Start(actors[0],raid,definition,[],()=>true).Error==0,"领域自然Start同事务安装Party/Started/Battle，不手工Attach");
+                var started = actualStart.Start(actors[0],raid,definition,[],()=>true);
+                That(started.Error==0,$"领域自然Start同事务安装Party/Started/Battle，不手工Attach: {started.Error}/{started.Reason}");
                 var battle=sessions[0].CurrentRaidBattle(actors[0])!;
                 if (privilegeRewards is not null)
                     for (int index = 0; index < actors.Length; index++)

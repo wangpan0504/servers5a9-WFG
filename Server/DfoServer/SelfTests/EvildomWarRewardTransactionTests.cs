@@ -36,6 +36,43 @@ internal static class EvildomWarRewardTransactionTests
         {
             session.Select(0, resumeTown: true); session.MarkReady(); session.CurrentParty = () => parties.Current(session);
             var policy = new EvildomWarRewardPolicy(catalog, resources.ItemResources.Items, resources.ItemResources.Boosters);
+            var items = resources.ItemResources.Items;
+            That(!DfoServer.Game.Inventory.Services.RuneBoxSelection.CanBoostOwnClass(0, 0) &&
+                DfoServer.Game.Inventory.Services.RuneBoxSelection.CanBoostOwnClass(0, 1) &&
+                DfoServer.Game.Inventory.Services.RuneBoxSelection.CanBoostOwnClass(9, 0) &&
+                items.TalismanCandidates(3).All(id => items.Talisman(id)!.AllowsUse(95, 0, 0) == false) &&
+                items.RuneCandidates(0).All(id => items.Rune(id)!.AllowsUse(95, 0, 0) == false) &&
+                items.TalismanCandidates(3).Any(id => items.Talisman(id)!.AllowsUse(95, 0, 1)) &&
+                items.RuneCandidates(0).Any(id => items.Rune(id)!.AllowsUse(95, 0, 1)),
+                "未转职角色不满足护石与符文首转条件，自身转职掉落率加成不会触发");
+            for (int branch = 0; branch < 2; branch++)
+            {
+                int capturedBranch = branch;
+                var guideDrops = new EvildomWarSarpozaDropPlan(2, (0, 1, 95), items).Generate(
+                    bound => bound == 2 ? capturedBranch : 0, clock.GetUtcNow());
+                That(guideDrops.Length == (branch == 0 ? 13 : 14) &&
+                    guideDrops[0].Item is { ItemId: 490014022, Count: 1 } &&
+                    guideDrops.Skip(1).All(row => row.Item is { Kind: DfoServer.GameWorld.Items.ItemKind.Rune, Count: 1 }),
+                    "引导模式夏勒·弗兹固定掉落1个不稳定的护石碎片及12或13个随机符文");
+            }
+            var normalDrops = new EvildomWarSarpozaDropPlan(0, (0, 1, 95), items).Generate(_ => 0, clock.GetUtcNow());
+            That(normalDrops.Length == 22 && normalDrops[0].Item is { ItemId: 490014022, Count: 1 } &&
+                normalDrops.Skip(1).All(row => row.Item is { Kind: DfoServer.GameWorld.Items.ItemKind.Rune, Count: 1 }),
+                "普通模式夏勒·弗兹固定掉落1个不稳定的护石碎片及21个随机符文");
+            for (int branch = 0; branch < 4; branch++)
+            {
+                int capturedBranch = branch;
+                var hardDrops = new EvildomWarSarpozaDropPlan(1, (0, 1, 95), items).Generate(
+                    bound => bound == 4 ? capturedBranch : 0, clock.GetUtcNow());
+                int expectedRuneCount = branch switch { 0 => 25, 1 => 26, _ => 21 };
+                int expectedRoughStoneCount = branch switch { 2 => 4, 3 => 5, _ => 0 };
+                That(hardDrops[0].Item is { ItemId: 490014022, Count: 1 } &&
+                    hardDrops.Count(row => row.Item is { Kind: DfoServer.GameWorld.Items.ItemKind.Rune, Count: 1 }) == expectedRuneCount &&
+                    (expectedRoughStoneCount == 0
+                        ? hardDrops.Length == 1 + expectedRuneCount
+                        : hardDrops.Length == 2 + expectedRuneCount && hardDrops[^1].Item is { ItemId: 10310787 } stone && stone.Count == expectedRoughStoneCount),
+                    "困难模式夏勒·弗兹四分支掉落不稳定的护石碎片、随机符文与耀眼的符文原石");
+            }
             foreach (byte mode in new byte[] { 0, 1, 2 })
                 foreach (int roll in new[] { 0, 4999, 5000, 9372, 9872, 9999 })
                 {
@@ -79,6 +116,11 @@ internal static class EvildomWarRewardTransactionTests
                 That(instance.Move(session, (byte)next.X, (byte)next.Y, 0).Length == 1, "奖励夹具沿真实王座路线推进");
             }
             That(war.Battle.Completion is not null, "只有真实王座终点ClearFact才可规划奖励");
+            var completedView = war.Battle.View;
+            That(session.CommitEvildomWarReward(policy, repository, completedView with { BattleId = Guid.NewGuid() }) is null &&
+                session.CommitEvildomWarReward(policy, repository, completedView with { Revision = completedView.Revision - 1 }) is null &&
+                war.RewardSelection is null && war.RewardPlan is null && war.RewardCommit is null,
+                "旧战役或旧版本通知在抽样和写库之前拒绝，不能替当前战役提前冻结奖励");
             int talisman = resources.ItemResources.Items.TalismanCandidates(3).First();
             // 强制十二件非堆叠护石，覆盖跨邮件批次的完整实例与事务原子性。
             war.RewardSelection = new(0, [new(2, talisman, 12)]);
@@ -97,6 +139,29 @@ internal static class EvildomWarRewardTransactionTests
                 reopened.RecoverEvildomWarRewards(owner, session.Selected.Id).IsEmpty,
                 "重建仓储后无需旧Run，恢复原冻结完整资产且重复恢复不再交付");
             var receipt = session.CommitEvildomWarReward(policy, repository)!;
+            var sourceMember = instance.Members.Single();
+            var teamRow = new EvildomWarPartyReward(sourceMember, receipt);
+            That(receipt.Commit.Plan.Run.Snapshot.Identity.Epoch != receipt.Admission.Epoch &&
+                sourceMember.Actor.Epoch == receipt.Admission.Epoch,
+                "王座实际过图推进Run地图代次，原成员选角代次保持独立");
+            That(teamRow.IsFrom(completedView) &&
+                !(teamRow with { Member = sourceMember with { Slot = 2 } }).IsFrom(completedView) &&
+                !(teamRow with { Member = sourceMember with { Actor = sourceMember.Actor with { Epoch = sourceMember.Actor.Epoch + 1 } } }).IsFrom(completedView) &&
+                !(teamRow with { Receipt = receipt with { Generation = receipt.Generation + 1 } }).IsFrom(completedView) &&
+                !teamRow.IsFrom(completedView with { Revision = completedView.Revision - 1 }),
+                "团队显示行须保持原席位、原generation、原选角和原战役版本，不能把旧结果贴给新槽位");
+            using (var otherOwner = new AccountOwners().Acquire(owner.Account, () => { }))
+            {
+                var otherSession = new GameSession(repository, resources.Towns, otherOwner);
+                try
+                {
+                    That(otherOwner.Generation == receipt.Generation &&
+                        !(teamRow with { Member = sourceMember with { Actor = sourceMember.Actor with { Owner = otherOwner } } }).IsFrom(completedView) &&
+                        !(teamRow with { Member = sourceMember with { Actor = sourceMember.Actor with { Session = otherSession } } }).IsFrom(completedView),
+                        "generation相同也不能替换原admission的Owner或Session引用，来源不按角色快照全记录相等判断");
+                }
+                finally { otherSession.End(); }
+            }
             That(ReferenceEquals(receipt.Commit.Plan, frozen) && receipt.Commit.MailIds.Length == 2 &&
                 Scalar("SELECT count(*) FROM mailbox_attachments") is 12L &&
                 Scalar("SELECT count(*) FROM mailbox_messages WHERE expires_at IS NULL") is 2L,
@@ -116,6 +181,7 @@ internal static class EvildomWarRewardTransactionTests
             using var replacement = owners.Acquire(owner.Account, () => { });
             Reject<InvalidOperationException>(() => reopened.CommitEvildomWarReward(owner, frozen), "旧generation不能发奖");
             That(!session.CanPublishEvildomWarReward(receipt), "接管后旧奖励通知失效");
+            That(teamRow.IsFrom(completedView), "接管只使旧接收者失效，不抹掉原成员已提交的历史奖励事实");
             session.End();
             reopened.Delete(replacement, reopened.LoadDeletionTarget(replacement, 0));
             That(Scalar("SELECT count(*) FROM character_evildom_war_rewards") is 0L, "真实删角清理独立奖励回执及邮件资产");

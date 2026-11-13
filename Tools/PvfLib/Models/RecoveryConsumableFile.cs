@@ -23,6 +23,7 @@ public sealed record RecoveryConsumableFile(int TemplateId, string ScriptPath, S
     public byte? EffectMaintenance { get; init; }
     public byte? CooltimeMaintenance { get; init; }
     public ImmutableArray<int> LimitDungeons { get; init; } = [];
+    public ImmutableArray<string> ImpossibleContents { get; init; } = [];
     public ImmutableArray<int>? ActionUsableDungeons { get; init; }
     public DisguiseDeclaration? Disguise { get; init; }
     public ImmutableArray<DisguiseDeclaration> RandomDisguises { get; init; } = [];
@@ -39,6 +40,15 @@ public sealed record RecoveryConsumableFile(int TemplateId, string ScriptPath, S
         foreach (var duplicate in document.Sections.GroupBy(section => section.Name).Where(group => group.Count() != 1))
             if (!(duplicate.Key is "stackable type" && stackable.TypeDeclaration is not null ||
                 ItemUseFields.IsSharedTag(duplicate.Key) ||
+                // 图标标记属于显示元数据，可有多条完整声明，不构成使用字段冲突。
+                duplicate.Key is "icon mark" && duplicate.All(section => section is
+                    { Children.Length: 0, Values: [{ Type: 6 }, { Type: 0, Value: >= 0 }] }) ||
+                // 商店价格不是使用消耗；多段完整正整数材料对不与恢复效果冲突。
+                duplicate.Key is "need material" && duplicate.All(section => section.IsBlock &&
+                    section.Children.IsEmpty && section.Values.Length > 0 && section.Values.Length % 2 == 0 &&
+                    section.Values.All(token => token is { Type: 0, Value: > 0 })) ||
+                duplicate.Key is "impossible contents" && duplicate.All(section => section.IsBlock &&
+                    section.Children.IsEmpty && section.Values.All(token => token.Type == 6)) ||
                 CompleteIntegerScalars(duplicate) && AllowsRepeatedScalar(duplicate.Key, duplicate)))
                 errors.Add("重复恢复物品字段：" + duplicate.Key);
         int? Scalar(string name)
@@ -77,8 +87,25 @@ public sealed record RecoveryConsumableFile(int TemplateId, string ScriptPath, S
         byte? cooldowns = Maintenance(document, "cooltime maintenance", 3, errors);
         int? bonus = ExpBonus(document, "exp bonus rate", errors);
         int? questBonus = ExpBonus(document, "quest exp bonus rate", errors);
-        var limits = document.Sections.Where(section => section.Name == "limit dungeon")
-            .SelectMany(section => section.Values).Where(token => token.Type == 0).Select(token => token.Value).ToImmutableArray();
+        var limitSections = document.Sections.Where(section => section.Name == "limit dungeon").ToArray();
+        var limits = ImmutableArray<int>.Empty;
+        if (limitSections.Length != 0)
+        {
+            if (limitSections is [{ Children.Length: 0 } section] &&
+                section.Values.All(token => token.Type == 0 && token.Value > 0))
+                limits = section.Values.Select(token => token.Value).ToImmutableArray();
+            else { limits = default; errors.Add("恢复物品禁用地下城声明不完整"); }
+        }
+        var impossibleSections = document.Sections.Where(section => section.Name == "impossible contents").ToArray();
+        var impossible = ImmutableArray<string>.Empty;
+        if (impossibleSections.Length != 0)
+        {
+            if (impossibleSections.All(section => section.IsBlock && section.Children.IsEmpty &&
+                section.Values.All(token => token.Type == 6)))
+                impossible = impossibleSections.SelectMany(section => section.Values)
+                    .Select(token => resolve(token.Value)).Distinct(StringComparer.OrdinalIgnoreCase).ToImmutableArray();
+            else { impossible = default; errors.Add("恢复物品禁止用途声明不完整"); }
+        }
         var usableSections = document.Sections.Where(section => section.Name == "action usable dungeon").ToArray();
         ImmutableArray<int>? usable = null;
         if (usableSections.Length != 0)
@@ -94,7 +121,7 @@ public sealed record RecoveryConsumableFile(int TemplateId, string ScriptPath, S
             ExpBonusPermille = bonus, QuestExpBonusPermille = questBonus,
             ExpBonusMilliseconds = duration is { Target: "myself" } ? duration.Milliseconds : null,
             StatChangeDuration = duration, StatChanges = statChanges,
-            EffectMaintenance = effects, CooltimeMaintenance = cooldowns, LimitDungeons = limits,
+            EffectMaintenance = effects, CooltimeMaintenance = cooldowns, LimitDungeons = limits, ImpossibleContents = impossible,
             ActionUsableDungeons = usable, Disguise = disguise, RandomDisguises = randomDisguises,
             DisguiseAppendages = disguiseAppendages, UnlimitedWaste = unlimitedWaste };
     }

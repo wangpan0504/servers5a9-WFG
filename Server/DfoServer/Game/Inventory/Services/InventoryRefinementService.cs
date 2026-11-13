@@ -8,6 +8,8 @@ internal sealed class InventoryRefinementService(ItemCatalog catalog, EquipmentR
 {
     public TimeProvider Clock { get; } = clock ?? TimeProvider.System;
 
+    public void PrepareEquipmentBonuses(Character character) => EquipmentUpgradeBonusPolicy.Prepare(character, catalog);
+
     public InventoryResult Refine(Character character, RefinementRequest request, out RefinementReceipt? receipt, DateTimeOffset? utcNow = null,
         int guildSuccessPercent = 0)
     {
@@ -37,6 +39,7 @@ internal sealed class InventoryRefinementService(ItemCatalog catalog, EquipmentR
             return InventoryResult.Reject(22);
         }
         RefinementCost cost;
+        EquipmentUpgradeBonus equipmentBonus = default;
         byte desiredLevel;
         if (ticket is { Available: false }) return InventoryResult.Reject(13);
         if (ticket is { Portable: false })
@@ -59,11 +62,16 @@ internal sealed class InventoryRefinementService(ItemCatalog catalog, EquipmentR
             desiredLevel = checked((byte)(oldLevel + 1));
             if (ticket is { Portable: true })
             {
-                if (!sourceTemplate!.AllowsUse(character.Level, character.Job) ||
+                if (!sourceTemplate!.AllowsActivation(character.Level, character.Job) ||
                     !InventoryMoveService.RequiredSkillSatisfied(character, sourceTemplate) ||
                     template.MinimumLevel < ticket.MinimumItemLevel || template.MinimumLevel > ticket.MaximumItemLevel)
                     return InventoryResult.Reject(19);
                 cost = new(material!.Core.ItemId, 1, cost.SuccessWeight);
+            }
+            else
+            {
+                equipmentBonus = EquipmentUpgradeBonusPolicy.Capture(character, catalog, EquipmentUpgradeKind.Refinement, now);
+                cost = cost with { Count = equipmentBonus.RefinementMaterials(cost.Count) };
             }
         }
         // 两种入口都按指定格扣除，不跨堆叠补扣；确认状态不能取代实际材料/券实例。
@@ -87,6 +95,7 @@ internal sealed class InventoryRefinementService(ItemCatalog catalog, EquipmentR
             Portable = ticket?.Portable == true
         };
         long? deadline = InventoryAvatarPackageService.EarliestDeadline(target, [material]);
+        if (equipmentBonus.ExpiresAt is { } bonusDeadline) deadline = Math.Min(deadline ?? long.MaxValue, bonusDeadline);
         // 失败抽签及同级券也消费材料；目标未产生差量时仍复验原实例的期限。
         return new(true, 0, new(before, after, "equipment_refinement", new(character, deadline, Clock, requirePosition: true)));
     }

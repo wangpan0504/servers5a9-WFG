@@ -10,8 +10,10 @@ internal static partial class SinglePlayerDungeonRunTests
     public static void RunCore()
     {
         int checks = Count;
+        RunChampionCore();
         VerifyHelperRotation();
         VerifyCompanionStartRoomIdentity();
+        VerifyTagSystemCompanionSuppression();
         VerifyBattleLevels();
         VerifyMonsterAi();
         VerifyTagEvildomLife();
@@ -104,6 +106,26 @@ internal static partial class SinglePlayerDungeonRunTests
         startFatigueRun.Move(startFatigueRun.Snapshot.Identity,Guid.NewGuid(),boss.Position);
         startFatigueRun.CompleteLoading(startFatigueRun.Snapshot.Identity,Guid.NewGuid());
         That(startFatigueRun.Snapshot.ConsumedFatigue == 10,"入场一次性疲劳之后的首次房间不再逐房计点");
+        That(fatigue.Entry.RoomFatigueCost == 1 && fatigue.Entry.MinimumEntryFatigue == 0,
+            "普通计划逐房基数仍是 1，没有额外入场门槛");
+        That(SinglePlayerDungeonRun.TryCreate(fatigue.Entry with { RoomFatigueCost = 3, MinimumEntryFatigue = 8 }, 4, 400,
+                fatigueRoute, authority, out var disasterFatigueRun, out _),
+            "灾难领域逐房基数仍建立同一条普通路线");
+        var disasterFatigue = disasterFatigueRun!;
+        disasterFatigue.CompleteLoading(disasterFatigue.Snapshot.Identity, Guid.NewGuid());
+        That(disasterFatigue.Snapshot.ConsumedFatigue == 3, "灾难领域首次房间应耗按基数 3 累计");
+        disasterFatigue.Move(disasterFatigue.Snapshot.Identity, Guid.NewGuid(), friendly.Position);
+        That(disasterFatigue.Snapshot.ConsumedFatigue == 3, "过房预留不提前计灾难领域疲劳");
+        disasterFatigue.CompleteLoading(disasterFatigue.Snapshot.Identity, Guid.NewGuid());
+        That(disasterFatigue.Snapshot.ConsumedFatigue == 6, "灾难领域新房间再计 3 点");
+        disasterFatigue.Move(disasterFatigue.Snapshot.Identity, Guid.NewGuid(), start.Position);
+        disasterFatigue.CompleteLoading(disasterFatigue.Snapshot.Identity, Guid.NewGuid());
+        That(disasterFatigue.Snapshot.ConsumedFatigue == 6, "回访已加载房间不重复计灾难领域疲劳");
+        That(SinglePlayerDungeonRun.TryCreate(fatigue.Entry with { StartFatigue = 10, RoomFatigueCost = 3 }, 5, 500, fatigueRoute, authority,
+                out var disasterStartRun, out _) &&
+            disasterStartRun!.CompleteLoading(disasterStartRun.Snapshot.Identity, Guid.NewGuid()).Outcome == DungeonRunOutcome.Accepted &&
+            disasterStartRun.Snapshot.ConsumedFatigue == 10,
+            "入场一次性疲劳仍只计 N，不改乘逐房基数");
         var original = run.Snapshot;
         That(original.LivingMonsters.SequenceEqual(new ushort[] { 10, 11 }) && run.CurrentLivingMonster(10) is { IsBlocking: true } &&
             run.CurrentLivingMonster(11) is null, "snapshot retains the friendly actor while combat qualification excludes it");
@@ -149,20 +171,7 @@ internal static partial class SinglePlayerDungeonRunTests
                 "caller cannot forge blocking eligibility away from the same resource row");
         }
         var defaultRoute = route with { Rooms = [Plan(start, 10, 11), .. route.Rooms.Skip(1)] };
-        var championEntry = entry with { ChampionPercents = new(100, 100, 100, 100) };
-        var championRoute = defaultRoute with { Rooms = defaultRoute.Rooms.Select(room => room.WithChampionRolls(championEntry.ChampionPercents, 0, _ => 0)).ToArray() };
-        That(SinglePlayerDungeonRun.TryCreate(championEntry, 3, 300, championRoute, authority, out _, out _) &&
-            !SinglePlayerDungeonRun.TryCreate(entry, 3, 300, championRoute, authority, out _, out _) &&
-            !SinglePlayerDungeonRun.TryCreate(championEntry with { NamedMonsters = [1] }, 3, 300, championRoute, authority, out _, out _) &&
-            !SinglePlayerDungeonRun.TryCreate(entry with { ChampionPercents = default }, 3, 300, championRoute, authority, out _, out _),
-            "有精英概率声明的普通怪升级仍能建立实例；没有声明或概率为零时不能伪造精英");
-        var excessChampions = defaultRoute.Rooms[0] with
-        {
-            Monsters = defaultRoute.Rooms[0].Monsters.Select(monster => monster with { SpawnType = 1 }).ToArray()
-        };
-        That(!SinglePlayerDungeonRun.TryCreate(championEntry, 3, 300,
-            championRoute with { Rooms = [excessChampions, .. championRoute.Rooms.Skip(1)] }, authority, out _, out _),
-            "每房随机提升至多一只，不能借合法概率伪造全房精英");
+        VerifyChampionRun(entry, defaultRoute, authority);
         That(SinglePlayerDungeonRun.TryCreate(entry, 3, 300, defaultRoute, authority, out var defaultRun, out _),
             "fixtures without team metadata retain their former lifecycle contract");
         defaultRun!.CompleteLoading(defaultRun.Snapshot.Identity, Guid.NewGuid());

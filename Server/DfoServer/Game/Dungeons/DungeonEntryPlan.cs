@@ -22,10 +22,14 @@ internal sealed record DungeonEntryPlan(
     // 实验性（未在95客户端实证）：深渊派对入场（op16 请求 [7]=1）。非空表示本次入场走 maze 的 [hell dungeon] 深渊房间，
     // 并在 DUNGEON_INFO/START_MAP 里带深渊标志；HellPartyMode 取请求标志（参考项目 ResolveHellPartyMode：requestFlag != 0 ? requestFlag : 按难度权重）。
     public DungeonHellPartyRoom? HellParty { get; init; }
+    // 同次入场的地面与翻牌共用一个快照；null也可能是已冻结的关闭状态。
+    public bool DropControlCaptured { get; init; }
+    public DungeonDropMultipliers? DropMultipliers { get; init; }
     // 时空裂缝（[inferno dungeon]）：按深渊派对模式进入，但整条路线本身就是深渊场地，没有密门房间可换图。
     // 与密门深渊共用 HellPartyMode/深渊标志，区别只在 HellParty 为空、不抽柱子波次。
     public bool IsInfernoParty { get; init; }
     public byte HellPartyMode { get; init; }
+    public int? VariousBuffDungeonType { get; init; }
     public bool IsHellLegend { get; init; }
     public bool IsCosmo { get; init; }
     public int? BasisLevel { get; init; }
@@ -54,6 +58,9 @@ internal sealed record DungeonEntryPlan(
     // 地图自带原生 [ai character] 行的房间照常叠加伴侣行。
     public bool AllowsCompanionAi { get; init; } = true;
     public bool IsTutorial { get; init; }
+    public bool IsTayberrs { get; init; }
+    public bool IsTayberrsStory { get; init; }
+    public SpecialDungeonClearReward? SpecialClearReward { get; init; }
     public bool IsOrdinaryLuke { get; init; }
     public bool IsOrdinaryPrey { get; init; }
     public PreyNormalAdmission? PreyNormal { get; init; }
@@ -61,14 +68,19 @@ internal sealed record DungeonEntryPlan(
     public AntonNormalAdmission? AntonNormal { get; init; }
     // 仅由当前战役冻结路线审核后设置，允许无任务接取的真实物件终末。
     public bool IsEvildomWarHidden { get; init; }
+    public byte? EvildomWarMode { get; init; }
+    public (byte Job, byte Grow, byte Level)? EvildomWarProfession { get; init; }
     // 正式普通卢克准入冻结；组队共用入场日，但进度与源怪日资格仍按角色独立。
     public int? OrdinaryLukeDay { get; init; }
     public bool DisableClearReward { get; init; }
+    public bool SuppressOrdinaryResultBoard { get; init; }
+    public bool ForcedCreateDelilah { get; init; }
     public DfoServer.Game.Raids.RaidDungeonIdentity? RaidEntry { get; init; }
     public DfoServer.Game.Raids.FiendwarCombatScale? FiendwarScale { get; init; }
     // 仅由团本准入根据当前maze和精确OBJ/ACT证据冻结，不以模板号单独授予清图资格。
     public DfoServer.GameWorld.Raids.LukeObjectBinding? LukeEnergyObject { get; init; }
     public bool DisableMonsterAndClearExperience { get; init; }
+    public bool AllowsZeroClearExperience => IsTutorial || DisableMonsterAndClearExperience || ExperienceWeight == 0;
     public bool DisableItemDrops { get; init; }
     public bool DisableGiveupPenalty { get; init; }
     public int? CoinLimit { get; init; }
@@ -78,12 +90,13 @@ internal sealed record DungeonEntryPlan(
     public bool IsAltar => DungeonId is 11006 or 11007;
     public bool IsDespair => DungeonId is >= 11008 and <= 11107;
     public bool DisableFatigueConsumption { get; init; }
+    public ImmutableHashSet<int> DisjointForbiddenDropRarities { get; init; } = ImmutableHashSet<int>.Empty;
     public Guid QuestAcceptanceId { get; init; }
     // 队长已批准的物理路线，只供分层、演出和物件终点核验；个人任务始终读取本人的 QuestAcceptances。
     public DungeonEntryPlan? PartyRoute { get; init; }
     // 带原接取身份的普通路线，含猎杀、收集及列表通关；同样核对普通入场费用。
     public bool IsOrdinaryHunt { get; init; }
-    public bool IsOrdinary => !IsTutorial && RouteQuestId == 0 && (QuestId == 0 || IsOrdinaryHunt);
+    public bool IsOrdinary => MockBattle is null && !IsTutorial && RouteQuestId == 0 && (QuestId == 0 || IsOrdinaryHunt);
     public bool IsTrainingRoom => DungeonId == 5000 && Maze.IsTrainingRoom;
     public bool IsClassExperience => DungeonId == 7142 && Maze.IsClassExperience;
     public LostLandAdmission? LostLand { get; init; }
@@ -91,6 +104,7 @@ internal sealed record DungeonEntryPlan(
     // 材料必须与次数、疲劳、尝试号同事务提交（见 InstallFormalDungeon 的延后分支）。
     public bool IsAncientInfinite { get; init; }
     public bool IsPractice { get; init; }
+    public DfoServer.Game.MonsterMockBattle.MockBattleAdmission? MockBattle { get; init; }
     // 仅由专用准入与当前TAG资源核验生成，不凭9608图号授予普通经济路径。
     public bool IsTagEvildom { get; init; }
     public bool IsImperialArena { get; init; }
@@ -98,14 +112,20 @@ internal sealed record DungeonEntryPlan(
     public bool HasFreeCombatConsumption => IsPractice || IsTrainingRoom || IsClassExperience;
     // 实验性（#259）：比赛副本（PVF [tournament dungeon] 1，[no fatigue]），不消耗疲劳。
     public bool IsTournament => Maze.IsTournament;
+    public ushort TournamentRoundFatigue { get; init; }
     public int? GriefLayer { get; init; }
     public bool IsBossRush { get; init; }
     public int TimeoutMilliseconds { get; init; }
-    public bool RequiresFatigueOwner => (IsOrdinary || RouteQuestId != 0 && !IsQuestReplay) && LostLand is null &&
+    public bool RequiresFatigueOwner => MockBattle is null && (IsOrdinary || RouteQuestId != 0 && !IsQuestReplay) && LostLand is null &&
         !IsTutorial && RaidEntry is null && !IsTrainingRoom && !IsClassExperience && !IsTournament && !IsPractice && !Maze.IsGriefTower && !IsBossRush;
     public bool UsesFatigue => RequiresFatigueOwner && !DisableFatigueConsumption;
     // #511 普通入场的 [use fatigue only start dungeon] N：入场提交时一次扣 N，之后首次房间不再逐房扣点。0 = 沿用逐房一点。
     public ushort StartFatigue { get; init; }
+    // 逐房基础疲劳。普通图为 1；灾难领域实图为 3。0 按 1 处理，避免旧计划漏字段后免费。
+    // 燃烧只乘在账本 Cost 上。应耗统计仍加这个基数，与普通图「统计 +1、燃烧账本 +2」同一口径。
+    public ushort RoomFatigueCost { get; init; } = 1;
+    // 入场门槛。0 表示只沿用「剩余为 0 则 fatigue-exhausted」。灾难领域为 8：剩余 1–7 走 start-fatigue-insufficient:8。
+    public ushort MinimumEntryFatigue { get; init; }
     public OperationHopeAdmission? Hope { get; init; }
     public DimensionDungeonAdmission? Dimension { get; init; }
     public (byte Job, byte Grow)? DimensionRewardProfession { get; init; }
@@ -145,13 +165,33 @@ internal sealed record DungeonEntryPlan(
     public bool IndividualMapMovement { get; init; }
     public bool InitializationCounterSupported { get; init; }
     public bool IsQuestReplay { get; init; }
+    public bool IsRevisedBeast { get; init; }
+    public RevisedBeastEncounter? RevisedBeastEncounter { get; init; }
     public bool IsTerminalMap(DungeonMap map) =>
-        LostLand is null && (Hope is { } hope ? OperationHopePlan.IsDeclaredTerminal(hope.Catalog,hope.MazeOrdinal,map.Id) : Maze.DummyStages.Count > 0 ? map == Maze.DummyStages[^1] :
+        !IsRevisedBeast && LostLand is null && (Hope is { } hope ? OperationHopePlan.IsDeclaredTerminal(hope.Catalog,hope.MazeOrdinal,map.Id) : Maze.DummyStages.Count > 0 ? map == Maze.DummyStages[^1] :
         PassiveClearTerminalMap is { } passive ? map == passive :
         CinematicClearTerminalMap is { } cinematic ? map == cinematic :
         TerminalLayerMap is { } layer ? map == layer :
         map == BossMap || BossMap.Kind != "layered" && map.IsConditional &&
         map.Position == BaseBossMap.Position && Maze.ConditionalMaps.Contains(map));
+
+    public static bool TryCreateRevisedBeast(DungeonCatalog catalog, Character character, uint dungeonId, byte difficulty,
+        out DungeonEntryPlan? plan, out string reason, DungeonEntryPlan? partyRoute = null)
+    {
+        plan = null;
+        reason = "revised-beast-layout-unavailable";
+        if (dungeonId is < 5335 or > 5339 || difficulty > 2) return false;
+        try
+        {
+            var definition = catalog.Get((int)dungeonId) with { Mazes = [catalog.RevisedBeastMaze((int)dungeonId,difficulty)] };
+            if (!TryCreate(definition,character,dungeonId,0,difficulty,out plan,out reason,partyRoute:partyRoute,revisedBeast:true)) return false;
+            // 改版遭遇和终局独立调度，内部锚点不授予普通Boss通关资格。
+            plan = plan! with { IsRevisedBeast = true, DisableClearReward = true, DisableMonsterAndClearExperience = true };
+            return true;
+        }
+        catch (Exception error) when (error is InvalidDataException or NotSupportedException or FileNotFoundException)
+        { reason = "revised-beast-resource-unavailable:" + error.Message; return false; }
+    }
 
     public static bool TryCreateReplay(DungeonCatalog catalog,QuestReplayPlan replay,out DungeonEntryPlan? plan,out string reason)
     {
@@ -193,12 +233,18 @@ internal sealed record DungeonEntryPlan(
             hellParty:hellParty,hellLegend:hellLegend,practice:practice,bossCellFromBossMap:bossCellFromBossMap,grief:grief,hope:hope,partyRoute:partyRoute,tagEvildom:tagEvildom,tagMaze:tagMaze,imperialArena:imperialArena,dimension:dimension);
     }
 
+    // 资源消费者登记与正式入场保持同一超星空合同，不能只凭邀请函正数推定可收费。
+    internal static bool SupportsCosmoEntryContract(DungeonDefinition definition) =>
+        definition.IsCosmoDungeon && definition.CosmoInvitationCount == 40 && definition.CosmoStoneCount == 4 &&
+        definition.CosmoQuestId == 10112 && definition.TryGetDesignatedDifficulty(out byte difficulty) && difficulty == 4 &&
+        definition.StartFatigue == 8;
+
     internal static bool TryCreate(DungeonDefinition definition, Character character, uint dungeonId, uint questId,
         byte difficulty, out DungeonEntryPlan? plan, out string reason, bool allowClearedQuest = false, StoryQuest? quest = null,
         Func<int,int>? draw = null, QuestCatalog? quests = null, Func<DungeonMaze,DungeonMaze>? resolveMaze = null,bool isReplay = false,
         Func<ActiveMainQuest,bool>? allowClearedTerminalQuest = null,bool hellParty = false,bool hellLegend = false,bool practice = false,
         bool bossCellFromBossMap = false, GriefTowerAdmission? grief = null, OperationHopeAdmission? hope = null, DungeonEntryPlan? partyRoute = null, DfoServer.Game.TagEvildom.TagEvildomAdmission? tagEvildom = null, int? tagMaze = null, DfoServer.Game.Raids.RaidDungeonIdentity? raid = null, int? raidMaze = null,
-        DfoServer.Game.ImperialArena.ImperialArenaAdmission? imperialArena = null, DimensionDungeonAdmission? dimension = null)
+        DfoServer.Game.ImperialArena.ImperialArenaAdmission? imperialArena = null, DimensionDungeonAdmission? dimension = null, bool revisedBeast = false)
     {
         plan = null;
         if (hellParty && !isReplay) { questId = 0; quest = null; }
@@ -208,7 +254,7 @@ internal sealed record DungeonEntryPlan(
         if (reason != "resource-request-ready")
             return false;
         // 已退役入口不能借普通路线重新启用。
-        if (dungeonId is >= 5335 and <= 5339)
+        if (dungeonId is >= 5335 and <= 5339 && !revisedBeast)
         { reason = "dungeon-mode-unsupported"; return false; }
         if (definition.Id != dungeonId)
         {
@@ -223,7 +269,7 @@ internal sealed record DungeonEntryPlan(
         bool lostLand = dungeonId == 4000 || string.Equals(definition.DungeonType?.Trim(), "lost land", StringComparison.OrdinalIgnoreCase);
         if (lostLand && (dungeonId != 4000 || definition.DungeonType != "lost land" ||
             !definition.DisableFatigueConsumption || !definition.DisableGiveupPenalty ||
-            questId != 0 || difficulty != 0 || isReplay || practice || hellParty || hellLegend || partyRoute is not null ||
+            difficulty != 0 || isReplay || practice || hellParty || hellLegend || partyRoute is not null ||
             grief is not null || hope is not null || tagEvildom is not null || raid is not null))
         {
             reason = "lost-land-mode-unsupported";
@@ -252,9 +298,7 @@ internal sealed record DungeonEntryPlan(
         {
             if (!hellParty || hellLegend || practice || isReplay || questId != 0)
             { reason = "cosmo-mode-required"; return false; }
-            if (!definition.IsCosmoDungeon || definition.CosmoInvitationCount != 40 || definition.CosmoStoneCount != 4 ||
-                definition.CosmoQuestId != 10112 || !definition.TryGetDesignatedDifficulty(out byte cosmoDifficulty) || cosmoDifficulty != 4 ||
-                definition.StartFatigue != 8)
+            if (!SupportsCosmoEntryContract(definition))
             { reason = "cosmo-entry-contract-unsupported"; return false; }
         }
         // 时空裂缝只能按深渊派对模式进入（PVF 副本头 [select dungeon normal disable] 1），普通请求不能落回普通路线白进。
@@ -333,6 +377,7 @@ internal sealed record DungeonEntryPlan(
                     character.ActiveMainQuests.ToImmutableArray().Add(hope.Acceptance), Hope = hope,
                 BypassedQuestTerrain = bypassedTerrain,
                 HopeRewardProfession = hope is null ? null : (character.Job,character.GrowType),
+                EvildomWarProfession = shared.EvildomWarMode is null ? null : (character.Job, character.GrowType, character.Level),
                 IsOrdinaryHunt = accepted is not null && shared.RouteQuestId == 0,
                 RecommendedQuestItems = !shared.IsPractice && !shared.IsTutorial && !shared.IsClassExperience && !shared.IsTrainingRoom &&
                     !shared.IsQuestReplay && shared.LostLand is null && !definition.IsRaid && DungeonLuckyStarPolicy.IsRecommendedLevel(definition, character.Level),
@@ -472,6 +517,18 @@ internal sealed record DungeonEntryPlan(
                 layoutQuest = null;
             }
         }
+        // 遗忘之地没有任务专用迷宫。副本内会面同样沿唯一普通迷宫，并保留本次接取身份。
+        if (!isReplay && lostLand && candidates.Length == 0 && questId != 0 && quest is not null &&
+            DeclaresLostLand(quest) && LostLandMeetNpc(definition, character, quest, questId))
+        {
+            candidates = definition.Mazes.Where(maze => maze.QuestConnectionTokens.Count == 0).ToArray();
+            if (candidates.Length == 1)
+            {
+                ordinaryHunt = true;
+                routeQuest = 0;
+                layoutQuest = null;
+            }
+        }
         // 实验性：深渊派对只走普通（无任务连接）且声明了 [hell dungeon] 深渊房间的 maze；不沿用任务/顺序任务/普通狩猎的路线推断。
         // 时空裂缝（[inferno dungeon]）没有密门，整条路线就是深渊场地：候选是该副本全部无任务连接 maze，不换图、不加房间。
         bool infernoParty = hellParty && definition.IsInfernoDungeon;
@@ -505,10 +562,8 @@ internal sealed record DungeonEntryPlan(
         }
         if (raid is not null)
         {
-            if (!Enum.IsDefined(raid.Kind) || raid.InstanceId == Guid.Empty || raid.Squad < 1 ||
-                raid.Squad > (raid.Kind == DfoServer.Game.Raids.RaidKind.Fiendwar ? 8 : raid.Kind == DfoServer.Game.Raids.RaidKind.Luke ? 2 : 5) ||
+            if (!Enum.IsDefined(raid.Kind) || raid.InstanceId == Guid.Empty || !raid.HasValidGroup ||
                 questId != 0 || difficulty != 2 ||
-                raid.Kind == DfoServer.Game.Raids.RaidKind.Prey && raid.Squad != 1 ||
                 isReplay || practice || hellParty || tagEvildom is not null || hope is not null)
             { reason = "raid-maze-admission-mismatch"; return false; }
             candidates = definition.Mazes.Where(row => row.SourceOrdinal == raidMaze && row.QuestConnectionTokens.Count == 0).ToArray();
@@ -528,6 +583,12 @@ internal sealed record DungeonEntryPlan(
         {
             reason = candidates.Length == 0 ? "route-maze-unavailable" : "route-maze-ambiguous";
             if (questId != 0 || quests is not null) reason = candidates.Length == 0 ? "quest-maze-unavailable" : "quest-maze-ambiguous";
+            return false;
+        }
+        // 只放行 dungeon info 明确指向4000的已接取寻物、猎杀或会面；其它任务不能借普通迷宫进入。
+        if (lostLand && questId != 0 && (quest is null || !ordinaryHunt || !DeclaresLostLand(quest)))
+        {
+            reason = "lost-land-mode-unsupported";
             return false;
         }
 
@@ -591,11 +652,15 @@ internal sealed record DungeonEntryPlan(
         bool bossMapCell = bossCellFromBossMap && layoutQuest is null && questId == 0 && !hellParty && !maps.Any(map => map.Kind == "boss");
         // 02A17ABB..02A17AE4：Boss坐标的boss候选为空时使用该格map候选。普通路线按资源声明的坐标投影，
         // 不能要求DGN重复写boss种类；只改本次计划，地图与怪物身份仍由原资源及Run复验。
-        // 任务路线继续要求明确的清图目标，叠层、条件和多阶段路线保留原合同。
+        // 非回放任务路线继续要求明确的清图目标，叠层、条件和多阶段路线保留原合同。
         bool ordinaryBossCell = !definition.IsTutorial && !definition.IsClassExperience && !definition.IsTournament && dungeonId != 5000 &&
             routeQuest == 0 && (questId == 0 || ordinaryHunt) && layoutQuest is null &&
             maze.QuestConnectionTokens.Count == 0 && maze.LayeredMaps.Count == 0 && maze.ConditionalMaps.Count == 0 && maze.DummyStages.Count == 0;
-        if (maze.StoryStages.Count == 0 && bosses.Length == 1 && bosses[0].Kind == "map" && (bossMapCell || ordinaryBossCell || layoutQuest is not null &&
+        // 显式单格回放（如3158/7159）也沿原生Boss坐标的map候选回退；只投影本次计划，不放宽普通任务或多阶段路线。
+        bool replayBossCell = isReplay && questId > 0 && routeQuest == questId && layoutQuest?.Id == questId &&
+            maze.ConnectsQuest(routeQuest,difficulty) && maps.Count == 1 && start == boss &&
+            maze.LayeredMaps.Count == 0 && maze.ConditionalMaps.Count == 0 && maze.DummyStages.Count == 0;
+        if (maze.StoryStages.Count == 0 && bosses.Length == 1 && bosses[0].Kind == "map" && (bossMapCell || ordinaryBossCell || replayBossCell || layoutQuest is not null &&
             QuestClearEligibility.IsSingleMap(layoutQuest) && (bosses[0].Id == layoutQuest.IntData[0] ||
                 maze.LayeredMaps.Any(map => map.Position == boss && map.Id == layoutQuest.IntData[0]))))
         {
@@ -604,7 +669,8 @@ internal sealed record DungeonEntryPlan(
             {
                 MapSpecification = maze.MapSpecification!.Select(map => map == bosses[0] ? promoted : map).ToArray(),
                 ConditionalMaps = maze.ConditionalMaps.Select(map => map.Position == promoted.Position && map.Kind == bosses[0].Kind
-                    ? map with { Kind = promoted.Kind } : map).ToArray()
+                    ? map with { Kind = promoted.Kind } : map).ToArray(),
+                QuestReplayRoom = replayBossCell ? new DungeonQuestReplayRoom(routeQuest, promoted) : maze.QuestReplayRoom
             };
             starts = starts.Select(map => map == bosses[0] ? promoted : map).ToArray();
             bosses = [promoted];
@@ -684,13 +750,20 @@ internal sealed record DungeonEntryPlan(
         if (definition.IsBossRushDungeon)
             planMaze = planMaze with { IsBossRush = true };
         var active = questId == 0 || isReplay ? null : character.ActiveMainQuests.Single(quest => quest.QuestId == questId);
+        float experienceWeight = DungeonKillExperienceCatalog.GetDungeonWeight(definition);
         plan = new(character.Id, character.Revision, dungeonId,isReplay ? 0 : questId, active?.Slot ?? byte.MaxValue, difficulty, planMaze, starts[0], terminal)
         {
+            VariousBuffDungeonType = definition.DungeonType switch { "ancient dungeon" => 1, "requiem dungeon" => 2, "dimension dungeon" => 0, _ => null },
             RequestedDifficulty = requestedDifficulty == difficulty ? null : requestedDifficulty,
             RandomizedObjectSelection = raid?.Kind == DfoServer.Game.Raids.RaidKind.Anton
                 ? DungeonRandomizedObjectSelection.Create(planMaze.RandomizedObjectGroups, draw) : null,
             LostLand = lostLandAdmission,
             BasisLevel = definition.BasisLevel,
+            IsTayberrs = definition.IsTayberrs,
+            IsTayberrsStory = definition.IsTayberrsStory,
+            SpecialClearReward = !practice && !definition.IsTutorial && !definition.IsClassExperience && !definition.DisableClearReward && !lostLand
+                ? definition.SpecialClearReward : null,
+            DisableItemDrops = definition.DisableItemDrops || definition.IsTayberrsStory,
             IsOrdinaryLuke = definition.IsOrdinaryLuke,
             IsOrdinaryPrey = definition.IsOrdinaryPrey, IsOrdinaryAnton = definition.IsOrdinaryAnton,
             RecommendedQuestClear = !lostLand && !isReplay && !practice && !definition.IsTutorial && !definition.IsClassExperience && dungeonId != 5000 &&
@@ -703,12 +776,22 @@ internal sealed record DungeonEntryPlan(
             PlayerTeam = 0,
             IsTutorial = definition.IsTutorial,
             DisableClearReward = definition.DisableClearReward || lostLand,
+            // 原活动两条具名DGN已证不出普通结果页；保留叶删去该块时恢复此活动合同，不推广到其它副本。
+            SuppressOrdinaryResultBoard = dungeonId is 400000097 or 400000098 &&
+                (definition.HasNoResultBoard || EpicRoadResourcePaths.Dungeons.GetValueOrDefault(checked((int)dungeonId)) == definition.Path &&
+                    !definition.RawSections.Any(section => section.Tag is "dungeon clear result" or "/dungeon clear result" or "result board" or "reward card")) &&
+                definition.DisableClearReward && experienceWeight == 0,
+            ForcedCreateDelilah = definition.ForcedCreateDelilah,
             IsTagEvildom = tagEvildom is not null,
             IsImperialArena = imperialArena is not null,
             DisableMonsterAndClearExperience = definition.DisableMonsterAndClearExperience || tagEvildom is not null || imperialArena is not null,
             DisableGiveupPenalty = definition.DisableGiveupPenalty,
             CoinLimit = definition.Id is >= 11006 and <= 11107 ? definition.CoinLimit : null,
             DisableFatigueConsumption = definition.DisableFatigueConsumption,
+            TournamentRoundFatigue = definition.TournamentRoundFatigue ?? 0,
+            // 本服仅解除两张原活动图的史诗来源限制；模板禁分及其它来源继续保留。
+            DisjointForbiddenDropRarities = EpicRoadResourcePaths.Dungeons.GetValueOrDefault(definition.Id) == definition.Path
+                ? definition.DisjointForbiddenDropRarities.Remove(4) : definition.DisjointForbiddenDropRarities,
             MonsterBasisLevel = definition.BasisLevel,
             QuestAcceptanceId = active?.AcceptanceId ?? Guid.Empty,
             BaseBossMap = bosses[0],
@@ -722,16 +805,19 @@ internal sealed record DungeonEntryPlan(
             QuestCinematicMapId = layoutQuest?.CinematicMapId,
             QuestCinematicChangesLayer = layoutQuest?.CinematicChangesLayer == true,
             IsOrdinaryHunt = ordinaryHunt,
-            QuestAcceptances = definition.IsClassExperience || practice || tagEvildom is not null || imperialArena is not null ? [] : character.ActiveMainQuests.ToImmutableArray(),
+            // 任务回放只消费已完成路线，不冻结活动任务作为清理/奖励资格。
+            QuestAcceptances = isReplay || definition.IsClassExperience || practice || tagEvildom is not null || imperialArena is not null ? [] : character.ActiveMainQuests.ToImmutableArray(),
             BypassedQuestTerrain = bypassedTerrain,
             ExperienceEquipmentModule = definition.RawSections.Any(row => row.Tag == "tower of despair") ? "despair tower" :
                 definition.RawSections.Any(row => row.Tag == "tower of scream") ? "scream tower" :
                 definition.DungeonType?.Trim().Trim('`', '[', ']') switch
                 { "tower of death" => "dead tower", "advance altar" => "advanced altar", null or "" => "dungeon", var module => module },
-            ExperienceWeight = DungeonKillExperienceCatalog.GetDungeonWeight(definition),
+            // 本服重开两活动图采用星空裂缝所在黑暗都市的缺省击杀权重1；清图禁奖仍按原资源判定。
+            ExperienceWeight = dungeonId is 400000097 or 400000098 &&
+                EpicRoadResourcePaths.Dungeons.GetValueOrDefault(checked((int)dungeonId)) == definition.Path ? 1 : experienceWeight,
             NamedMonsters = DungeonKillExperienceCatalog.GetNamedMonsters(definition),
-            ChampionPercents = practice || raid is not null || tagEvildom is not null || hope is not null
-                ? default : DungeonChampionRates.For(definition),
+            ChampionPercents = practice || tagEvildom is not null || hope is not null
+                ? default : DungeonChampionRates.For(definition, raidAdmission: raid is not null),
             IndividualMapMovement = definition.IndividualMapMovement,
             IsQuestReplay = isReplay,
             IsAncientInfinite = definition.IsAncientInfinite,
@@ -743,10 +829,14 @@ internal sealed record DungeonEntryPlan(
             IsInfernoParty = infernoParty,
             IsHellLegend = hellParty && !cosmo && hellLegend,
             IsCosmo = cosmo,
-            AllowsCompanionAi = definition.AllowsCompanionAi && tagEvildom is null && !lostLand,
+            // 帝国竞技场与再战魔界的旧支援兵由新 DLL 全权接管，服务端不得注入任何通用支援兵。
+            AllowsCompanionAi = definition.AllowsCompanionAi && tagEvildom is null && imperialArena is null && !lostLand,
             HellPartyMode = hellParty ? (byte)1 : (byte)0,
             // 时空裂缝入场一次扣 6 点疲劳（用户指定的本服规则）；PVF 没有声明分段数，不能沿用逐房间一点。
             StartFatigue = cosmo ? definition.StartFatigue ?? (ushort)0 : infernoParty ? (ushort)6 : (ushort)0,
+            // 灾难领域 dgn 没有疲劳标签。门槛和逐房基数写在计划上，不能改成 StartFatigue。
+            RoomFatigueCost = DisasterDungeonPolicy.AppliesFatigue(definition, practice) ? DisasterDungeonPolicy.RoomFatigue : (ushort)1,
+            MinimumEntryFatigue = DisasterDungeonPolicy.AppliesFatigue(definition, practice) ? DisasterDungeonPolicy.EntryMinimumFatigue : (ushort)0,
             InitializationCounterSupported = !definition.IsClassExperience && !practice && maze.LayeredMaps.Count == 0 && maze.StoryStages.Count == 0 &&
                 !definition.RawSections.Any(section => section.Tag is "mercenary broker dungeon" or "dnfaos dungeon")
         };
@@ -775,6 +865,20 @@ internal sealed record DungeonEntryPlan(
             else notes.Add("start-fatigue-shape-unsupported");
         }
         return plan with { EntryItem = ticket, StartFatigue = start, EntryCostNote = notes.Count == 0 ? null : string.Join(',', notes) };
+    }
+
+    static bool DeclaresLostLand(StoryQuest quest) =>
+        quest.Definition is { Diagnostics.Length: 0 } declared &&
+        declared.Dungeons.Any(row => row.DungeonId == 4000 && row.Parameter is -1 or 0);
+
+    static bool LostLandMeetNpc(DungeonDefinition definition, Character character, StoryQuest quest, uint questId)
+    {
+        if (definition.IsTutorial || definition.IsClassExperience || quest.Id != questId ||
+            quest.Condition != "[meet npc]" || quest.SubType != -1 || quest.IntData is not [> 0] ||
+            !QuestCoverage.HasOrdinaryDeclarations(quest)) return false;
+        var active = character.ActiveMainQuests.SingleOrDefault(row => row.QuestId == questId);
+        return active is { AcceptanceId: var acceptance } && acceptance != Guid.Empty &&
+            character.ActiveMainQuests.Count(row => row.AcceptanceId == acceptance) == 1;
     }
 
     static bool CanUseOrdinaryQuestRoute(DungeonDefinition definition, Character character, StoryQuest quest,

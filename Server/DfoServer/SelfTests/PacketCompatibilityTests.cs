@@ -27,6 +27,10 @@ internal static class PacketCompatibilityTests
         };
         byte[] selection = TownPackets.Select(character);
         Array.Clear(selection, 5, 4); // 仅归一服务端当前时间，其他字节必须完全一致。
+        That(System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(selection.AsSpan(228)) == 0,
+            "无蓄电池角色的ACK4祝福为0，不能复制默认156点剩余疲劳");
+        // 旧金样误将普通余额写入祝福字段；独立校验修正字段后，其余字节仍复用固定金样。
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(selection.AsSpan(228), 156);
         // 固定样本仅将 offset222 从职业0修正为初始城镇38，其余234B保持原合同。
         Match(selection, "4C0CC901DF0FA44EA4F658D90B0979D1FD45AAC6CE382086FE0EA3757D0D6E72", "selection initial town");
         byte[] actor = TownPackets.Actor(character, 0);

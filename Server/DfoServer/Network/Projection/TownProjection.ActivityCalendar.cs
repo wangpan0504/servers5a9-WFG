@@ -1,3 +1,5 @@
+using DfoServer.Game.Characters;
+using DfoServer.Game.Inventory.Models;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Builders.Inventory;
 using DfoServer.Network.Protocol;
@@ -16,7 +18,7 @@ internal sealed partial class TownProjection
         // 不渝之咏没有活动页登记，仍并入同一槽序，供随后的 14 增量使用。
         int[] calendarIds = pages.Where(page => page.Visible).SelectMany(page => page.ShowItemIds).Distinct().Order()
             .Where(id => id > 0 && items.Get(id).AccountMaterial is not null).ToArray();
-        int[] ids = AccountMaterialProjectionIds(pages);
+        int[] ids = AccountMaterialProjectionIds(context, pages);
         var previous = context.ActivityCalendarItems;
         bool same = previous is { } current && current.Epoch == epoch && current.ItemIds.SequenceEqual(ids);
         if (ids.Length == 0 && previous is not { ItemIds.Length: > 0 }) return;
@@ -25,22 +27,55 @@ internal sealed partial class TownProjection
         // 活动页始终全量替换。没有活动页时，不把全零的攻坚材料插进选角的 108/639 之间。
         context.ActivityCalendarItems = (epoch, ids);
         if (calendarIds.Length == 0 && !clearPrevious && !introduceBalance) return;
+        long now = timer.GetUtcNow().ToUnixTimeSeconds();
         var bodies = CalendarLists(ids).Select(row => ActivityCalendarItemPackets.Full(row.List,
-            character.Inventory.AccountWallet, row.ItemIds)).ToArray();
+            character.Inventory.AccountWallet, row.ItemIds, character.Inventory, now)).ToArray();
         foreach (byte[] body in bodies)
             await context.Notify(NotiPacketType.ITEM_LIST, body, "activity_calendar_items",
                 () => canSend?.Invoke() != false && context.Session.SelectionEpoch == epoch &&
                     context.Session.Selected?.Id == character.Id && context.ActivityCalendarItems?.ItemIds == ids);
     }
 
+    internal byte[] SpecialFull(GameConnectionContext context, InventorySnapshot inventory, InventoryListType list,
+        long? utcSeconds = null) =>
+        list == InventoryListType.AccountCommon && items is not null &&
+        context.ActivityCalendarItems is { } calendar && calendar.Epoch == context.Session.SelectionEpoch &&
+        calendar.ItemIds.Length != 0
+            ? ActivityCalendarItemPackets.Full(ActivityCalendarItemPackets.CommonList, inventory.AccountWallet,
+                CalendarCommonIds(calendar.ItemIds), inventory, utcSeconds ?? timer.GetUtcNow().ToUnixTimeSeconds())
+            : InventoryPackets.SpecialFull(inventory, list, utcSeconds);
+
+    internal async Task SyncCommonCalendarSlotsAsync(GameConnectionContext context, InventorySnapshot before,
+        Character character, Func<bool>? canSend = null)
+    {
+        if (items is null || context.ActivityCalendarItems is not { } calendar ||
+            calendar.Epoch != context.Session.SelectionEpoch || calendar.ItemIds.Length == 0)
+            return;
+        int[] commonIds = CalendarCommonIds(calendar.ItemIds);
+        if (commonIds.Length == 0) return;
+        bool CalendarCurrent() => canSend?.Invoke() != false && context.Session.SelectionEpoch == calendar.Epoch &&
+            context.Session.Selected?.Id == character.Id && context.ActivityCalendarItems?.ItemIds == calendar.ItemIds;
+        foreach (var (body, obtained) in ActivityCalendarItemPackets.Changes(ActivityCalendarItemPackets.CommonList,
+            character.Inventory.AccountWallet, character.Inventory.AccountWallet, commonIds, before, character.Inventory))
+            await context.Notify(obtained ? NotiPacketType.UPDATE_ITEM_LIST : NotiPacketType.UPDATE_ITEM_LIST_NOT_NOTICE,
+                body, obtained ? "activity_calendar_item_obtained" : "activity_calendar_item_committed", CalendarCurrent);
+    }
+
+    int[] CalendarCommonIds(int[] ids) =>
+        ids.Where(id => items!.Get(id).AccountMaterial!.CommonInventory).ToArray();
+
     // 活动登记与攻坚额度材料去重后按模板升序固定槽；零余额不占全量包，增加时仍用原槽。
-    int[] AccountMaterialProjectionIds(IReadOnlyList<EventInfoDesignPage> pages)
+    int[] AccountMaterialProjectionIds(GameConnectionContext context, IReadOnlyList<EventInfoDesignPage> pages)
     {
         var selected = new HashSet<int>();
         foreach (int id in pages.Where(page => page.Visible).SelectMany(page => page.ShowItemIds))
             if (id > 0 && items!.Get(id).AccountMaterial is not null) selected.Add(id);
         foreach (int id in items!.RaidAccountMaterialLimits.Keys)
             if (items.TryGet(id, out var template) && template.AccountMaterial is not null) selected.Add(id);
+        // 谋略战召唤界面直接查询list45；券和硬币并入共享槽序，领取、消耗及重连沿同一投影。
+        if (context.MonsterMockBattle is { Enabled: true } battle)
+            foreach (int id in battle.AccountMaterialIds)
+                if (items.TryGet(id, out var template) && template.AccountMaterial is not null) selected.Add(id);
         return selected.Order().ToArray();
     }
 

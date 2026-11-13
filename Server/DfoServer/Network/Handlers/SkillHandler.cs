@@ -11,6 +11,9 @@ namespace DfoServer.Network.Handlers;
 
 internal sealed class SkillHandler(SkillLearningCatalog catalog, ServerLog log, InventoryProjection projection) : IGameCommandModule
 {
+    private static byte CurrentVariant(GameConnectionContext context) => context.Session.Selected is { } character
+        ? DfoServer.Game.Characters.CharacterSkillVariant.Read(context.Session.ReadSkillCharacter(character)) : (byte)0;
+
     public void Register(GameCommandRegistry commands)
     {
         commands.Register(CmdPacketType.BUY_SKILL, PurchaseAsync, nameof(SkillHandler));
@@ -33,6 +36,7 @@ internal sealed class SkillHandler(SkillLearningCatalog catalog, ServerLog log, 
             await context.Reply(CmdPacketType.CHANGE_ANOTHER_SKILL_TREE, [0, 1, 0], "skill_tree_change_malformed");
             return CommandResult.Handled;
         }
+        byte previousVariant = CurrentVariant(context);
         var result = context.Activity?.BlocksTownActions == true
             ? new SkillLearningResult(SkillLearningFailure.Unsupported, null, Array.Empty<DfoServer.Game.Characters.LearnedSkill>())
             : context.Session.ChangeSkillTree(current);
@@ -50,6 +54,8 @@ internal sealed class SkillHandler(SkillLearningCatalog catalog, ServerLog log, 
         await SkillProjection.PublishCombosAsync(context, receipt.Character, "skill_tree_change_combos", Guard);
         await SkillSwitchInventoryProjection.RefreshLearningAsync(context, receipt);
         await projection.RefreshSkillTreeAsync(context, receipt.Character, Guard);
+        if (CurrentVariant(context) != previousVariant)
+            await projection.RefreshSkillVariantAsync(context, receipt, previousVariant, includeSelf: false);
         return CommandResult.Handled;
     }
 
@@ -128,6 +134,7 @@ internal sealed class SkillHandler(SkillLearningCatalog catalog, ServerLog log, 
                 "training_skill_reset_info",GuardTraining);
             return CommandResult.Handled;
         }
+        byte previousVariant = CurrentVariant(context);
         var result = context.Session.ResetSkills(parsed.Context, parsed.Mode, catalog);
         if (!result.Success)
         {
@@ -144,6 +151,8 @@ internal sealed class SkillHandler(SkillLearningCatalog catalog, ServerLog log, 
         await SkillProjection.PublishAsync(context, receipt.Character, "skill_reset_info", "skill_reset_combo", Guard,
             id => catalog.Get(receipt.Character.Job, id).DefaultCommand);
         await SkillSwitchInventoryProjection.RefreshLearningAsync(context, receipt);
+        if (CurrentVariant(context) != previousVariant)
+            await projection.RefreshSkillVariantAsync(context, receipt, previousVariant);
         return CommandResult.Handled;
     }
 
@@ -201,6 +210,7 @@ internal sealed class SkillHandler(SkillLearningCatalog catalog, ServerLog log, 
                 "training_skill_committed",()=>context.Session.CanPublishLearning(committed));
             return CommandResult.Handled;
         }
+        byte previousVariant = CurrentVariant(context);
         var result = context.Session.LearnSkills(request, catalog);
         if (result.Success)
         {
@@ -214,6 +224,8 @@ internal sealed class SkillHandler(SkillLearningCatalog catalog, ServerLog log, 
                 await SkillProjection.PublishAsync(context, receipt.Character, "skill_automatic_synchronized", "skill_purchase_combo",
                     () => context.Session.CanPublishLearning(receipt));
             await SkillSwitchInventoryProjection.RefreshLearningAsync(context, receipt);
+            if (CurrentVariant(context) != previousVariant)
+                await projection.RefreshSkillVariantAsync(context, receipt, previousVariant);
             return CommandResult.Handled;
         }
 

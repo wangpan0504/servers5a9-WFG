@@ -34,6 +34,15 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
         commands.Register(CmdPacketType.UPGRADE_DISJOINT_MACHINE, UpgradeAsync, nameof(ExpertJobHandler), UserStateRequirement.WorldReady);
         commands.Register(CmdPacketType.REPAIR_DISJOINT_MACHINE, RepairDisjointerAsync, nameof(ExpertJobHandler), UserStateRequirement.WorldReady);
         commands.Register(CmdPacketType.REPAIR_EXPERT_JOB_STORE, RepairEnchanterAsync, nameof(ExpertJobHandler), UserStateRequirement.WorldReady);
+        commands.Register(CmdPacketType.CREATE_DISJOINT_STORE, CreateDisjointStoreAsync, nameof(ExpertJobHandler), UserStateRequirement.WorldReady);
+        commands.Register(CmdPacketType.ENTER_DISJOINT_STORE, EnterDisjointStoreAsync, nameof(ExpertJobHandler), UserStateRequirement.WorldReady);
+        commands.Register(CmdPacketType.CLOSE_DISJOINT_STORE, CloseStoreAsync, nameof(ExpertJobHandler), UserStateRequirement.WorldReady);
+        commands.Register(CmdPacketType.CREATE_PRIVATE_STORE, CreatePrivateStoreAsync, nameof(ExpertJobHandler), UserStateRequirement.WorldReady);
+        commands.Register(CmdPacketType.REMOVE_PRIVATE_STORE, RemovePrivateStoreAsync, nameof(ExpertJobHandler), UserStateRequirement.WorldReady);
+        commands.Register(CmdPacketType.ENTER_PRIVATE_STORE, EnterPrivateStoreAsync, nameof(ExpertJobHandler), UserStateRequirement.WorldReady);
+        commands.Register(CmdPacketType.EXIT_PRIVATE_STORE, ExitPrivateStoreAsync, nameof(ExpertJobHandler), UserStateRequirement.WorldReady);
+        commands.Register(CmdPacketType.VERIFY_PRIVATE_STORE_ITEM, VerifyPrivateStoreItemAsync, nameof(ExpertJobHandler), UserStateRequirement.WorldReady);
+        commands.Register(CmdPacketType.BUY_PRIVATE_STORE_ITEM, BuyPrivateStoreItemAsync, nameof(ExpertJobHandler), UserStateRequirement.WorldReady);
     }
 
     async Task<CommandResult> GiveUpAsync(GameConnectionContext context, Packet packet)
@@ -64,7 +73,7 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
                 ExpertJobPackets.CloseStoreNotice(character.Id), "expert_job_store_closed");
         await SkillProjection.PublishAsync(context, character, "expert_job_giveup_skills", "expert_job_giveup_combo", Guard);
         await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(character, context.Session.ReadPvpGrade(character), context.Channel,
-            adventureName: context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom),
+            adventureName: context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom, returningAdventurerType: context.Session.ReturningAdventurerType, marriage: context.MarriageAppearance),
             "expert_job_giveup_actor", Guard);
         await context.Reply(CmdPacketType.GIVEUP_EXPERT_JOB, ExpertJobPackets.GiveUpSuccess(result.FinalGold, result.GiveUpState),
             "expert_job_giveup_committed", Guard);
@@ -90,16 +99,16 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
             return CommandResult.Handled;
         }
         var parsed = ExpertJobRequests.ReadCompound(packet.Body);
-        var type = context.Owner.Execute(() => context.Session.Selected?.ExpertJobType ?? 0);
+        var current = context.Session.CapturePersonalExpertJob();
+        var type = current?.ExpertJobType ?? 0;
         if (type is not (1 or 2 or 4))
         {
             await context.Reply(CmdPacketType.COMPOUND_ITEM_BY_EXPERT_JOB, ExpertJobPackets.Fail(19), "expert_job_compound_type");
             return CommandResult.Handled;
         }
-        var current = context.Owner.Execute(() => context.Session.Selected);
         ushort craftError = 19;
         if (current is not null && ExpertJobCraft.TryPlan(current, scripts, items, goldLimits, pieces, parsed.First, parsed.Second,
-            parsed.Third, Random.Shared.Next, DateTimeOffset.UtcNow, out var craft, out craftError))
+            parsed.Third, Random.Shared.Next, DateTimeOffset.UtcNow, out var craft, out craftError, enchantments?.Catalog))
         {
             var crafted = context.Session.CommitExpertJobCraft(craft.Inventory, craft.Experience, craft.SuccessCount > 0 ? quests : null);
             if (!crafted.Accepted || crafted.Receipt is not { } craftedReceipt)
@@ -111,7 +120,7 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
             RefreshOpenStore(context, craftedReceipt.Character);
             await inventory.RefreshAsync(context, crafted);
             await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(craftedReceipt.Character, context.Session.ReadPvpGrade(craftedReceipt.Character), context.Channel,
-                adventureName: context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom),
+                sceneState: ActorSceneState(craftedReceipt.Phase), adventureName: context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom, returningAdventurerType: context.Session.ReturningAdventurerType, marriage: context.MarriageAppearance),
                 "expert_job_compound_actor", Crafted);
             await NotifyInfo(context, craftedReceipt.Character, Crafted, "expert_job_compound_info", current);
             await context.Reply(CmdPacketType.COMPOUND_ITEM_BY_EXPERT_JOB,
@@ -139,7 +148,7 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
             return CommandResult.Handled;
         }
         var parsed = ExpertJobRequests.ReadEnchantStore(packet.Body);
-        var current = context.Session.CaptureExpertJobTrade();
+        var current = context.Session.CapturePersonalExpertJob();
         if (current is not null && parsed.First != current.Id && parsed.Third == 2 && parsed.Fourth == 0 && parsed.Sixth == 0 &&
             parsed.Second <= int.MaxValue && parsed.Fifth <= short.MaxValue && parsed.Seventh <= short.MaxValue)
             return await TradeStoreAsync(context, parsed.First, 1, candidate => cardEnchanting?.Plan(candidate,
@@ -169,7 +178,7 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
         RefreshOpenStore(context, craftedReceipt.Character);
         await inventory.RefreshAsync(context, committed);
         await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(craftedReceipt.Character, context.Session.ReadPvpGrade(craftedReceipt.Character), context.Channel,
-            adventureName: context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom),
+            sceneState: ActorSceneState(craftedReceipt.Phase), adventureName: context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom, returningAdventurerType: context.Session.ReturningAdventurerType, marriage: context.MarriageAppearance),
             "expert_job_enchant_actor", Crafted);
         await NotifyInfo(context, craftedReceipt.Character, Crafted, "expert_job_enchant_info", current);
         var priorRarities = scripts.LearnedRarities(scripts.LearnedRecipes(current!.ExpertJobType,
@@ -201,7 +210,7 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
             return CommandResult.Handled;
         }
         var parsed = ExpertJobRequests.ReadExtraction(packet.Body);
-        var current = context.Owner.Execute(() => context.Session.Selected);
+        var current = context.Session.CapturePersonalExpertJob();
         ushort error = 19;
         if (current is null || !ExpertJobCraft.TryPlanExtract(current, scripts, items, goldLimits, pieces, parsed.ExtractorSlot,
             parsed.TargetList, parsed.TargetSlot, Random.Shared.Next, DateTimeOffset.UtcNow, out var craft, out error))
@@ -227,7 +236,7 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
         acknowledged.Add(new((InventoryListType)parsed.TargetList, parsed.TargetSlot));
         await inventory.RefreshAsync(context, committed, acknowledgedSlots: acknowledged);
         await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(craftedReceipt.Character, context.Session.ReadPvpGrade(craftedReceipt.Character), context.Channel,
-            adventureName: context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom),
+            sceneState: ActorSceneState(craftedReceipt.Phase), adventureName: context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom, returningAdventurerType: context.Session.ReturningAdventurerType, marriage: context.MarriageAppearance),
             "expert_job_extract_actor", Crafted);
         await NotifyInfo(context, craftedReceipt.Character, Crafted, "expert_job_extract_info", current);
         return CommandResult.Handled;
@@ -235,10 +244,9 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
 
     async Task<CommandResult> DisjointAsync(GameConnectionContext context, Packet packet)
     {
-        if (context.Session.Phase is SessionPhase.Dungeon or SessionPhase.Settlement)
+        if (context.Session.Phase is SessionPhase.Dungeon or SessionPhase.Settlement && packet.Body.Length == 0 &&
+            context.Session.CurrentFormalDungeonScene() is { Entry.HellParty: not null } scene)
         {
-            var scene = context.Session.CurrentFormalDungeonScene();
-            if (scene?.Entry.HellParty is null) return CommandResult.Unhandled;
             log.Write("formal_hell_party_start_observed", new { Connection = context.Id, scene.Entry.DungeonId,
                 Length = packet.Body.Length, Body = Convert.ToHexString(packet.Body), Experimental = true });
             return CommandResult.Handled;
@@ -250,10 +258,11 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
             await context.Reply(CmdPacketType.REQUEST_DISJOINT_ITEM, ExpertJobPackets.Fail(19), "expert_job_disjoint_malformed");
             return CommandResult.Handled;
         }
-        var captured = context.Owner.Execute(() => (context.Session.Selected, context.Session.SelectionEpoch, context.Session.Phase));
+        var captured = context.Owner.Execute(() => (Character: context.Session.CapturePersonalExpertJob(),
+            Selected: context.Session.Selected, context.Session.SelectionEpoch, context.Session.Phase));
         bool Guard() => context.Owner.Execute(() => ReferenceEquals(context.Session.Selected, captured.Selected) &&
             context.Session.SelectionEpoch == captured.SelectionEpoch && context.Session.Phase == captured.Phase);
-        var current = captured.Selected;
+        var current = captured.Character;
         if (current is not null && request.OwnerActor != current.Id && request.SourceList == 0 && request.SourceSlot <= short.MaxValue)
             return await TradeStoreAsync(context, request.OwnerActor, 3, candidate => disassembly?.Plan(candidate,
                 new(InventoryListType.Main, (short)request.SourceSlot), ownMachine: false));
@@ -282,22 +291,27 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
             catch (System.Data.Common.DbException error) { throw new IOException("Committed machine disjoint publication failed", error); }
         }
         RefreshOpenStore(context, receipt.Character);
-        await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(receipt.Character, context.Session.ReadPvpGrade(receipt.Character), context.Channel,
-            adventureName: context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom), "expert_job_disjoint_actor", Current);
-        await NotifyInfo(context, receipt.Character, Current, "expert_job_disjoint_info");
+        // gain exp允许抽到0；只有熟练度实际改变才重装Actor，避免批量分解重复重建角色。
+        if (receipt.Character.ExpertJobExperience != current.ExpertJobExperience)
+            await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(receipt.Character, context.Session.ReadPvpGrade(receipt.Character), context.Channel,
+                sceneState: ActorSceneState(receipt.Phase), adventureName: context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom, returningAdventurerType: context.Session.ReturningAdventurerType, marriage: context.MarriageAppearance), "expert_job_disjoint_actor", Current);
+        // 0236FDB0已将ACK235尾部耐久写入当前机器及本人副职业；不用205再次初始化窗口。
         log.Write("expert_job_disjoint", new { Connection = context.Id, Character = current.Id, Accepted = true,
             Rule = "pvf-disjointer-v1", request.SourceSlot, SourceItem = current.Inventory.Find(new(InventoryListType.Main, (short)request.SourceSlot))?.Core.ItemId,
             current.ExpertMachineGrade, Rewards = products.Rewards, receipt.Character.ExpertMachineEndurance });
         return CommandResult.Handled;
     }
 
-    async Task<CommandResult> CreateStoreAsync(GameConnectionContext context, Packet packet)
+    Task<CommandResult> CreateStoreAsync(GameConnectionContext context, Packet packet) =>
+        CreateStoreCoreAsync(context, packet.Body, CmdPacketType.CREATE_EXPERT_JOB_STORE);
+
+    async Task<CommandResult> CreateStoreCoreAsync(GameConnectionContext context, byte[] body, CmdPacketType replyOpcode)
     {
         ExpertJobCreateStoreRequest parsed;
-        try { parsed = ExpertJobRequests.ReadCreateStore(packet.Body); }
+        try { parsed = ExpertJobRequests.ReadCreateStore(body); }
         catch (InvalidDataException)
         {
-            await context.Reply(CmdPacketType.CREATE_EXPERT_JOB_STORE, ExpertJobPackets.Fail(19), "expert_job_store_malformed");
+            await context.Reply(replyOpcode, ExpertJobPackets.Fail(19), "expert_job_store_malformed");
             return CommandResult.Handled;
         }
         var character = context.Owner.Execute(() => context.Session.Selected);
@@ -305,7 +319,7 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
             character.ExpertJobType == 1 && parsed.Mode != 3 || context.Activity?.BlocksTownActions == true ||
             !context.Session.OpenExpertJobStore())
         {
-            await context.Reply(CmdPacketType.CREATE_EXPERT_JOB_STORE, ExpertJobPackets.Fail(19), "expert_job_store_rejected");
+            await context.Reply(replyOpcode, ExpertJobPackets.Fail(19), "expert_job_store_rejected");
             return CommandResult.Handled;
         }
         byte grade = checked((byte)(character.ExpertJobType == 3 ? character.ExpertMachineGrade
@@ -328,7 +342,7 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
             await context.Notify(NotiPacketType.CREATE_EXPERT_JOB_STORE, notice, "expert_job_store_self", Current);
             await context.Notify(NotiPacketType.UPDATE_EXPERT_JOB_STORE, goods, "expert_job_store_self_goods", Current);
         }
-        await context.Reply(CmdPacketType.CREATE_EXPERT_JOB_STORE, ExpertJobPackets.CreateStoreSuccess(), "expert_job_store_opened");
+        await context.Reply(replyOpcode, ExpertJobPackets.CreateStoreSuccess(), "expert_job_store_opened");
         return CommandResult.Handled;
     }
 
@@ -378,6 +392,118 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
         return CommandResult.Handled;
     }
 
+    Task<CommandResult> CreateDisjointStoreAsync(GameConnectionContext context, Packet packet)
+    {
+        byte[] normalized = packet.Body.Length >= 14 && packet.Body[0] != 0
+            ? [0, .. packet.Body]
+            : packet.Body;
+        return CreateStoreCoreAsync(context, normalized, CmdPacketType.CREATE_DISJOINT_STORE);
+    }
+
+    async Task<CommandResult> EnterDisjointStoreAsync(GameConnectionContext context, Packet packet)
+    {
+        try { _ = ExpertJobRequests.ReadEnterStore(packet.Body); }
+        catch (InvalidDataException)
+        {
+            await context.Reply(CmdPacketType.ENTER_DISJOINT_STORE, ExpertJobPackets.Fail(19), "disjoint_store_enter_malformed");
+            return CommandResult.Handled;
+        }
+        ushort actor = ExpertJobRequests.ReadEnterStore(packet.Body);
+        if (actor == 0 || stores is null || !stores.TryGet(actor, out var store) || store.Mode != 0)
+        {
+            await context.Reply(CmdPacketType.ENTER_DISJOINT_STORE, ExpertJobPackets.Fail(19), "disjoint_store_enter_missing");
+            return CommandResult.Handled;
+        }
+        context.Session.QuoteExpertJobStore(store);
+        await context.Reply(CmdPacketType.ENTER_DISJOINT_STORE,
+            ExpertJobPackets.EnterStoreKind0(store.Grade, store.First, store.Endurance), "disjoint_store_enter");
+        return CommandResult.Handled;
+    }
+
+    async Task<CommandResult> CreatePrivateStoreAsync(GameConnectionContext context, Packet packet)
+    {
+        PrivateStoreCreateRequest parsed;
+        try { parsed = ExpertJobRequests.ReadCreatePrivateStore(packet.Body); }
+        catch (InvalidDataException)
+        {
+            await context.Reply(CmdPacketType.CREATE_PRIVATE_STORE, ExpertJobPackets.Fail(19), "private_store_create_malformed");
+            return CommandResult.Handled;
+        }
+        var character = context.Owner.Execute(() => context.Session.Selected);
+        if (character is null || context.Activity?.BlocksTownActions == true || stores is null)
+        {
+            await context.Reply(CmdPacketType.CREATE_PRIVATE_STORE, ExpertJobPackets.Fail(19), "private_store_create_rejected");
+            return CommandResult.Handled;
+        }
+        var record = new PrivateStoreRecord(character.Id, parsed.Title, character.Position.Town, character.Position.Area, [.. parsed.Offers]);
+        stores.OpenPrivateStore(record);
+        await context.Reply(CmdPacketType.CREATE_PRIVATE_STORE, ExpertJobPackets.PrivateStoreOpened(character.Id, parsed.Title), "private_store_opened");
+        return CommandResult.Handled;
+    }
+
+    async Task<CommandResult> RemovePrivateStoreAsync(GameConnectionContext context, Packet packet)
+    {
+        var character = context.Owner.Execute(() => context.Session.Selected);
+        if (character is not null)
+            stores?.TryClosePrivateStore(character.Id, out _);
+        await context.Reply(CmdPacketType.REMOVE_PRIVATE_STORE, [1], "private_store_removed");
+        return CommandResult.Handled;
+    }
+
+    async Task<CommandResult> EnterPrivateStoreAsync(GameConnectionContext context, Packet packet)
+    {
+        try { _ = ExpertJobRequests.ReadEnterStore(packet.Body); }
+        catch (InvalidDataException)
+        {
+            await context.Reply(CmdPacketType.ENTER_PRIVATE_STORE, ExpertJobPackets.Fail(19), "private_store_enter_malformed");
+            return CommandResult.Handled;
+        }
+        ushort actor = ExpertJobRequests.ReadEnterStore(packet.Body);
+        if (actor == 0 || stores is null || !stores.TryGetPrivateStore(actor, out var store))
+        {
+            await context.Reply(CmdPacketType.ENTER_PRIVATE_STORE, ExpertJobPackets.Fail(19), "private_store_enter_missing");
+            return CommandResult.Handled;
+        }
+        await context.Reply(CmdPacketType.ENTER_PRIVATE_STORE, ExpertJobPackets.PrivateStoreEntered(store), "private_store_entered");
+        return CommandResult.Handled;
+    }
+
+    async Task<CommandResult> ExitPrivateStoreAsync(GameConnectionContext context, Packet packet)
+    {
+        await context.Reply(CmdPacketType.EXIT_PRIVATE_STORE, [1], "private_store_exited");
+        return CommandResult.Handled;
+    }
+
+    async Task<CommandResult> VerifyPrivateStoreItemAsync(GameConnectionContext context, Packet packet)
+    {
+        await context.Reply(CmdPacketType.VERIFY_PRIVATE_STORE_ITEM, [1], "private_store_item_verified");
+        return CommandResult.Handled;
+    }
+
+    async Task<CommandResult> BuyPrivateStoreItemAsync(GameConnectionContext context, Packet packet)
+    {
+        PrivateStoreBuyRequest parsed;
+        try { parsed = ExpertJobRequests.ReadBuyPrivateStoreItem(packet.Body); }
+        catch (InvalidDataException)
+        {
+            await context.Reply(CmdPacketType.BUY_PRIVATE_STORE_ITEM, ExpertJobPackets.Fail(19), "private_store_buy_malformed");
+            return CommandResult.Handled;
+        }
+        var buyer = context.Owner.Execute(() => context.Session.Selected);
+        if (buyer is null || stores is null || !stores.TryGetPrivateStore(parsed.OwnerActor, out var store) ||
+            !store.TryPurchase(parsed.StallSlot, parsed.Count, parsed.UnitPrice, out var purchased, out var updated, out uint totalPrice) ||
+            purchased.ItemId != parsed.ItemId || buyer.Inventory.Gold < totalPrice || !stores.TryUpdatePrivateStore(store, updated))
+        {
+            await context.Reply(CmdPacketType.BUY_PRIVATE_STORE_ITEM, ExpertJobPackets.Fail(19), "private_store_buy_rejected");
+            return CommandResult.Handled;
+        }
+        int remaining = updated.Offers.FirstOrDefault(row => row.StallSlot == parsed.StallSlot)?.Count ?? 0;
+        await context.Reply(CmdPacketType.BUY_PRIVATE_STORE_ITEM,
+            ExpertJobPackets.PrivateStoreBought(parsed.OwnerActor, parsed.StallSlot, remaining, buyer.Inventory.Gold - totalPrice),
+            "private_store_bought");
+        return CommandResult.Handled;
+    }
+
     Task<CommandResult> UpgradeAsync(GameConnectionContext context, Packet packet) =>
         MachineAsync(context, packet, CmdPacketType.UPGRADE_DISJOINT_MACHINE, disjointer: true, upgrade: true);
 
@@ -401,7 +527,7 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
             await context.Reply(opcode, ExpertJobPackets.Fail(19), "expert_job_machine_blocked");
             return CommandResult.Handled;
         }
-        var current = context.Owner.Execute(() => context.Session.Selected);
+        var current = context.Session.CapturePersonalExpertJob();
         byte expected = disjointer ? (byte)3 : (byte)1;
         ushort error = 19;
         InventoryPlan? plan = null;
@@ -431,7 +557,7 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
         RefreshOpenStore(context, receipt.Character);
         await inventory.RefreshAsync(context, committed);
         await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(receipt.Character, context.Session.ReadPvpGrade(receipt.Character), context.Channel,
-            adventureName: context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom),
+            sceneState: ActorSceneState(receipt.Phase), adventureName: context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom, returningAdventurerType: context.Session.ReturningAdventurerType, marriage: context.MarriageAppearance),
             "expert_job_machine_actor", Guard);
         await NotifyInfo(context, receipt.Character, Guard, "expert_job_machine_info");
         byte[] body = opcode switch
@@ -445,6 +571,9 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
         await context.Reply(opcode, body, "expert_job_machine_committed", Guard);
         return CommandResult.Handled;
     }
+
+    static ActorSceneState ActorSceneState(SessionPhase phase) =>
+        phase is SessionPhase.Dungeon or SessionPhase.Settlement ? DfoServer.Network.Builders.ActorSceneState.Dungeon : DfoServer.Network.Builders.ActorSceneState.Town;
 
     void RefreshOpenStore(GameConnectionContext context, DfoServer.Game.Characters.Character character) => context.Owner.Execute(() =>
     {

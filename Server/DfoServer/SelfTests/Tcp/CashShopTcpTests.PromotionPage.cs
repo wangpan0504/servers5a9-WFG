@@ -115,7 +115,8 @@ internal static partial class CashShopTcpTests
 
         // 真正的唯一loader与完整资源消费者，Active目录不再依赖诊断启动参数。
         catalog = DfoServer.Infrastructure.ServerRuntime.LoadCashShopPromotions(items,
-            JsonSerializer.Serialize(new[] { new PromotionConfiguration(rules, true) }));
+            JsonSerializer.Serialize(new[] { new PromotionConfiguration(rules, true) }),
+            DfoServer.Game.Dungeons.HellPartyTicketConsumers.From(resources.Towns, resources.Dungeons));
         That(catalog.Activities.Single().Availability == PromotionAvailability.Active &&
             catalog.Activities.Single().Configuration.Rules.MaximumPurchases == 5000,
             "真实loader完整消费者通过并保留5000套原规则");
@@ -178,9 +179,12 @@ internal static partial class CashShopTcpTests
         => AssertPromotionNativeEvents(payload, (long?)count, (bool?)disabled, extraEvents);
 
     internal static void AssertPromotionNativeEvents(byte[] payload, long? count, bool? disabled, IReadOnlyList<ushort> extraEvents,
-        long? unavailableCount = null, IReadOnlyList<ushort>? activeEvents = null, uint? battlePassEnd = null)
+        long? unavailableCount = null, IReadOnlyList<ushort>? activeEvents = null, uint? battlePassEnd = null,
+        IReadOnlyDictionary<ushort, IReadOnlyList<uint>>? eventValues = null)
     {
         activeEvents ??= [2395];
+        // 333已有固定原生槽位；调用方的完整开放清单也可能含它，不得再作为追加项重复计数。
+        extraEvents = extraEvents.Where(id => id != 333).ToArray();
         using var input = new MemoryStream(payload);
         using var reader = new BinaryReader(input, Encoding.UTF8);
         string Text()
@@ -190,8 +194,8 @@ internal static partial class CashShopTcpTests
             byte[] bytes = reader.ReadBytes(length);
             return Encoding.GetEncoding(936, EncoderFallback.ExceptionFallback, DecoderFallback.ExceptionFallback).GetString(bytes);
         }
-        That(reader.ReadUInt16() == 4 + extraEvents.Count, "页面只追加10999，原完整活动目录项数保留");
-        foreach (ushort id in (ushort[])[2037, 2378, 2395, .. extraEvents])
+        That(reader.ReadUInt16() == 5 + extraEvents.Count, "页面只追加10999，原完整活动目录项数保留");
+        foreach (ushort id in (ushort[])[2037, 2378, 2395, .. extraEvents.TakeWhile(id => id is 282 or 2449 or 414 or 181), 333, .. extraEvents.SkipWhile(id => id is 282 or 2449 or 414 or 181)])
             That(reader.ReadUInt16() == id && reader.ReadUInt32() == 1 && Text() == "" && Text() == "" && reader.ReadByte() == 0,
                 "原赛丽亚/红包/乔纳森/开放活动每字段保留");
         That(reader.ReadUInt16() == 10999 && reader.ReadUInt32() == 1 && Text() == "" && Text() == "" && reader.ReadByte() == 1,
@@ -269,7 +273,8 @@ internal static partial class CashShopTcpTests
         {
             That(reader.ReadUInt16() == id, "原active tail活动身份未丢失");
             for (int index = 0; index < 12; index++)
-                That(reader.ReadUInt32() == (id == 2037 && index == 0 ? 8u : 0u), "原active tail完整12个数值逐字段保留");
+                That(reader.ReadUInt32() == (eventValues is not null && eventValues.TryGetValue(id, out var values)
+                    ? values[index] : id == 2037 && index == 0 ? 8u : 0u), "原active tail完整12个数值逐字段保留");
         }
         if (battlePassEnd is uint end)
         {

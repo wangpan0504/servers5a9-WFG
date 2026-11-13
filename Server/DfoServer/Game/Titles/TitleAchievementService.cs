@@ -14,6 +14,14 @@ internal sealed class TitleAchievementService(TitleCatalog titles, QuestCatalog 
 {
     public TitleCatalog Catalog => titles;
 
+    public ImmutableArray<int> UnlockedEmotions(Character character) =>
+        character.TitleSections.Where(titles.Sections.ContainsKey)
+            .Select(key => titles.Sections[key].Emotion)
+            .Where(emotion => emotion > 0)
+            .Distinct()
+            .Order()
+            .ToImmutableArray();
+
     // 成就券单独授权general全组；不复用GM的逐项降级，任一奖励无效即整批拒绝。
     public TitleAchievementResult CompleteGeneral(Character character, IReadOnlyCollection<int> questIds, DateTimeOffset now)
     {
@@ -199,6 +207,7 @@ internal sealed class TitleAchievementService(TitleCatalog titles, QuestCatalog 
             }
         }
         var sections = character.TitleSections.ToBuilder();
+        var unlockedEmotions = ImmutableArray.CreateBuilder<int>();
         IEnumerable<KeyValuePair<int, TitleSectionDefinition>> candidates = completed.Count != 0 || requested == 0 ? titles.Sections : [];
         foreach (var (key, section) in candidates)
         {
@@ -209,9 +218,13 @@ internal sealed class TitleAchievementService(TitleCatalog titles, QuestCatalog 
             if (section.PostalItem > 0 && !Postal(new(section.PostalItem, section.PostalCount, section.Sender, section.Message, "title-section:" + key)))
                 return TitleAchievementResult.Reject(requested);
             sections.Add(key);
+            if (section.Emotion > 0) unlockedEmotions.Add(section.Emotion);
         }
         var plan = new TitleAchievementPlan(character, new(character.Inventory, inventory, "title_achievement", new(character)),
-            progress.ToImmutable(), sections.ToImmutable(), completed.ToImmutable(), postals.ToImmutable(), postalItems.ToImmutable());
+            progress.ToImmutable(), sections.ToImmutable(), completed.ToImmutable(), postals.ToImmutable(), postalItems.ToImmutable())
+        {
+            UnlockedEmotions = unlockedEmotions.ToImmutable()
+        };
         return new(true, 0, requested, requested == 0 ? default : progress.GetValueOrDefault(requested)?.Remaining ?? titles.Quests[requested].Initial, plan);
 
         bool Postal(TitlePostal postal)

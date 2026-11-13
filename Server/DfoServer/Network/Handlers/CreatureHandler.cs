@@ -21,6 +21,9 @@ internal sealed class CreatureHandler(CreatureService service, CreatureProjectio
         commands.Register(CmdPacketType.CREATURE_SCRIPT_MESSAGE, MessageAsync, nameof(CreatureHandler), UserStateRequirement.WorldReady);
         commands.Register(CmdPacketType.VERIFY_CREATURE_QUEST, VerifyQuestAsync, nameof(CreatureHandler), UserStateRequirement.WorldReady);
         commands.Register(CmdPacketType.CREATURE_EFFECT_TIME_EXPIRE, ExpireEffectAsync, nameof(CreatureHandler), UserStateRequirement.WorldReady);
+        commands.Register(CmdPacketType.USE_CREATURE_EVOLUTION_ITEM, UseEvolutionItemAsync, nameof(CreatureHandler), UserStateRequirement.WorldReady);
+        commands.Register(CmdPacketType.CREATURE_FILLPOINT, FillPointAsync, nameof(CreatureHandler), UserStateRequirement.WorldReady);
+        commands.Register(CmdPacketType.CREATURE_EXP_BOOK, UseExpBookAsync, nameof(CreatureHandler), UserStateRequirement.WorldReady);
     }
 
     public async Task<CommandResult> UseEffectAsync(GameConnectionContext context, StackableActionUseRequest request)
@@ -103,6 +106,60 @@ internal sealed class CreatureHandler(CreatureService service, CreatureProjectio
             context.Session.SelectionEpoch == capture.SelectionEpoch && context.Session.Phase == capture.Phase);
         var opcode = packet.Opcode == (ushort)CmdPacketType.CREATURE_SEND_MESSAGE ? NotiPacketType.CREATURE_MESSAGE : NotiPacketType.CREATURE_SCRIPT_MESSAGE;
         await projection.BroadcastAsync(context, opcode, CreaturePackets.Message(request.Type, character.Id, request.Text), "creature_message", Guard);
+        return CommandResult.Handled;
+    }
+
+    async Task<CommandResult> UseEvolutionItemAsync(GameConnectionContext context, Packet packet)
+    {
+        var sourceSlot = CreatureRequests.EvolutionOrBookSlot(packet.Body, InventoryListType.Main);
+        var selected = context.Owner.Execute(() => (context.Session.Selected, context.Session.SelectionEpoch, context.Session.Phase));
+        var result = context.Activity?.BlocksTownActions == true ? InventoryResult.Reject(123) :
+            context.Session.PlanAndCommitInventory(character => service.UseEvolutionItem(character, sourceSlot,
+                service.Clock.GetUtcNow().ToUnixTimeSeconds()), 123, requireTown: false, effectItem: sourceSlot);
+        bool Guard() => result.Receipt is { } receipt ? context.Session.CanPublishInventory(receipt) :
+            context.Owner.Execute(() => ReferenceEquals(context.Session.Selected, selected.Selected) &&
+                context.Session.SelectionEpoch == selected.SelectionEpoch && context.Session.Phase == selected.Phase);
+        int evolvedItemId = result.Plan?.After.Find(CreatureRules.EquippedSlot)?.Core.ItemId ?? 0;
+        await context.Reply(CmdPacketType.USE_CREATURE_EVOLUTION_ITEM,
+            CreaturePackets.EvolutionItemAck(result.Accepted, evolvedItemId, sourceSlot.Index, result.Error == 0 ? (ushort)123 : result.Error),
+            "creature_evolution_item_ack", Guard);
+        if (inventory is not null) await inventory.RefreshAsync(context, result, new HashSet<InventorySlot> { sourceSlot }, refreshEquipment: false);
+        await projection.ChangedAsync(context, result);
+        return CommandResult.Handled;
+    }
+
+    async Task<CommandResult> FillPointAsync(GameConnectionContext context, Packet packet)
+    {
+        int points = CreatureRequests.FillPoint(packet.Body);
+        var selected = context.Owner.Execute(() => (context.Session.Selected, context.Session.SelectionEpoch, context.Session.Phase));
+        var result = context.Activity?.BlocksTownActions == true ? InventoryResult.Reject(123) :
+            context.Session.PlanAndCommitInventory(character => service.FillPoint(character, points,
+                service.Clock.GetUtcNow().ToUnixTimeSeconds()), 123, requireTown: false);
+        bool Guard() => result.Receipt is { } receipt ? context.Session.CanPublishInventory(receipt) :
+            context.Owner.Execute(() => ReferenceEquals(context.Session.Selected, selected.Selected) &&
+                context.Session.SelectionEpoch == selected.SelectionEpoch && context.Session.Phase == selected.Phase);
+        await context.Reply(CmdPacketType.CREATURE_FILLPOINT,
+            CreaturePackets.Ack(result.Accepted, result.Error == 0 ? (ushort)123 : result.Error),
+            "creature_fillpoint_ack", Guard);
+        await projection.ChangedAsync(context, result);
+        return CommandResult.Handled;
+    }
+
+    async Task<CommandResult> UseExpBookAsync(GameConnectionContext context, Packet packet)
+    {
+        var sourceSlot = CreatureRequests.EvolutionOrBookSlot(packet.Body, InventoryListType.Pet);
+        var selected = context.Owner.Execute(() => (context.Session.Selected, context.Session.SelectionEpoch, context.Session.Phase));
+        var result = context.Activity?.BlocksTownActions == true ? InventoryResult.Reject(123) :
+            context.Session.PlanAndCommitInventory(character => service.UseExpBook(character, sourceSlot,
+                service.Clock.GetUtcNow().ToUnixTimeSeconds()), 123, requireTown: false, effectItem: sourceSlot);
+        bool Guard() => result.Receipt is { } receipt ? context.Session.CanPublishInventory(receipt) :
+            context.Owner.Execute(() => ReferenceEquals(context.Session.Selected, selected.Selected) &&
+                context.Session.SelectionEpoch == selected.SelectionEpoch && context.Session.Phase == selected.Phase);
+        await context.Reply(CmdPacketType.CREATURE_EXP_BOOK,
+            CreaturePackets.Ack(result.Accepted, result.Error == 0 ? (ushort)123 : result.Error),
+            "creature_exp_book_ack", Guard);
+        if (inventory is not null) await inventory.RefreshAsync(context, result, new HashSet<InventorySlot> { sourceSlot }, refreshEquipment: false);
+        await projection.ChangedAsync(context, result);
         return CommandResult.Handled;
     }
 }

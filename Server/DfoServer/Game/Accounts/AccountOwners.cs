@@ -184,13 +184,17 @@ internal sealed class AccountOwners
         // 可选的卢克断线捕获：零等待尝试完整原owner组合，忙/失效直接放弃，不改变既有阻塞入口。
         internal static bool TryExecuteLukeDisconnect<T>(IReadOnlyList<(Lease Owner, ushort Character)> members,
             Func<T> action, out T result)
+            => TryExecuteDisconnectGroup(members, action, out result, 8);
+
+        static bool TryExecuteDisconnectGroup<T>(IReadOnlyList<(Lease Owner, ushort Character)> members,
+            Func<T> action, out T result, int maximum)
         {
             result = default!;
-            if (members.Count is < 1 or > 8 || members.Any(m => m.Character == 0) ||
+            if (members.Count < 1 || members.Count > maximum || members.Any(m => m.Character == 0) ||
                 members.Select(m => m.Character).Distinct().Count() != members.Count ||
                 members.Select(m => m.Owner.Account).Distinct(StringComparer.Ordinal).Count() != members.Count ||
                 members.Any(m => !ReferenceEquals(m.Owner.Registry, members[0].Owner.Registry)))
-                throw new InvalidOperationException("断线捕获需要同目录一至八个不同账号角色");
+                throw new InvalidOperationException($"断线捕获需要同目录一至{maximum}个不同账号角色");
             if (executingGroup is not null || executing is not null || pairFirst is not null)
                 throw new InvalidOperationException("断线捕获不能从已持owner锁升级或重入");
             var ordered = members.OrderBy(m => m.Owner.Account, StringComparer.Ordinal).ToArray();

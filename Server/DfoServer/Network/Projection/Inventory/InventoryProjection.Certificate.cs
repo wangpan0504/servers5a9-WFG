@@ -17,6 +17,8 @@ internal sealed partial class InventoryProjection
         if (!CanSend()) return;
         var character = snapshot.Character;
         var current = character.Inventory;
+        if (!plan.Before.ShopPurchases.SequenceEqual(plan.After.ShopPurchases))
+            await town.CashShopRestrictionsAsync(context, character, CanSend, plan.Before);
         var lists = plan.ChangedSlots.Select(slot => slot.List).Where(list => list is InventoryListType.Main or
             InventoryListType.Avatar or InventoryListType.Pet or InventoryListType.Equipment).ToHashSet();
         if (plan.Before.Expansion != plan.After.Expansion ||
@@ -24,10 +26,10 @@ internal sealed partial class InventoryProjection
             lists.Add(InventoryListType.Main);
         if (plan.Before.AvatarExpansion != plan.After.AvatarExpansion) lists.Add(InventoryListType.Avatar);
         if (lists.Count != 0) await SynchronizeItemSpaceContentsAsync(context, snapshot, lists);
-        foreach (var list in new[] { InventoryListType.GuildMedal, InventoryListType.Talisman })
+        foreach (var list in new[] { InventoryListType.GuildMedal, InventoryListType.Talisman, InventoryListType.AccountCommon })
             if (plan.ChangedSlots.Any(slot => slot.List == list))
             {
-                await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.SpecialFull(current, list),
+                await context.Notify(NotiPacketType.ITEM_LIST, town.SpecialFull(context, current, list),
                     "certificate_inventory_resync", CanSend);
                 await RestoreLocksAsync(context, current, current.Items.Where(item => item.Position.List == list)
                     .Select(item => item.Position), canSend: CanSend);

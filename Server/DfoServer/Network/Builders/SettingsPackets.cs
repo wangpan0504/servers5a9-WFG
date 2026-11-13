@@ -5,6 +5,15 @@ namespace DfoServer.Network.Builders;
 
 internal static class SettingsPackets
 {
+    public static byte[] NpcBookmarks(ImmutableArray<byte> entries)
+    {
+        if (entries.IsDefault) return new byte[4];
+        DfoServer.Game.Settings.ClientSettingsService.ValidateNpcBookmarks(entries);
+        byte[] body = new byte[4 + entries.Length];
+        BinaryPrimitives.WriteInt32LittleEndian(body, entries.Length / 4);
+        entries.AsSpan().CopyTo(body.AsSpan(4));
+        return body;
+    }
     public static byte[] RecentEmoticons(ImmutableArray<byte> entries)
     {
         if (entries.IsDefault) return new byte[DfoServer.Game.Settings.ClientSettingsService.RecentEmoticonLength];
@@ -39,6 +48,13 @@ internal static class SettingsPackets
         body[0] = success ? (byte)1 : (byte)0;
         BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(1), value);
         return body;
+    }
+
+    public static byte[] HotkeysInitialization(byte profile)
+    {
+        if (profile > 1) throw new InvalidDataException("键位初始化配置类型无效");
+        // 原生 NONE 哨兵按当前 bank 加载资源默认，并由客户端回送完整198；不作为存档文本接受。
+        return [profile, 4, 0, 0, 0, (byte)'N', (byte)'O', (byte)'N', (byte)'E'];
     }
 
     public static byte[] Hotkeys(byte profile, ImmutableArray<byte> text)

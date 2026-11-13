@@ -166,11 +166,20 @@ internal static partial class FormalDungeonTcpTests
                     "点击回城先完整发布已提交的祭坛经验");
                 var reply = peer.Read();
                 int itemFrames = 0;
-                while (reply is { Kind:0,Opcode:14 })
+                int adventureFrames = 0;
+                while (reply is { Kind:0,Opcode:14 or 1349 })
                 {
-                    That(++itemFrames<=2 && reply.Body.Length>=3 && reply.Body[0]==0 &&
-                        reply.Body.Length==3+U16(reply.Body,1)*123,
-                        "回城ACK前的祭坛库存通知保留完整条目且数量有界");
+                    if (reply.Opcode == 1349)
+                    {
+                        That(++adventureFrames == 1, "祭坛回城只发布一次已提交冒险团进度");
+                        AssertAdventureProgress(fixture, resources, peer, reply);
+                    }
+                    else
+                    {
+                        That(++itemFrames<=2 && reply.Body.Length>=3 && reply.Body[0]==0 &&
+                            reply.Body.Length==3+U16(reply.Body,1)*123,
+                            "回城ACK前的祭坛库存通知保留完整条目且数量有界");
+                    }
                     reply=peer.Read();
                 }
                 That(reply is { Kind:1,Opcode:72 },"手动回城不等待60秒兜底，完整奖励投影之后才回复ACK72");

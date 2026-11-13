@@ -28,7 +28,7 @@ internal sealed class ExpertJobLearning(ExpertJobScriptCatalog scripts, ItemCata
             return null;
         var template = items.Get(itemId);
         if (template.UseForbidden || template.Kind != source.Core.Kind || character.Level < template.MinimumLevel ||
-            (template.Jobs & (1 << character.Job)) == 0 || !ItemSlotBoundService.Allows(character.Inventory, slot, source.Core.Kind))
+            !ItemSlotBoundService.Allows(character.Inventory, slot, source.Core.Kind))
             return null;
         var consumed = InventoryDeleteService.Plan(character.Inventory, slot, itemId, 1);
         if (!consumed.Accepted || consumed.Plan is null) return null;

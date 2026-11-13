@@ -16,23 +16,22 @@ internal sealed partial class GameSession
     {
         if (blocked || !CanUseConsumable() || Phase != SessionPhase.Town || Selected is not { } character ||
             pendingDisguise is not { } pending || pending.Epoch != SelectionEpoch || pending.UntilMilliseconds <= now ||
-            pending.ItemId != itemId || pending.Definition.Type != 2 || type != 2 || !pending.Definition.Allows(formId) ||
+            pending.ItemId != itemId || !pending.Definition.Allows(type, formId) ||
             character.Disguise?.Active(now) == true)
             return null;
-        // monster在211和Actor中的类型均为2；Actor类型1沿NPC资源链，不能用于怪物形态。
+        // 种类与形态ID必须来自同一资源候选，混合池不能跨资源种类拼接。
         pendingDisguise = null;
-        Selected = character with { Disguise = new(Guid.NewGuid(), pending.Definition.Type,
+        Selected = character with { Disguise = new(Guid.NewGuid(), type,
             formId, pending.ItemId, pending.UntilMilliseconds) };
         return new ConsumableDisguiseChange(Selected, SelectionEpoch, Phase);
     });
 
-    public ConsumableDisguiseChange? ApplyUnlimitedRandomDisguise(byte type, int formId, int itemId,
+    public ConsumableDisguiseChange? ApplyUnlimitedDisguise(byte type, int formId, int itemId,
         InventoryConsumableUseService service, bool blocked = false)
     {
-        // 顶层unlimited直接执行本地随机效果并发211，不经过44成功消费者。
+        // 顶层unlimited的单体和随机变身直接执行本地效果并发211，不经过44成功消费者。
         if (!service.TryDefinition(itemId, out var definition) || !definition.Unlimited ||
-            definition.Disguise is not { Type: 2 } disguise || disguise.Forms.IsEmpty ||
-            type != 2 || !disguise.Allows(formId)) return null;
+            definition.Disguise is not { } disguise || !disguise.Allows(type, formId)) return null;
         return owner.Execute(() =>
         {
             long now = service.Clock.GetUtcNow().ToUnixTimeMilliseconds();
@@ -40,7 +39,8 @@ internal sealed partial class GameSession
             if (pendingDisguise?.UntilMilliseconds <= now) pendingDisguise = null;
             if (blocked || !CanUseConsumable() || pendingConsumableUse is not null || pendingDisguise is not null ||
                 Phase != SessionPhase.Town || Selected is not { } character || character.Disguise?.Active(now) == true ||
-                definition.RequiresDungeon || definition.SummonsApc || definition.AllowedDungeons is not null)
+                definition.RequiresDungeon || definition.SummonsApc ||
+                !CanUseStackableItem(character, itemId, places: definition.Places))
                 return null;
             var previous = usedConsumables.GetValueOrDefault(definition.CoolGroup);
             if (previous is { EnforceCooldown: true } &&
@@ -48,14 +48,14 @@ internal sealed partial class GameSession
                 character.Inventory.ConsumableStates.Any(row => row.Kind == ConsumableStateKind.Cooldown &&
                     row.CoolGroup == definition.CoolGroup && row.Active(now)))
                 return null;
-            // 211没有源槽；在同一owner门内复用Plan的UID、主背包、锁、期限及职业等级校验。
+            // 211没有源槽；在同一owner门内复用Plan的UID、主背包、锁、期限及等级校验。
             var source = character.Inventory.Items.FirstOrDefault(row => row.Core.ItemId == itemId &&
                 service.Plan(character, new(row.Position, 0, itemId, 0), now / 1000).Accepted);
             now = service.Clock.GetUtcNow().ToUnixTimeMilliseconds();
             if (source is null || source.Core.IsExpired(now / 1000)) return null;
             usedConsumables[definition.CoolGroup] = new(null, source.Uid, service.Clock.GetTimestamp(), definition.CoolTime, service.Clock)
                 { Maintenance = definition.CooltimeMaintenance };
-            Selected = character with { Disguise = new(Guid.NewGuid(), disguise.Type, formId, itemId,
+            Selected = character with { Disguise = new(Guid.NewGuid(), type, formId, itemId,
                 checked(now + disguise.Seconds * 1000L)) };
             return new ConsumableDisguiseChange(Selected, SelectionEpoch, Phase);
         });

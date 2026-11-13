@@ -8,7 +8,7 @@ internal static class NativeLoginTcpTests
 {
     static TcpPeer Begin(TcpTestFixture fixture, string account)
     {
-        var peer = new TcpPeer(fixture.Options.GamePort, fixture: fixture);
+        var peer = new TcpPeer(fixture.Options.GamePort, fixture: fixture, account: account);
         try
         {
             var hello = peer.Expect(0, 1).Body;

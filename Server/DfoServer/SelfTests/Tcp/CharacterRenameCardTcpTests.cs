@@ -1,6 +1,8 @@
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
+using DfoServer.Game.Inventory.Services;
+using DfoServer.Game.Currency;
 using DfoServer.GameWorld.Items;
 using DfoServer.Persistence;
 using static DfoServer.Testing.TestCheck;
@@ -15,6 +17,11 @@ internal static class CharacterRenameCardTcpTests
         var card = resources.ItemResources.Items.ActionConsumable(2660698);
         That(card is { Label: "[character name change]", Parameters.Length: 0 } && card.AllowsPlace("[seria room]"),
             "正式PVF更名卡按动作及城镇地点注册，不把兑换价当额外使用费");
+        var restricted = resources.ItemResources.Items.ActionConsumable(490006669)!;
+        That(restricted.Label == "[character name change]" && restricted.Item.Jobs != ushort.MaxValue &&
+            Enumerable.Range(0, 16).Any(job => restricted.Item.AllowsUse(1, (byte)job)) &&
+            Enumerable.Range(0, 16).Any(job => !restricted.Item.AllowsUse(1, (byte)job)),
+            "真实魔枪士卡保留职业掩码");
         await using var fixture = new TcpTestFixture(options, Path.Combine(root, "character-rename-card"), resources: resources);
         var repository = new CharacterRepository(fixture.Database);
         ushort characterId;
@@ -27,6 +34,7 @@ internal static class CharacterRenameCardTcpTests
             actualWeapon = candidate.Inventory.Items.SingleOrDefault(item => item.Position.List == InventoryListType.Equipment && item.Position.Index == 12)?.Core.ItemId ?? 0;
             var role = repository.Create(owner, candidate with { Inventory = candidate.Inventory with { Items = candidate.Inventory.Items
                 .Add(new(0, new(InventoryListType.Main, 65), new(2660698, ItemKind.Consumable, 2)))
+                .Add(new(0, new(InventoryListType.Main, 66), new(490006669, ItemKind.Consumable, 1)))
                 .Add(new(0, new(InventoryListType.Equipment, 10), new(int.MaxValue, ItemKind.Avatar, 0)) { Avatar = new() }) } });
             characterId = role.Id;
             repository.Delete(owner, repository.LoadDeletionTarget(owner, dummy.Slot));
@@ -42,6 +50,8 @@ internal static class CharacterRenameCardTcpTests
             That(peer.Id == characterId, "名册index0映射到持久槽1");
             peer.Send(8, [(byte)peer.Id, (byte)(peer.Id >> 8), 5]); peer.Expect(0, 736, [0]);
             peer.Send(509, [66, 0]); peer.Expect(1, 509, [0, 19, 0]); peer.Barrier();
+            That(fixture.Query("SELECT count(*) FROM character_inventory_items WHERE character_id=$p0 AND json_extract(item_core,'$.ItemId')=490006669", characterId) is [[1L]],
+                "非魔枪士使用职业卡被拒绝且不消费");
             peer.Send(509, [65, 0]); peer.Expect(1, 509, [1]); peer.Expect(1, 7);
             CheckRoster(peer.Expect(0, 2).Body, "RenameTcp", true); RosterBarrier(peer);
             That(Remaining() == 1 && Pending() == 1, "成功509与小退后资格及源数量一致");
@@ -78,9 +88,60 @@ internal static class CharacterRenameCardTcpTests
         }
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0,
             "改名及重启后数据库与外键完整");
+        await ShopPurchaseAsync(options, root, resources);
 
         long Pending() => (long)fixture.Query("SELECT count(*) FROM character_rename_pending WHERE character_id=$p0", characterId)[0][0];
         long Remaining() => (long)fixture.Query("SELECT json_extract(item_core,'$.Value') FROM character_inventory_items WHERE character_id=$p0 AND json_extract(item_core,'$.ItemId')=2660698", characterId)[0][0];
+    }
+
+    static async Task ShopPurchaseAsync(ServerOptions options, string root, TcpTestResources resources)
+    {
+        await using var fixture = new TcpTestFixture(options, Path.Combine(root, "rename-shop"), resources: resources);
+        var repository = new CharacterRepository(fixture.Database);
+        var product = resources.ItemResources.CashShop.Products[100902];
+        That(product is { ItemId: 2682290, Count: 1 }, "现场商城更名商品绑定自动使用模板");
+        ushort id;
+        using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
+        {
+            var role = repository.Create(owner, new("ShopRename", resources.Towns.Room, resources.Towns.InitialReturn)
+            {
+                Level = 30, AcceptedStoryLevel = 1, Skills = resources.Characters.Get(0).Skills,
+                Inventory = InventoryRewardGrantService.CreateStarter(resources.Characters.Get(0))
+            });
+            id = role.Id;
+            InventoryService.Commit(repository, owner, role,
+                new CurrencyService(resources.ItemResources.GoldLimits).Grant(role, CurrencyKind.Cera, product.CeraPrice));
+        }
+        using (var owner = new AccountOwners().Acquire("20001", () => { }))
+        {
+            var candidate = CharacterCreation.Prepare("LancerRename", resources.Characters.Get(13), resources.Towns.Room,
+                resources.Towns.InitialReturn, resources.Learning.Get);
+            repository.Create(owner, candidate with { Inventory = candidate.Inventory with { Items = candidate.Inventory.Items
+                .Add(new(0, new(InventoryListType.Main, 65), new(490006669, ItemKind.Consumable, 1))) } });
+        }
+        await fixture.StartAsync();
+        using var peer = Open(fixture);
+        peer.Select();
+        peer.Send(64, Build(w => { w.Write((byte)0); w.Write((byte)0); w.Write((byte)1);
+            w.Write(0); w.Write(100902); w.Write(0); w.Write(0); }));
+        That(peer.Expect(1, 64).Body[0] == 1, "商城更名购买先确认成功");
+        bool returned = false;
+        for (int i = 0; i < 32 && !returned; i++)
+        {
+            var packet = peer.Read();
+            if (packet is { Kind: 0, Opcode: 2 } && packet.Body.Length > 21 && packet.Body[0] == 2)
+            {
+                CheckRoster(packet.Body, "ShopRename", true, 0);
+                returned = true;
+            }
+        }
+        That(returned && fixture.Query("SELECT source_uid FROM character_rename_pending WHERE character_id=$p0", id) is [[0L]] &&
+            fixture.Query("SELECT count(*) FROM character_inventory_items WHERE character_id=$p0 AND json_extract(item_core,'$.ItemId')=2682290", id) is [[0L]],
+            "购买提交资格但不发死物品，成功后返回带资格的名册");
+        using var lancer = Open(fixture, "20001");
+        lancer.Select();
+        lancer.Send(509, [65, 0]); lancer.Expect(1, 509, [1]); lancer.Expect(1, 7);
+        CheckRoster(lancer.Expect(0, 2).Body, "LancerRename", true, 0);
     }
 
     static void CheckHistory(TcpPeer peer, ushort target, string expected)
@@ -104,11 +165,11 @@ internal static class CharacterRenameCardTcpTests
         peer.Expect(1, 692, [1]);
     }
 
-    static void CheckRoster(byte[] body, string name, bool pending)
+    static void CheckRoster(byte[] body, string name, bool pending, ushort slot = 1)
     {
         int width = (int)U32(body, 17);
         int flags = 21 + width;
-        That(body[0] == 2 && body[1] == 1 && U16(body, 15) == 1 && DecodeName(body, 21, width) == name &&
+        That(body[0] == 2 && body[1] == 1 && U16(body, 15) == slot && DecodeName(body, 21, width) == name &&
             body[flags] == (pending ? 1 : 0) && body[flags + 1] == 0, "原生名册名称后首标志反映持久资格，第二标志不变");
     }
 }

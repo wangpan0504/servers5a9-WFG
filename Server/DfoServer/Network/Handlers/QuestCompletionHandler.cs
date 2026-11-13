@@ -42,12 +42,25 @@ internal sealed partial class QuestCompletionHandler(QuestCatalog quests, QuestR
             result.Receipt?.Commit.DirectGoldAmount, result.Receipt?.Commit.MailedGoldAmount, result.Receipt?.Commit.GoldMailId, result.Receipt?.Commit.ResourceMailId });
         if (result.Outcome != QuestFinishOutcome.Committed || result.Receipt is not { } receipt)
         {
+            // 子任务提交后投影已经失效，或父计划上的补归档前活动表没法随这份结果发布时，关闭连接。
+            // 不能只回拒绝：客户端活动槽仍是归档前的表，重连才按持久快照对齐。
+            if (result.ArchivedChildren.Any(row => !row.Commit.ProjectionCurrent) || result.CloseForUnpublishedRangeArchive)
+                return CommandResult.CloseConnection;
             if (result.RejectionReceipt is not { } rejection)
                 return CommandResult.Unhandled;
             // 4有本版满包专属文案；19为本服中立拒绝，使用已证静默收尾，不声称原服各原因的错误映射。
             ushort error = result.Outcome == QuestFinishOutcome.InsufficientSpace ? (ushort)4 : (ushort)19;
             await context.Reply(CmdPacketType.FINISH_QUEST, QuestPackets.Rejected(error), "quest_completion_rejected",
                 () => context.Session.CanPublishQuestRefusal(rejection));
+            if (result.ArchivedChildren.Length > 0)
+            {
+                var archived = result.ArchivedChildren[^1];
+                bool PublishArchived() => context.Session.CanPublishQuestCompletion(archived);
+                await context.Notify(NotiPacketType.ACCEPTED_QUEST, QuestPackets.ActiveList(archived.Commit.Character.ActiveMainQuests),
+                    "quest_range_archive_active", PublishArchived);
+                await context.Notify(NotiPacketType.CLEAR_QUEST_LIST, TownPackets.CompletedQuests(archived.Commit.Character),
+                    "quest_range_archive_completed", PublishArchived);
+            }
             return CommandResult.Handled;
         }
         if (!receipt.Commit.ProjectionCurrent)
@@ -69,7 +82,7 @@ internal sealed partial class QuestCompletionHandler(QuestCatalog quests, QuestR
         bool expertJob = commit.ExpertJobType is not null;
         if (expertJob)
             await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(character, context.Session.ReadPvpGrade(character), context.Channel,
-                adventureName: context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom),
+                adventureName: context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom, returningAdventurerType: context.Session.ReturningAdventurerType, marriage: context.MarriageAppearance),
                 "quest_expert_job_actor", Guard);
         if (profession)
             await SkillProjection.PublishAsync(context, character, "quest_profession_skills", "quest_profession_combo", Guard);
@@ -126,7 +139,7 @@ internal sealed partial class QuestCompletionHandler(QuestCatalog quests, QuestR
         if (character.EquipmentSlotFlags != commit.PreviousEquipmentSlotFlags)
             await levelProjection.PlayerAsync(context,character,"quest_equipment_slots",Guard);
         await levelProjection.RefreshAsync(context, character, commit.PreviousLevel, "quest_level_committed", Guard, commit.PreviousGrowType,
-            restoreCompletedQuests: false, previousLearning: commit.PreviousLearning);
+            restoreCompletedQuests: false, previousLearning: commit.PreviousLearning, adventureProgress: commit.Adventure);
         if (character.Level == commit.PreviousLevel && character.GrowType == commit.PreviousGrowType && projection is not null)
             await projection.RefreshAsync(context, character, Guard, restoreCompleted: false);
         // 匹配客户端空574会清完成集合；完整任务投影最后以356恢复真实完成记录。

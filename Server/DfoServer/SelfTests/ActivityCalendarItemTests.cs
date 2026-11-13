@@ -115,6 +115,37 @@ internal static class ActivityCalendarItemTests
             That(repository.LoadCharacter(first, a.Slot).Inventory.Items.IsEmpty &&
                 repository.LoadCharacter(second, b.Slot).Inventory.Items.IsEmpty,
                 "所有显示投影均未创建普通背包实物或物理UID");
+
+            const int epicRoadMaterial = 490013716;
+            await town.CalendarItemsAsync(contextA, pages);
+            framesA.Clear();
+            var projection = new DfoServer.Network.Projection.Inventory.InventoryProjection(
+                new CharacterStatComputer(resources.Characters), town, resources.ItemResources.EpicPieces);
+            var granted = sessionA.PlanAndCommitInventory(c => DfoServer.Game.Inventory.Services.InventoryRewardGrantService.TryGrantBatch(
+                c, [new(epicRoadMaterial, 150)], resources.ItemResources.Items, resources.ItemResources.GoldLimits,
+                resources.ItemResources.EpicPieces, DateTimeOffset.UtcNow));
+            That(granted.Accepted && granted.Receipt!.Character.Inventory.Find(new(InventoryListType.AccountCommon, 0)) is { Core: { ItemId: epicRoadMaterial, Count: 150 } },
+                "星河材料490013716正式入45容器0槽");
+            await projection.RefreshAsync(contextA, granted);
+            That(framesA.Select(row => row.Opcode).SequenceEqual(new ushort[] { 14, 1681 }) &&
+                framesA[0].Body is [45, ..] && U16(framesA[0].Body, 3) == 0 && U32(framesA[0].Body, 5) == epicRoadMaterial && U32(framesA[0].Body, 9) == 150 &&
+                framesA[1].Body is [45, ..] && U16(framesA[1].Body, 3) == 1 && U32(framesA[1].Body, 5) == coin && U32(framesA[1].Body, 9) == 507,
+                "首次获得星河490013716写入0槽时，活动能量硬币静默迁移至1槽，两者不互相覆盖");
+            sessionA.ReturnToRoster();
+            a = repository.LoadCharacter(first, a.Slot);
+            sessionA.Select(a.Slot); sessionA.MarkReady(); framesA.Clear();
+            await town.CalendarItemsAsync(contextA, pages);
+            That(framesA is [{ Opcode: 13, Body: [44, ..], Body.Length: 126 }, { Opcode: 13, Body: [45, ..], Body.Length: 249 }] &&
+                U16(framesA[1].Body, 1) == 2 &&
+                U16(framesA[1].Body, 3) == 0 && U32(framesA[1].Body, 5) == epicRoadMaterial && U32(framesA[1].Body, 9) == 150 &&
+                U16(framesA[1].Body, 3 + 123) == 1 && U32(framesA[1].Body, 5 + 123) == coin && U32(framesA[1].Body, 9 + 123) == 507,
+                "换角后发布活动日历list45全量仍完整保留星河490013716的150数量与能量硬币507余额");
+            framesA.Clear();
+            await town.CalendarItemsAsync(contextA, []);
+            That(framesA is [{ Opcode: 13, Body: [44, ..], Body.Length: 126 }, { Opcode: 13, Body: [45, ..], Body.Length: 126 }] &&
+                U16(framesA[1].Body, 1) == 1 && U16(framesA[1].Body, 3) == 0 &&
+                U32(framesA[1].Body, 5) == epicRoadMaterial && U32(framesA[1].Body, 9) == 150,
+                "关闭活动日历只移除虚拟活动材料显示，不清空45容器内的星河490013716实体");
         }
         finally { TestFiles.DeleteDirectory(root, recursive: true); }
         Console.WriteLine($"PASS activity calendar publication {Count - start}");

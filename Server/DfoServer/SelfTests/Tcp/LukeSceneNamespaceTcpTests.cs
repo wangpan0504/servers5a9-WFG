@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Text;
+using DfoServer.GameWorld.Items;
 using static DfoServer.Testing.TestCheck;
 using static DfoServer.Testing.TcpPeer;
 
@@ -14,7 +15,11 @@ internal static class LukeSceneNamespaceTcpTests
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
         int before = Count;
-        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "luke-scene-namespace"), resources: resources);
+        // 本用例验证页面关闭时的路由隔离，显式给定空活动目录，不依赖默认活动开关。
+        var items = resources.ItemResources;
+        var promotions = CashShopPromotionCatalog.Parse("[]", items.CashShop, items.Items.Get, _ => null);
+        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "luke-scene-namespace"), resources: resources,
+            promotions: () => promotions);
         await fixture.StartAsync(packetCapture: true);
         using var observer = Open(fixture, "20081");
         observer.Create("SceneWatch");

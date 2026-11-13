@@ -92,7 +92,28 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         if (!DungeonSettlementRequests.TryParsePlayResult(request.Body, out var parsed)) return CommandResult.Unhandled;
         var participant = parsed!.Participants.SingleOrDefault(member => member.ActorId == context.Session.Selected?.Id);
         if (participant is null) return CommandResult.Unhandled;
+        if (context.Session.ClearedPreyTeamResultRun() is { } preyRun && partyDungeons is not null &&
+            context.Session.PartyDungeon is { } preyInstance)
+        {
+            using var peers = await PartyDungeonProjection.AcquirePeersAsync(context, preyInstance.Members);
+            if (!ReferenceEquals(context.Session.PartyDungeon, preyInstance) ||
+                context.Session.ClearedPreyTeamResultRun() != preyRun) return CommandResult.Handled;
+            var departure = partyDungeons.Depart(context.Session);
+            log.Write("prey_dungeon_result_return", new { Connection = context.Id, Run = preyRun,
+                Accepted = departure.Error == 0, departure.Error, Reason = "cleared-run-result" });
+            if (departure.Error == 0) await PartyDungeonProjection.PublishAsync(departure.DungeonNotices);
+            return CommandResult.Handled;
+        }
         var reportMembers = parsed.Participants.Select(member => member.ActorId).ToArray();
+        if (context.Session.AcceptAntonPlayResult(participant.ActorId, participant.RankPoint,
+            parsed.MaximumRankPoint, reportMembers) is { Entry.RaidEntry: { } anton } reportedAnton)
+        {
+            log.Write("raid_dungeon_play_result_received", new { Connection = context.Id, Character = participant.ActorId,
+                reportedAnton.Snapshot.Identity, RaidInstance = anton.InstanceId, reportedAnton.Entry.DungeonId,
+                RaidKind = anton.Kind.ToString(), Members = reportMembers.Length, participant.RankPoint,
+                parsed.MaximumRankPoint, parsed.ClearTime });
+            return CommandResult.Handled;
+        }
         if (context.Session.AcceptFiendwarPlayResult(participant.ActorId, participant.RankPoint,
             parsed.MaximumRankPoint, reportMembers) is { Entry.RaidEntry: { } raid } reported)
         {
@@ -141,6 +162,8 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         // 魔界大战小图只发结果页（34）：没有普通白图的翻牌会员刷新与 35 通关奖励，否则翻牌层压住结算阶段。
         bool war = result.EvildomWarClear;
         bool bossRush = receipt.Entry.IsBossRush;
+        if (receipt.Entry.DungeonId == 316)
+            await RiftDailyProjection.RefreshParticularHellAsync(context, Guard);
         if (receipt.Entry.DungeonId == 530)
             await RiftDailyProjection.RefreshAsync(context, Guard, force: true);
         if (!tournament && !cosmo && !grief && !bossRush)
@@ -161,7 +184,7 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
                 Guard,
                 "formal_clear_skill_switch_inventory");
         await levelProjection.RefreshAsync(context, receipt.Character, previous.Level, "formal_clear_level_committed", Guard,
-            previousLearning: previous.Learning);
+            previousLearning: previous.Learning, adventureProgress: result.Adventure);
         if (!tournament && !receipt.Entry.IsTutorial && !cosmo && !grief && !war && !bossRush)
             await DungeonCardMembershipProjection.RefreshAsync(context);
         if (tournament)
@@ -187,7 +210,8 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
                 result.Presentation!.MonsterExperience, result.Card, checked((int)receipt.Entry.DungeonId), result.Options, result.BlackDiamond,
                 result.Presentation.MonsterGrowthContractExperience, result.Presentation.MonsterEquipmentExperience,
                 result.Presentation.MonsterExperienceEntries, result.Presentation.MonsterBossExperience, receipt.PartySlot,
-                result.Presentation.MonsterFatigueBurningExperience);
+                result.Presentation.MonsterFatigueBurningExperience, result.Presentation.MonsterGuildExperience,
+                result.Presentation.MonsterFatigueBuffExperience, result.Presentation.MonsterPartyExperience);
             if (context.Session.PartyDungeon is { } instance)
             {
                 instance.StartCards(context.Session);
@@ -195,10 +219,25 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
                 cardBody = DungeonSettlementPackets.PartyCardReward(cardBody, receipt.PartySlot, instance.CardSnapshot());
             }
             await context.Notify(NotiPacketType.CLEAR_DUNGEON_REWARD, cardBody, "formal_clear_reward", Guard);
+            if (result.ClearPartyBuffId > 0)
+            {
+                await context.Notify(NotiPacketType.CLEAR_PARTY_BUFF_CARD,
+                    DungeonSettlementPackets.ClearPartyBuffCard(result.ClearPartyBuffId),
+                    "formal_clear_party_buff_card", Guard);
+                await context.Notify(NotiPacketType.CHARACTER_ADD_BUFF,
+                    GuildEconomyPackets.AddedBuffs([new(Type: 0, Value: checked((uint)result.ClearPartyBuffId), ExpiresUnix: 0)], 0),
+                    "formal_clear_party_buff_added", Guard);
+            }
         }
-        if (dungeons.Get(checked((int)receipt.Entry.DungeonId)).IsDazzlementTower)
+        // 安徒恩等团本使用独立的 Raid DungeonId（例如 210），不一定存在于普通 dungeon.lst。
+        // 眩惑之塔资格在入场回执中已冻结，结算阶段不能再把团本编号当普通副本索引解析。
+        if (receipt.Dazzlement is not null)
             await DazzlementTowerProjection.StateAsync(context, Guard);
-        if (result.LuckyStarGained)
+        if (result.Outcome == DungeonRunOutcome.Accepted && result.LuckyStarEligible)
+            await context.Reply(CmdPacketType.CHARGE_RENTPOINT,
+                RentalPackets.ChargeSuccess(1, result.LuckyStarTotal),
+                "formal_clear_lucky_star_charge", Guard);
+        if (result.LuckyStarEligible || result.LuckyStarGained)
             await context.Notify(NotiPacketType.EQUIPMENT_RENTAL_LIST,
                 RentalPackets.State(receipt.Character.Inventory, DateTimeOffset.UtcNow),
                 "formal_clear_lucky_star", Guard);
@@ -224,6 +263,7 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
                 await (inventoryProjection ?? throw new InvalidOperationException("次元裂缝奖励缺少库存投影")).RefreshAsync(context, crackInventory);
         }
         if (result.MailId is not null) context.Session.NotifyMailbox(receipt.Character.Id);
+        if (context.MonsterMockBattle is { } mockBattle) await mockBattle.BattleInfoAsync(receipt, spawn: false);
         if (cosmo) await DungeonSettlementProjection.RefreshCosmoRetryAsync(context);
         guildEconomy?.PublishDungeonMileage(context.Session, result.GuildMileageGuildId != 0
             ? result.GuildMileageGuildId : result.GuildDungeon?.GuildId ?? 0);
@@ -399,6 +439,51 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         if (request.Body.Length != 2 || request.Body[0] is not (1 or 2) || request.Body[1] > 3)
             return CommandResult.Unhandled;
         byte state = request.Body[0], option = request.Body[1];
+        // 魔兽使用专用终局与奖励凭据，不经过普通翻牌结算；原生菜单仍发送命令72。
+        if (option is 1 or (byte)DungeonResultOption.ReturnTown &&
+            context.Session.CurrentRevisedBeastSettlement() is { } beastResult)
+        {
+            if (state == 2)
+            {
+                await context.Reply(CmdPacketType.EPLP_COMMAND, DungeonSettlementPackets.ResultCommand(state, option),
+                    "revised_beast_result_focus", () => context.Session.CanUseRevisedBeastResult(beastResult));
+                return CommandResult.Handled;
+            }
+            if (option == 1)
+            {
+                var selection = context.Session.OpenRevisedBeastOtherSelection(beastResult);
+                if (selection is null) return CommandResult.Unhandled;
+                if (context.Death is not null) await context.Death.StopAsync();
+                if (!await town.DetachForDungeonSelectionAsync(context, selection)) return CommandResult.Handled;
+                bool SelectionGuard() => context.Session.CanPublishDungeonSelection(selection);
+                await context.Reply(CmdPacketType.EPLP_COMMAND, DungeonSettlementPackets.ResultCommand(state, option),
+                    "revised_beast_other_selection", SelectionGuard);
+                await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionOpened(),
+                    "revised_beast_selection_opened", SelectionGuard);
+                await context.Notify(NotiPacketType.USER_STATE, DungeonPackets.DungeonPlayerState(selection.Character.Id),
+                    "revised_beast_selection_state", SelectionGuard);
+                await town.RefreshRevisedBeastCountsAsync(context, SelectionGuard);
+                await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON,
+                    DungeonPackets.RevisedBeastSelectNotice([RevisedBeastSelection.DailyDungeon(context.Session.DungeonBusinessNow)]),
+                    "revised_beast_selection_notice", SelectionGuard);
+                log.Write("formal_dungeon_return", new { Connection = context.Id, Reason = "revised_beast_other_selection",
+                    selection.Character.Id, selection.SelectionId });
+                return CommandResult.Handled;
+            }
+            var travel = context.Session.ReturnFromRevisedBeastResult(beastResult);
+            if (travel is null)
+            {
+                log.Write("revised_beast_result_return_pending", new { Connection=context.Id, beastResult.Terminal.Identity });
+                return CommandResult.Unhandled;
+            }
+            if (context.Death is not null) await context.Death.StopAsync();
+            await context.Reply(CmdPacketType.EPLP_COMMAND, DungeonSettlementPackets.ResultCommand(state, option),
+                "revised_beast_result_return", () => context.Session.CanPublishTravel(travel));
+            await town.ReturnFromFormalDungeonAsync(context, travel, "revised_beast_result_town");
+            log.Write("formal_dungeon_return", new { Connection = context.Id, Reason = "revised_beast_result",
+                travel.Character.Id, travel.Character.Position });
+            return CommandResult.Handled;
+        }
         // 魔界Ins战况表在未通关时也发送72{1,2}，不能要求先产生结算菜单资格。
         if (state == 1 && option == (byte)DungeonResultOption.ReturnTown && context.Session.CanRetreatEvildomWar() &&
             context.Session.PartyDungeon is { } warParty)
@@ -592,7 +677,7 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
                     await PublishRetryEnterCountsAsync(context, current.Entry.DungeonId, null, RejectedGuard);
                     return CommandResult.Handled;
                 }
-                if (!current.Entry.IsCosmo && !current.Entry.IsInfernoParty) return CommandResult.Unhandled;
+                if (current.Entry.HellParty is null && !current.Entry.IsCosmo && !current.Entry.IsInfernoParty) return CommandResult.Unhandled;
                 if (current.Entry.IsCosmo)
                 {
                     log.Write("formal_cosmo_retry_rejected", new { Connection = context.Id, current.Snapshot.Identity,
@@ -600,16 +685,18 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
                     await DungeonSettlementProjection.RefreshCosmoRetryAsync(context);
                     return CommandResult.Handled;
                 }
-                // 时空裂缝：票或疲劳不够时不能像密门深渊那样不回包，否则结算页停在等ACK、后面的选图和回城也不再发送。
+                // 深渊派对与时空裂缝：票或疲劳不够时仍须回包，否则结算页停在等ACK、后面的选图和回城也不再发送。
                 // 按强袭同一做法回ACK option 2 并回城，结算事实已提交，不退还也不重扣。
-                log.Write("formal_inferno_retry_rejected", new { Connection = context.Id, current.Snapshot.Identity,
+                if (current.Entry.IsInfernoParty) log.Write("formal_inferno_retry_rejected", new { Connection = context.Id, current.Snapshot.Identity,
                     Reason = context.Session.LastFormalDungeonRejection });
-                var infernoReturn = context.Session.ReturnFromFormalDungeon();
-                if (infernoReturn is null) return CommandResult.Unhandled;
-                await context.Reply(CmdPacketType.EPLP_COMMAND, DungeonSettlementPackets.ResultCommand(state, 2), "formal_result_inferno_retry_return",
-                    () => context.Session.CanPublishTravel(infernoReturn));
-                await town.ReturnFromFormalDungeonAsync(context, infernoReturn, "formal_result_town");
-                log.Write("formal_dungeon_return", new { Connection = context.Id, Reason = "inferno-retry", infernoReturn.Character.Id, infernoReturn.Character.Position });
+                var hellReturn = context.Session.ReturnFromFormalDungeon();
+                if (hellReturn is null) return CommandResult.Unhandled;
+                await context.Reply(CmdPacketType.EPLP_COMMAND, DungeonSettlementPackets.ResultCommand(state, 2), "formal_result_hell_retry_return",
+                    () => context.Session.CanPublishTravel(hellReturn));
+                await town.ReturnFromFormalDungeonAsync(context, hellReturn, "formal_result_town");
+                log.Write("formal_dungeon_return", new { Connection = context.Id, current.Snapshot.Identity,
+                    Reason = current.Entry.IsInfernoParty ? "inferno-retry" : "hell-party-retry",
+                    RejectReason = context.Session.LastFormalDungeonRejection, hellReturn.Character.Id, hellReturn.Character.Position });
                 return CommandResult.Handled;
             }
             if (current.Entry.IsAltar && context.Altar is { } retryAltar) await retryAltar.StopAsync();
@@ -712,6 +799,7 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
             await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionOpened(), "formal_result_selector_wake", OpeningGuard);
             await context.Notify(NotiPacketType.USER_STATE, DungeonPackets.DungeonPlayerState(opening.Character.Id), "formal_result_selection_state", OpeningGuard);
             await GriefTowerProjection.SelectionAsync(context,dungeons,legendTarget,"formal_result_selection_notice",OpeningGuard);
+            await TownProjection.RestoreFreeConsumablesAsync(context, opening.ConsumableCooldowns, opening.ConsumableEffects, OpeningGuard);
             log.Write("formal_dungeon_other_selection", new { Connection = context.Id, current.Entry.DungeonId,
                 opening.Character.Id, opening.SelectionId, LegendDungeon = legendTarget });
             return CommandResult.Handled;
@@ -783,6 +871,13 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
     async Task PublishRetryEnterCountsAsync(GameConnectionContext context, uint dungeon, FormalDungeonReceipt? retry,
         Func<bool> guard)
     {
+        if (dungeon == 316)
+        {
+            if (retry is { ChannelConsumedSlots.IsDefaultOrEmpty: false })
+                await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(retry.Character.Inventory,
+                    InventoryListType.Main, [.. retry.ChannelConsumedSlots]), "particular_hell_retry_items", guard);
+            await RiftDailyProjection.RefreshParticularHellAsync(context, guard);
+        }
         if (retry is not null && !retry.EntryItemConsumedSlots.IsDefaultOrEmpty)
             await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(retry.Character.Inventory,
                 InventoryListType.Main, [.. retry.EntryItemConsumedSlots]), "formal_retry_entry_items", guard);

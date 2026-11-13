@@ -25,6 +25,13 @@ internal sealed partial class GameSession
         var planned = capture.Pending is { } pending ? (Plan: (InventoryDiscardPlan?)pending.Plan, Error: (ushort)0) :
             inventory.Discard(expected, request);
         if (planned.Plan is not { } plan) return new(planned.Error);
+        // 结果不明重试保留原计划及清理结果，不能按后来时钟重新计算已提交状态。
+        if (capture.Pending is null)
+        {
+            var cleaned = InventoryCloneAppearanceService.WithOrphanCloneTitleCleanup(expected, new(true, 0, plan.Inventory),
+                (timeProvider ?? TimeProvider.System).GetUtcNow().ToUnixTimeSeconds());
+            plan = plan with { Inventory = cleaned.Plan! };
+        }
         return owner.Execute(() =>
         {
             if (AntonRejoinPresentationPending || !Ready || !ReferenceEquals(Selected, expected) || !ReferenceEquals(formalDungeon, dungeon) ||

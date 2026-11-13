@@ -16,6 +16,7 @@ internal static class ServerLogTests
         string root = Path.Combine(Path.GetTempPath(), "stdout-log-" + Guid.NewGuid().ToString("N"));
         try
         {
+            CheckQuietStartupFailure(root);
             using var output = new StringWriter();
             using (var log = new ServerLog(root, output))
             {
@@ -26,6 +27,9 @@ internal static class ServerLogTests
                     (ServerBuildInfo.Commit.Length == 0 || ServerBuildInfo.Commit.Length == 40),
                     "构建标识只取自程序集：版本非空，提交号要么为空要么是完整 git 提交");
                 log.Write("server_ready", new { Pid = 1 });
+                log.Write("battle_pass_default_unavailable", new { Error = "ambiguous legacy seasons" });
+                TestCheck.That(output.ToString().Contains("[WARN] [battle_pass_default_unavailable] Default battle pass unavailable; server continues without battle pass: Error=ambiguous legacy seasons"),
+                    "默认赛季降级在关闭文件日志时也能通过英文WARN定位，保留原始原因");
                 log.Write("fatigue_daily_reset", new { Connection = 1, Character = 7, Day = 739916, Remaining = 156, Maximum = 156, Revision = 3 });
                 log.Write("fatigue_daily_reset_failed", new { Connection = 1, Epoch = 2, Error = "fixture" });
                 TestCheck.That(output.ToString().Contains("[INFO] [fatigue_daily_reset] Daily fatigue restored:") &&
@@ -55,6 +59,8 @@ internal static class ServerLogTests
                     Reason = "committed", Accepted = true, Phase = 1, CharacterId = 7, Revision = 4, Level = 25, Job = 0, GrowType = 0, ActiveQuestCount = 1 });
                 log.Write("consumable_use", new { Connection = 1, Item = 1108, Slot = 65, Accepted = true, Reason = "committed", SourceUid = 7 });
                 log.Write("consumable_use", new { Connection = 1, Item = 1108, Slot = 65, Accepted = false, Reason = "cooldown" });
+                log.Write("enhancement", new { Connection = 1, Accepted = true, OldLevel = 4, NewLevel = 5,
+                    BaseSuccessPercent = 80m, SuccessPercent = 88m });
                 log.Write("random_option_change", new { Connection = 1, Slot = 13, OptionIndex = 1, Accepted = true, Result = "committed", Revision = 2 });
                 log.Write("random_option_change", new { Connection = 1, Slot = 13, OptionIndex = 0, Accepted = false, Error = 4 });
                 log.Write("cash_shop_buy", new { Connection = 1, Count = 1, Commodities = "270623", Accepted = true, Result = "committed", Revision = 3 });
@@ -71,6 +77,9 @@ internal static class ServerLogTests
                 log.Write("db_slow", new { Stage = "write_transaction", Action = "CharacterRepository.Save", ElapsedMs = 1523,
                     SqlHead = "UPDATE characters SET revision=revision+1", Connection = 7 });
                 string text = output.ToString();
+                TestCheck.That(text.Contains("[INFO] [enhancement] Equipment enhancement:") &&
+                    text.Contains("BaseSuccessPercent=80 SuccessPercent=88"),
+                    "强化提交日志按英文纯文本显示实际基础及最终成功百分比");
                 TestCheck.That(text.Contains("[INFO] [server_ready] Server ready") && text.Contains("[WARN] [auth_rejected]") &&
                     text.Contains("[WARN] [formal_dungeon_entry]"), "English events expose readiness and rejection severity");
                 TestCheck.That(text.Contains("[WARN] [db_busy] Database busy") && text.Contains("Stage=dispatch Attempts=5") &&
@@ -136,7 +145,7 @@ internal static class ServerLogTests
                 TestCheck.That(seen.Count == 64, "all concurrent console events are delivered");
             }
             string[] fileLines = File.ReadAllLines(Path.Combine(root, "server.jsonl"));
-            TestCheck.That(fileLines.Length == 100 && fileLines.Count(line => line.Contains("\"Kind\":\"fatigue_daily_reset", StringComparison.Ordinal)) == 2,
+            TestCheck.That(fileLines.Length == 102 && fileLines.Count(line => line.Contains("\"Kind\":\"fatigue_daily_reset", StringComparison.Ordinal)) == 2,
                 "console filtering preserves every structured file event and flushes the tail");
             using (var json = JsonDocument.Parse(fileLines[0]))
                 TestCheck.That(json.RootElement.GetProperty("Kind").GetString() == "send" &&
@@ -192,6 +201,53 @@ internal static class ServerLogTests
     sealed class EmptyProtocol : IConnectionProtocol
     {
         public Task RunAsync(ConnectionContext connection) => Task.CompletedTask;
+    }
+
+    static void CheckQuietStartupFailure(string root)
+    {
+        string quietRoot = Path.Combine(root, "quiet-failure");
+        using var failureOutput = new StringWriter();
+        using (var log = new ServerLog(quietRoot, fileEnabled: false, failureOutput: failureOutput))
+        {
+            log.Write("startup", new { Stage = "Configuration", State = "starting" });
+            log.Write("recv", new { Body = "must-not-log" });
+            log.Write("auth_rejected", new { Message = "must-not-log" });
+            TestCheck.That(failureOutput.ToString().Length == 0 && !Directory.Exists(quietRoot),
+                "关闭日志时普通进度、包体和业务拒绝不输出或创建日志目录");
+            log.Write("listener_failed", new { Stage = "Game listener", Reason = "SocketException", Message = "Address already in use" });
+            log.Write("server_failed", new { Stage = "Listeners", Reason = "SocketException", Message = "outer exception" });
+            TestCheck.That(failureOutput.ToString() == "Server failed at Game listener: SocketException: Address already in use" + Environment.NewLine,
+                "关闭日志时保留具体监听阶段的首因，外层失败不重复或覆盖");
+        }
+        using var longOutput = new StringWriter();
+        using (var log = new ServerLog(quietRoot, fileEnabled: false, failureOutput: longOutput))
+        {
+            log.Write("server_failed", new { Stage = "Resources", Reason = "InvalidDataException", Message = "bad\r\nresource " + new string('x', 8192) });
+            string text = longOutput.ToString();
+            TestCheck.That(text.StartsWith("Server failed at Resources: InvalidDataException: bad\\r\\nresource ", StringComparison.Ordinal) &&
+                text.Length <= 2048 + Environment.NewLine.Length && text.EndsWith("..." + Environment.NewLine, StringComparison.Ordinal) &&
+                text.Count(c => c == '\n') == 1 && !Directory.Exists(quietRoot),
+                "关闭日志时首因归一为单行且最多2048字符，不写文件");
+        }
+        foreach (bool disposed in new[] { false, true })
+        {
+            using var failedOutput = new FailedWriter(disposed);
+            using var log = new ServerLog(quietRoot, fileEnabled: false, failureOutput: failedOutput);
+            log.Write("server_failed", new { Stage = "Resources", Reason = "IOException", Message = "original failure" });
+            log.Write("server_failed", new { Stage = "Resources", Reason = "IOException", Message = "duplicate failure" });
+            TestCheck.That(failedOutput.Attempts == 1, "诊断管道不可写或已关闭不覆盖原失败，也不重复尝试");
+        }
+    }
+
+    sealed class FailedWriter(bool disposed) : StringWriter
+    {
+        public int Attempts { get; private set; }
+        public override void WriteLine(string? value)
+        {
+            Attempts++;
+            if (disposed) throw new ObjectDisposedException(nameof(FailedWriter));
+            throw new IOException("fixture output unavailable");
+        }
     }
 
     // 探针值而不是真实 schema 版本：证明 ready.json 写的是宿主收到的参数，不是别处抄来的常量。

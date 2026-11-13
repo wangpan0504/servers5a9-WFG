@@ -43,12 +43,15 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
     DfoServer.Game.Events.PcRoomTimePointService? pcRoomTimePoint = null,
     DfoServer.Game.Dungeons.RiftNamedEpicDropPolicy? riftNamedEpics = null,
     DfoServer.Game.Events.EndlessAdventurePolicy? endlessAdventure = null,
-    DfoServer.Game.Events.DailyAttendanceService? dailyAttendance = null)
+    DfoServer.Game.Events.DailyAttendanceService? dailyAttendance = null,
+    DfoServer.Game.MonsterMockBattle.MonsterMockBattleService? monsterMockBattle = null,
+    EpicPieceBonusDropCatalog? epicPieceBonuses = null, DungeonDropControlSettings? dropControl = null)
 {
     readonly GameCacheScope gameCache = owner.CreateCacheScope();
 
     public AuthenticatedIdentity? Identity { get; } = identity;
     public GameWorld.Channels.ChannelEntry? ChannelEntry { get; } = entry;
+    ItemCatalog? SessionItems => items;
     Character? selected;
     public Character? Selected
     {
@@ -81,16 +84,27 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
     public bool PremiumPcRoom => debugSettings?.PremiumPcRoom == true ||
         (Selected?.Inventory.AccountWallet.ContractExpiry(128) ?? 0) >
             (timeProvider ?? TimeProvider.System).GetUtcNow().ToUnixTimeSeconds();
+    internal bool InfiniteFatigue => debugSettings?.InfiniteFatigueFor(owner.Account) == true;
     public CharacterFatigueState FatigueForClient(Character character)
     {
         var state = (character.Fatigue ?? CharacterFatigueState.NewOrdinary)
             .ForBlackDiamond(character.BlackDiamondExpiresAt > (timeProvider ?? TimeProvider.System).GetUtcNow().ToUnixTimeSeconds());
         state.Validate();
-        return debugSettings?.InfiniteFatigue == true ? state with { Used = 0, Remaining = state.Maximum } : state;
+        return InfiniteFatigue ? state with { Used = 0, Remaining = state.Maximum } : state;
     }
 
     IReadOnlySet<int> completed = new HashSet<int>();
-    public CharacterRosterEntry[] Roster() => repository.ListRoster(owner);
+    public CharacterRosterEntry[] Roster() => ProjectCloneTitles(repository.ListRoster(owner));
+    // 登录 NOTI2 走 PrepareRoster，不能只改查询入口。读路径只投影，清零落库留在选角清理。
+    CharacterRosterEntry[] ProjectCloneTitles(CharacterRosterEntry[] roster)
+    {
+        var catalog = items ?? questCatalog?.Items;
+        if (catalog is null) return roster;
+        return roster.Select(entry => entry.CloneTitleItemId != 0 &&
+            DfoServer.Game.Inventory.Services.InventoryCloneAppearanceService.ShouldClearCloneTitle(
+                entry.CloneTitleItemId, new(entry.Equipment), catalog)
+            ? entry with { CloneTitleItemId = 0 } : entry).ToArray();
+    }
     public Character[] QueryCharacters() => repository.List(owner);
 
     internal OnlineCharacterSnapshot? OnlineCharacter()
@@ -224,6 +238,8 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
                 });
             if (expected is not null && (character.Id != expected.Id || character.Slot != expected.Slot || character.Name != expected.Name))
                 throw new InvalidOperationException("Selection published roster identity changed");
+            if (BeastChannel.IsEntry(ChannelEntry) && !BeastChannel.Eligible(character.Level, character.CompletedQuests.Contains(BeastChannel.EntryQuest)))
+                throw new InvalidDataException("魔兽频道要求90级并完成5927");
             // 普通选角与原生换频道共用此门禁；拒绝发生在修复、扣费和位置保存之前。
             if (DfoServer.Game.Raids.RaidAdmissionPlan.Rejection(ChannelEntry, character) is { } raidRejection)
                 throw new DfoServer.Game.Raids.RaidAdmissionException(raidRejection);
@@ -272,7 +288,7 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
             if (ChannelEntry?.Type == ChannelAreaLanding.EvildomWarChallengeType &&
                 character.Position.Town != ChannelAreaLanding.EvildomWarChallengeTown)
                 resumed = false;
-            character = CharacterSelection.Prepare(repository, owner, character, towns, quests, goldLimits, resumed, items, timeProvider, ChannelEntry, previousType);
+            character = CharacterSelection.Prepare(repository, owner, character, towns, quests, goldLimits, resumed, items ?? questCatalog?.Items, timeProvider, ChannelEntry, previousType);
             TownSnapshotResumed = resumed;
             if (ChannelEntry is not null)
                 channelHistory?.Record(owner.Account, ChannelEntry.Type);
@@ -312,6 +328,7 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
             loginWearRestatementUntil = (timeProvider ?? TimeProvider.System).GetUtcNow().ToUnixTimeMilliseconds() +
                 LoginWearRestatementWindowMillis;
             SetState(SessionPhase.Town);
+            ObserveSocialPresence();
             ObserveGuildPresence();
             ObserveGuildAttendance();
             return true;
@@ -393,6 +410,7 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
         }
         GuildManagementClosing?.Invoke();
         ObserveGuildPresence();
+        ObserveSocialPresence();
         InvalidateRaids(notices, reason == "session-ended");
         CancelHostedDungeonEligibility();
         mailboxRestore = null;
@@ -424,6 +442,7 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
         pendingRental = null;
         InvalidateImageCommunication();
         pendingQuestQuickClear = null;
+        AbandonPreyGuideWaiting();
         SelectionEpoch++;
         Selected = null;
         completed = new HashSet<int>();

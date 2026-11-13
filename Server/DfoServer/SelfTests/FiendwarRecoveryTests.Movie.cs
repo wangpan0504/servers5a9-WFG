@@ -40,7 +40,10 @@ internal static partial class FiendwarRecoveryTests
         var resource = definition.Resources.Fiendwar!;
         var rewards = new FiendwarRewards(mode.StartsWith("ineligible", StringComparison.Ordinal)
             ? resource with { MinimumClears = 2 } : resource, items.Items, items.Boosters);
-        var start = new AntonRaidStart(registry, parties, repository, resources.Towns, items.EpicPieces, clock, fiendwarRewards: rewards);
+        // 与正式Runtime一致注入有界Luke时钟；没有timer lease时Start虽能扣票，结算锚点不会激活。
+        var timers = new LukeRaidClocks(clock, repository, static (_, _) => { });
+        var start = new AntonRaidStart(registry, parties, repository, resources.Towns, items.EpicPieces, clock,
+            timers: timers, fiendwarRewards: rewards);
         Guid instance = Guid.Empty;
         bool ended = false;
         try
@@ -49,11 +52,38 @@ internal static partial class FiendwarRecoveryTests
                 start.Start(actor, registry.Find(actor)!, definition).Error == 0, "漩涡电影夹具沿正式开战扣票及原生命周期");
             var battle = session.CurrentRaidBattle(actor)!;
             instance = battle.Instance;
+            // 测试时钟的结算锚点使用单调时间戳；只推进UTC会让ElapsedTime仍为零。
+            clock.AdvanceMillisecondsWithoutCallbacks(7_000);
+            if (mode == "cards")
+            {
+                // 合成终杀已提交、资格事务未返回的窗口，位置仍在黑白桥。
+                var beforeReturn = battle.View;
+                typeof(AntonRaidBattle).GetField("current", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                    .SetValue(battle, beforeReturn with { Fiendwar = beforeReturn.Fiendwar! with { Cleared = true },
+                        FiendwarPositions = beforeReturn.FiendwarPositions.SetItem(actor.Character, 31) });
+            }
             var candidate = FiendwarSharedLimitTests.CaptureSettledContract(battle, actor);
+            That(candidate.Seconds == 7, "漩涡独立总时钟从实际开战起算，冻结结算耗时不为零");
+            if (mode == "cards")
+            {
+                using var returned = battle.ReserveFiendwarReturn(actor, null);
+                That(returned is not null, "资格事务等待期间可预留合法终局返回");
+                returned!.Install();
+            }
             var committed = repository.CommitLukePhase(candidate);
             battle.AcceptLukeSettlement(candidate, committed);
             var view = battle.View;
+            if (mode == "cards")
+                That(battle.FiendwarPosition(actor.Character) == battle.FiendwarBaseArea,
+                    "资格事务回执不能用冻结桥位置覆盖已经提交的返回位置");
             var eligibility = committed.Members.Single();
+            var entitlements = battle.FiendwarTeamEntitlements(view);
+            That(eligibility.Eligible
+                ? entitlements is [var teamRow] && teamRow.Owner == actor.Character &&
+                    teamRow.Offer == eligibility.Offers.Single(offer => offer.Kind == 0)
+                : entitlements.IsEmpty, "团队页只投影原事务冻结的合格权益，不制造无资格成员奖励");
+            That(battle.FiendwarTeamEntitlements(view with { Revision = view.Revision + 1 }).IsDefault,
+                "旧视图不能发布新实例团队页");
             That(candidate.Week == FiendwarRewards.Cycle.Key(clock.GetUtcNow()) && candidate.Week == 20261103,
                 "漩涡终结冻结周二周期，不使用卢克周日或面板周四周期");
             That(view.State == AntonRaidBattleState.Reward && battle.CanConfirmFiendwarMovie(actor, view) &&
@@ -63,13 +93,26 @@ internal static partial class FiendwarRecoveryTests
                 "复制或过期视图不能完成真实电影");
             if (mode == "old-owner")
             {
+                var movie = battle.CaptureMovie(actor)!.Value;
                 using var replacement = owners.Acquire(owner.Account, () => { });
-                That(!battle.CanConfirmFiendwarMovie(actor, view) && !battle.CompleteFiendwarMovie(actor, view),
+                bool queued = false;
+                That(!battle.CanConfirmFiendwarMovie(actor, view) && !battle.CompleteFiendwarMovie(actor, view) &&
+                    battle.ConfirmMovie(actor, view, movie.Event, true, () => queued = true) is null && !queued,
                     "被接管旧owner不能确认电影或开放牌面");
                 return;
             }
             if (mode is "cards" or "ineligible")
             {
+                if (mode == "cards")
+                {
+                    That(session.RaidStatusSnapshot() is { Battle.Kind: RaidKind.Fiendwar },
+                        "返城使用的当前团本快照包含漩涡，实际24写后必须进入补演出分支");
+                    // 上面的领域预留只移动战场占用；原电影仍要求真实Session位置也提交到候战房。
+                    if (session.NeedsFiendwarFinalReturn())
+                        That(session.ReturnFromFiendwarBattlefield() is not null, "场景回归先沿原Session用例提交最终候战位置");
+                    view = battle.View;
+                    RaidMovieResponseTests.ReturnAsync(resources, actor, battle, clock).GetAwaiter().GetResult();
+                }
                 That(battle.CompleteFiendwarMovie(actor, view), "真实659完成通知解除电影义务");
                 if (mode == "cards")
                 {
@@ -151,7 +194,11 @@ internal static partial class FiendwarRecoveryTests
                     Reject<InvalidDataException>(() => repository.ReadLukeRewardRecovery(checkOwner, current, target), "无资格到期不产生补发权益");
             }
         }
-        finally { if (!ended) session.End(); }
+        finally
+        {
+            if (!ended) session.End();
+            timers.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        }
 
         void ChangeSource(string source)
         {

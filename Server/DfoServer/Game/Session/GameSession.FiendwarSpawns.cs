@@ -47,6 +47,9 @@ internal sealed partial class GameSession
             bool replay = reporter.Run.FindCurrentFiendwarDynamic(reporter.Run.Scene.Identity, report.Spawn.ObjectKey, includeRetired: true) == report.Spawn;
             if (!keys.OwnsKey(receipt.Character.Id, report.LeaseId, report.Spawn.ObjectKey) ||
                 !replay && !keys.CanUse(receipt.Character.Id, report.LeaseId, report.Spawn.ObjectKey)) return DungeonRunOutcome.Rejected;
+            // FWS2只在原生writer已采用该键后上报；拒绝怪物登记也不能把它计回客户端可用库存。
+            // 先核对当前场景、本人租约及重放，再消费编号；怪物、奖励和全员安装仍独立核验。
+            if (!replay) keys.Consume(receipt.Character.Id, report.LeaseId, report.Spawn.ObjectKey);
             var checks = new DungeonRunOutcome[sessions.Length];
             for (int index = 0; index < sessions.Length; index++)
             {
@@ -63,7 +66,6 @@ internal sealed partial class GameSession
             {
                 for (int index = 0; index < sessions.Length; index++)
                     sessions[index].InstallFiendwarSpawn(scenes[index]!, report.Spawn);
-                keys.Consume(receipt.Character.Id, report.LeaseId, report.Spawn.ObjectKey);
             }
             fiendwarSpawnStream = new(receipt.Snapshot.Identity, serial, report);
             return checks[0];

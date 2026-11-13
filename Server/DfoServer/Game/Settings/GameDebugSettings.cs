@@ -1,4 +1,5 @@
 using DfoServer.GameWorld.Dungeons;
+using System.Collections.Immutable;
 
 namespace DfoServer.Game.Settings;
 
@@ -16,18 +17,68 @@ internal sealed record SupportCompanionConfiguration(int SelectionMask, string W
     public static bool ValidTier(string tier) => tier is "entry" or "graduate" or "huge";
 }
 
-// 当前服务实例的调试设置，不写入玩家存档，重启恢复各自默认值。
+// 当前服务实例的调试设置；支援兵名单与档次、账号无限疲劳分别持久化，其余设置重启恢复各自默认值。
 internal sealed class GameDebugSettings
 {
+    public DfoServer.Game.Events.AdventurerBenefitService? AdventurerBenefits { get; init; }
+    public DfoServer.Game.Events.ReturningAdventurerService? ReturningAdventurers { get; internal set; }
+    readonly object supportGate = new();
+    readonly Action<SupportCompanionConfiguration>? persistSupport;
+    readonly object fatigueGate = new();
+    readonly Action<ImmutableHashSet<string>>? persistFatigue;
+    ImmutableHashSet<string> fatigueAccounts;
+
+    public GameDebugSettings(SupportCompanionConfiguration? initialSupport = null,
+        Action<SupportCompanionConfiguration>? persistSupport = null,
+        IEnumerable<string>? initialFatigueAccounts = null, Action<ImmutableHashSet<string>>? persistFatigue = null)
+    {
+        var initial = initialSupport ?? SupportCompanionConfiguration.Default;
+        ValidateSupportConfiguration(initial);
+        supportCompanion = initial;
+        this.persistSupport = persistSupport;
+        fatigueAccounts = (initialFatigueAccounts ?? []).ToImmutableHashSet(StringComparer.Ordinal);
+        this.persistFatigue = persistFatigue;
+    }
+
+    internal static void ValidateSupportConfiguration(SupportCompanionConfiguration value)
+    {
+        if (!ValidSupportCompanions(value.SelectionMask) || !SupportCompanionConfiguration.ValidTier(value.WangFuguiTier) ||
+            !SupportCompanionConfiguration.ValidTier(value.FemaleCrusaderTier) || !SupportCompanionConfiguration.ValidTier(value.EnchantressTier))
+            throw new ArgumentOutOfRangeException(nameof(value));
+    }
+
+    // 仅供读取旧安装时迁移；未知位、多辅助及损坏档次仍按旧合同拒绝。
+    internal static void ValidateLegacySupportConfiguration(SupportCompanionConfiguration value)
+    {
+        int mask = value.SelectionMask, auxiliary = mask & 13;
+        if (mask < 0 || (mask & ~15) != 0 || (auxiliary & (auxiliary - 1)) != 0 ||
+            !SupportCompanionConfiguration.ValidTier(value.WangFuguiTier) ||
+            !SupportCompanionConfiguration.ValidTier(value.FemaleCrusaderTier) ||
+            !SupportCompanionConfiguration.ValidTier(value.EnchantressTier))
+            throw new ArgumentOutOfRangeException(nameof(value));
+    }
+
     // 两个开关均为true时忽略对应声明，不能互相代替或翻转成启用期限。
     public volatile bool IgnoreCashShopAbsoluteExpiration = true;
     public volatile bool IgnoreCashShopUsablePeriod = false;
-    public volatile bool InfiniteFatigue = true;
+    // 无记录即关闭；先持久化新快照，再发布给该账号的准入、扣点与显示读者。
+    public bool InfiniteFatigueFor(string account) => Volatile.Read(ref fatigueAccounts).Contains(account);
+    public void SetInfiniteFatigue(string account, bool enabled)
+    {
+        if (string.IsNullOrWhiteSpace(account)) throw new ArgumentException("须指定当前账号", nameof(account));
+        lock (fatigueGate)
+        {
+            var next = enabled ? fatigueAccounts.Add(account) : fatigueAccounts.Remove(account);
+            if (ReferenceEquals(next, fatigueAccounts)) return;
+            persistFatigue?.Invoke(next);
+            Volatile.Write(ref fatigueAccounts, next);
+        }
+    }
     // 网吧身份独立于账号黑钻；字段默认关闭，线上实例由 ServerRuntime 启动时按数据目录 pc-room.json 置为开（缺文件即开），
     // GM 的 on/off 只改当前进程，重启不沿用上次的临时调试资格。
     public volatile bool PremiumPcRoom;
-    // 进图伴侣开关。默认关闭，只改当前进程，重启恢复关闭；塔与祭坛等类型仍由资源标记排除。
-    // 同一原子位集合保存两组：辅助最多一名，三四仔最多两名；旧单选接口仍一次替换全部选择。
+    // 进图伴侣默认关闭；线上实例先持久化完整配置再发布，重启保留选择。塔与祭坛等类型仍由资源标记排除。
+    // 同一原子位集合保存四职业；辅助最多一名，可同时选择光兵，旧单选接口替换全部选择。
     private SupportCompanionConfiguration supportCompanion = SupportCompanionConfiguration.Default;
     public SupportCompanionCatalog SupportProfiles { get; init; } = SupportCompanionCatalog.Empty;
     public SupportCompanionConfiguration SupportConfiguration
@@ -35,10 +86,8 @@ internal sealed class GameDebugSettings
         get => Volatile.Read(ref supportCompanion);
         set
         {
-            if (!ValidSupportCompanions(value.SelectionMask) || !SupportCompanionConfiguration.ValidTier(value.WangFuguiTier) ||
-                !SupportCompanionConfiguration.ValidTier(value.FemaleCrusaderTier) || !SupportCompanionConfiguration.ValidTier(value.EnchantressTier))
-                throw new ArgumentOutOfRangeException(nameof(value));
-            Interlocked.Exchange(ref supportCompanion, value);
+            ValidateSupportConfiguration(value);
+            lock (supportGate) CommitSupport(value);
         }
     }
     public int SupportCompanions
@@ -73,12 +122,20 @@ internal sealed class GameDebugSettings
 
     private void UpdateSelection(Func<int, int> select)
     {
-        while (true)
+        lock (supportGate)
         {
             var before = SupportConfiguration;
             var after = before with { SelectionMask = select(before.SelectionMask) };
-            if (ReferenceEquals(Interlocked.CompareExchange(ref supportCompanion, after, before), before)) return;
+            ValidateSupportConfiguration(after);
+            CommitSupport(after);
         }
+    }
+
+    private void CommitSupport(SupportCompanionConfiguration value)
+    {
+        if (value == SupportConfiguration) return;
+        persistSupport?.Invoke(value);
+        Volatile.Write(ref supportCompanion, value);
     }
 
     public static int SupportCompanionBit(SupportCompanionKind kind) => kind == SupportCompanionKind.Off ? 0 : 1 << ((int)kind - 1);

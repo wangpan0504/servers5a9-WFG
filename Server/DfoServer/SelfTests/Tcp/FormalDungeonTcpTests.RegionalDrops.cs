@@ -16,11 +16,12 @@ internal static partial class FormalDungeonTcpTests
     {
         foreach (int dungeonId in new[] { 310, 291100268 })
         {
+            bool metroCenter = dungeonId == 310;
             await using var fixture = new TcpTestFixture(source, Path.Combine(root, "regional-" + dungeonId), resources: resources);
             Directory.CreateDirectory(fixture.Options.DataDirectory);
-            // 隔离夹具把材料倍率设为10，以确定性验证1000/10000的地区触发，不修改线上概率。
+            // 隔离夹具把材料倍率设为100，以确定性验证1000/10000的诞生之芽与100/10000的地轨中心次元光辉触发，不修改线上概率。
             File.WriteAllText(Path.Combine(fixture.Options.DataDirectory, "drop-control.json"),
-                "{\"Enabled\":true,\"Rules\":[{\"Scope\":\"All\",\"DungeonIds\":[],\"Multipliers\":{\"Gold\":0,\"Materials\":10,\"Equipment\":0,\"MonsterItems\":0,\"Special\":0}}]}");
+                "{\"Enabled\":true,\"Rules\":[{\"Scope\":\"All\",\"DungeonIds\":[],\"Multipliers\":{\"Gold\":0,\"Materials\":100,\"Equipment\":0,\"MonsterItems\":0,\"Special\":0}}]}");
             await fixture.StartAsync();
             var area = resources.Towns.Areas.Values.First(row => row.DungeonWorldMap is { } world &&
                 resources.Towns.DungeonMaps[world].Options.Any(option => option.DungeonId == dungeonId));
@@ -33,14 +34,14 @@ internal static partial class FormalDungeonTcpTests
             Character character;
             using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
             {
-                var candidate = CharacterCreation.Prepare(dungeonId == 310 ? "MetroDrop" : "HarlemDrop",
+                var candidate = CharacterCreation.Prepare(metroCenter ? "MetroDrop" : "HarlemDrop",
                     resources.Characters.Get(0), position, position, resources.Learning.Get);
                 var learning = SkillPointLedger.Synchronize(0, 0, 95, candidate.InitialLearning with
                     { Experience = resources.Growth.GetLevelStartExperience(95) }, resources.Learning);
                 character = new CharacterRepository(fixture.Database).Create(owner, candidate with
                     { Level = 95, AcceptedStoryLevel = 95, CompletedQuests = done.ToArray(), InitialLearning = learning });
             }
-            int picked = 0;
+            int pickedSeeds = 0, pickedRadiances = 0;
             using (var peer = Open(fixture))
             {
                 peer.Select(character.Slot, prepared: true, resumeTown: true, room: false);
@@ -60,34 +61,46 @@ internal static partial class FormalDungeonTcpTests
                 {
                     ushort key = U16(map, offset + 6);
                     var report = Death(key, peer.Id, map[offset + 12]);
+                    var adventureBefore = AdventureProgressSnapshot(fixture, peer);
                     peer.Send(39, report);
                     var death = peer.Expect(0, 38).Body;
-                    int seeds = 0;
+                    ExpectAdventureProgressIfChanged(fixture, resources, peer, adventureBefore);
+                    int seeds = 0, radiances = 0;
                     for (int index = 0; index < U16(death, 2); index++)
                     {
                         int at = 4 + index * 131;
-                        if (U32(death, at + 6) == PandemoniumRegionalDropPolicy.BirthSeedId)
+                        uint itemId = U32(death, at + 6);
+                        if (itemId == PandemoniumRegionalDropPolicy.BirthSeedId)
                             seeds += checked((int)U32(death, at + 10));
+                        else if (itemId == PandemoniumRegionalDropPolicy.DimensionalRadianceId)
+                            radiances += checked((int)U32(death, at + 10));
                     }
-                    That(U16(death, 0) == key && seeds == 1, "真实死亡38通知包含一个完整诞生之芽，不伪造成功或仅改清单");
+                    That(U16(death, 0) == key && seeds == 1 && radiances == (metroCenter ? 1 : 0),
+                        "真实死亡38通知按地区包含诞生之芽与地轨中心专属次元光辉，不伪造成功或跨区发放");
                     PickupResourceDrops(fixture, peer, death, 0, resources);
-                    picked += seeds;
+                    pickedSeeds += seeds;
+                    pickedRadiances += radiances;
                     string saved = fixture.Snapshot();
                     peer.Send(39, report); peer.Barrier();
                     That(fixture.Snapshot() == saved, "重复死亡和拾取不重复发放地区材料");
                 }
-                That(picked == 2 && Amount(peer.Id) == picked, "两只真实地图普通怪的芽分别生成并在拾取后精确入库");
+                That(pickedSeeds == 2 && pickedRadiances == (metroCenter ? 2 : 0) &&
+                    Amount(peer.Id, PandemoniumRegionalDropPolicy.BirthSeedId) == pickedSeeds &&
+                    Amount(peer.Id, PandemoniumRegionalDropPolicy.DimensionalRadianceId) == pickedRadiances,
+                    "两只真实地图普通怪的诞生之芽与地轨中心次元光辉分别生成并在拾取后精确入库");
             }
             using (var peer = Open(fixture))
             {
                 peer.Select(character.Slot, prepared: true, resumeTown: true, room: false);
-                That(Amount(peer.Id) == picked, "地区材料断线重登后保留，不依赖临时地面或在线快照");
+                That(Amount(peer.Id, PandemoniumRegionalDropPolicy.BirthSeedId) == pickedSeeds &&
+                    Amount(peer.Id, PandemoniumRegionalDropPolicy.DimensionalRadianceId) == pickedRadiances,
+                    "地区材料断线重登后保留，不依赖临时地面或在线快照");
             }
-            Console.WriteLine($"PASS regional socket dungeon={dungeonId} seeds={picked}; isolated material multiplier=10");
+            Console.WriteLine($"PASS regional socket dungeon={dungeonId} seeds={pickedSeeds} radiances={pickedRadiances}; isolated material multiplier=100");
 
-            long Amount(ushort id) => Convert.ToInt64(fixture.Query(
+            long Amount(ushort id, int itemId) => Convert.ToInt64(fixture.Query(
                 "SELECT coalesce(sum(json_extract(item_core,'$.Value')),0) FROM character_inventory_items WHERE character_id=$p0 AND json_extract(item_core,'$.ItemId')=$p1",
-                id, PandemoniumRegionalDropPolicy.BirthSeedId)[0][0]);
+                id, itemId)[0][0]);
         }
     }
 }

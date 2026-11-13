@@ -15,7 +15,8 @@ internal static class ExpertJobCraft
 {
     public static bool TryPlan(Character character, ExpertJobScriptCatalog scripts, ItemCatalog items,
         GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, uint recipeId, ushort count, ushort cardSlot,
-        Func<int, int> next, DateTimeOffset now, out ExpertJobCraftPlan plan, out ushort error)
+        Func<int, int> next, DateTimeOffset now, out ExpertJobCraftPlan plan, out ushort error,
+        EnchantmentCatalog? enchantments = null)
     {
         plan = null!;
         error = 19;
@@ -23,7 +24,7 @@ internal static class ExpertJobCraft
             return false;
         if (cardSlot is not (0 or ushort.MaxValue))
             return TryPlanCard(character, scripts, items, goldLimits, pieces, (int)recipeId, count, cardSlot, next, now,
-                out plan, out error);
+                out plan, out error, enchantments);
         if (!scripts.TryRecipe(character.ExpertJobType, (int)recipeId, out var recipe))
             return false;
         int level = scripts.Level(character.ExpertJobType, character.ExpertJobExperience);
@@ -63,7 +64,8 @@ internal static class ExpertJobCraft
 
     static bool TryPlanCard(Character character, ExpertJobScriptCatalog scripts, ItemCatalog items,
         GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, int recipeId, ushort count, ushort cardSlot,
-        Func<int, int> next, DateTimeOffset now, out ExpertJobCraftPlan plan, out ushort error)
+        Func<int, int> next, DateTimeOffset now, out ExpertJobCraftPlan plan, out ushort error,
+        EnchantmentCatalog? enchantments)
     {
         plan = null!;
         error = 19;
@@ -71,12 +73,26 @@ internal static class ExpertJobCraft
         var card = character.Inventory.Find(new(InventoryListType.Main, (short)cardSlot));
         int level = scripts.Level(1, character.ExpertJobExperience);
         if (card is null || card.Uid <= 0 || !card.Core.IsStackable || card.Core.Count < count || card.Core.EquipmentLockId != 0 ||
-            card.IsExpired(now.ToUnixTimeSeconds()) || card.Core.Upgrade != 0 || card.Core.EnchantUpgrade != 0 || !scripts.TryCardRecipe(card.Core.ItemId, out var recipe) ||
+            card.IsExpired(now.ToUnixTimeSeconds()) || card.Core.Upgrade != 0 || !scripts.TryCardRecipe(card.Core.ItemId, out var recipe) ||
             recipe.RecipeId != recipeId || !scripts.IsLearned(character.ExpertJobType, level, character.ExpertJobRecipes, recipeId) || level < recipe.RequiredLevel ||
             !ItemSlotBoundService.Allows(character.Inventory, card.Position, card.Core.Kind)) return false;
         var template = items.Get(card.Core.ItemId);
-        if (template.Kind != card.Core.Kind || template.UseForbidden || character.Level < template.MinimumLevel ||
-            (template.Jobs & (1 << character.Job)) == 0) return false;
+        if (template.Kind != card.Core.Kind || template.UseForbidden || character.Level < template.MinimumLevel) return false;
+        ItemTemplate? upgradedBead = null;
+        if (card.Core.EnchantUpgrade != 0)
+        {
+            try
+            {
+                if (enchantments?.Get(recipe.BeadId, card.Core.EnchantUpgrade) is not { UsesInstanceUpgrade: true } definition ||
+                    definition.CardItemId != card.Core.ItemId) return false;
+                upgradedBead = items.Get(recipe.BeadId);
+                if (upgradedBead.Kind != ItemKind.Consumable || upgradedBead.StackLimit <= 0 ||
+                    InventoryRewardGrantService.GrantDefinitionError(upgradedBead, new(recipe.BeadId, count)) is not null)
+                    return false;
+            }
+            catch (Exception exception) when (exception is InvalidDataException or KeyNotFoundException or OverflowException)
+            { return false; }
+        }
         // 客户端238的宝珠模式按EXJ卡片映射出成品，成本包含input item和独立bead item，不接受无映射扣卡假成功。
         var consumed = InventoryDeleteService.Plan(character.Inventory, card.Position, card.Core.ItemId, count);
         if (!consumed.Accepted || consumed.Plan is null) return false;
@@ -100,10 +116,25 @@ internal static class ExpertJobCraft
         ExpertJobProduct[] products = [];
         if (success > 0)
         {
-            var grant = InventoryRewardGrantService.TryGrantBatch(character with { Inventory = inventory },
-                [new InventoryReward(recipe.BeadId, success)], items, goldLimits, pieces, now);
-            if (!grant.Accepted || grant.Plan is null) { error = grant.Error == 0 ? (ushort)4 : grant.Error; return false; }
-            inventory = grant.Plan.After;
+            if (upgradedBead is null)
+            {
+                var grant = InventoryRewardGrantService.TryGrantBatch(character with { Inventory = inventory },
+                    [new InventoryReward(recipe.BeadId, success)], items, goldLimits, pieces, now);
+                if (!grant.Accepted || grant.Plan is null) { error = grant.Error == 0 ? (ushort)4 : grant.Error; return false; }
+                inventory = grant.Plan.After;
+            }
+            else
+            {
+                for (int remaining = success; remaining > 0;)
+                {
+                    int amount = Math.Min(remaining, upgradedBead.StackLimit);
+                    var core = InventoryRewardGrantService.Create(upgradedBead, amount, now) with { EnchantUpgrade = card.Core.EnchantUpgrade };
+                    var grant = InventoryRewardGrantService.TryGrantCore(character with { Inventory = inventory }, core, upgradedBead, pieces, now);
+                    if (!grant.Accepted || grant.Plan is null) { error = grant.Error == 0 ? (ushort)4 : grant.Error; return false; }
+                    inventory = grant.Plan.After;
+                    remaining -= amount;
+                }
+            }
             products = [new(recipe.BeadId, success)];
         }
         int experience = character.ExpertJobExperience;
@@ -137,7 +168,7 @@ internal static class ExpertJobCraft
             return false;
         var template = items.Get(target.Core.ItemId);
         var tool = items.Get(extractor.Core.ItemId);
-        if (template.Kind != target.Core.Kind || tool.Kind != extractor.Core.Kind || !tool.AllowsUse(character.Level, character.Job))
+        if (template.Kind != target.Core.Kind || tool.Kind != extractor.Core.Kind || !tool.AllowsActivation(character.Level, character.Job))
             return false;
         int state = EquipmentState(target.Core);
         if (!scripts.TryExtractResult(character.ExpertJobType, extractor.Core.ItemId, template.Rarity, state, out var row))
@@ -176,7 +207,7 @@ internal static class ExpertJobCraft
 
     public static bool TryPlanEnchant(Character character, InventoryEnchantmentService enchantments,
         ExpertJobScriptCatalog scripts, byte targetListByte, ushort targetSlot, byte sourceListByte, ushort sourceSlot,
-        long utcSeconds, out InventoryPlan inventory, out int experience, out ushort error)
+        long utcSeconds, out InventoryPlan inventory, out int experience, out ushort error, Func<int, int>? next = null)
     {
         inventory = null!;
         experience = character.ExpertJobExperience;
@@ -199,7 +230,7 @@ internal static class ExpertJobCraft
         inventory = result.Plan;
         var bead = character.Inventory.Find(source);
         if (bead is not null)
-            experience = AddCardExp(character, scripts, experience, _ => 0);
+            experience = AddCardExp(character, scripts, experience, next ?? Random.Shared.Next);
         return true;
     }
 

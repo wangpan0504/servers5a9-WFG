@@ -92,6 +92,40 @@ internal sealed record AuctionBuyRequest(byte Leading, int Amount, int ListingId
 }
 
 /// <summary>
+/// CMD 334 `AUCTION_BUY_ITEM_APIECE`（单件/拆分购买堆叠挂牌）请求体。
+/// 由 `ARAD.exe` `0x03701720`（`WriteOpcode(0x014E)` @ `0x037017F4`）反汇编定案，共 **33 字节**（无前导字节）：
+///   `[0..3]` = `TotalPrice:i32`（`UnitPrice * Count`）、`[4..7]` = `Count:i32`（购买数量）、
+///   `[8..11]` = `ListingId:i32`、`[12..15]` = `ExpiresAtUnix:i32`、
+///   `[16..28]` = `13B` 保留区、`[29..32]` = `ItemTemplateId:i32`。
+/// </summary>
+internal sealed record AuctionBuyApieceRequest(int Amount, int Count, int ListingId, uint ExpiresAtUnix, int ItemTemplateId)
+{
+    public const int BodySize = 33;
+    public const int AmountOffset = 0;
+    public const int CountOffset = 4;
+    public const int ListingIdOffset = 8;
+    public const int ExpiresEchoOffset = 12;
+    public const int ReservedOffset = 16;
+    public const int ReservedWidth = 13;
+    public const int ItemTemplateIdOffset = 29;
+
+    public static AuctionBuyApieceRequest Parse(ReadOnlySpan<byte> body)
+    {
+        if (body.Length < BodySize)
+            throw new InvalidDataException($"CMD 334 请求体至少需要 {BodySize} 字节（ARAD.exe 0x03701720 固定 33B）：{body.Length}");
+        return new(
+            BitConverter.ToInt32(body.Slice(AmountOffset, 4)),
+            BitConverter.ToInt32(body.Slice(CountOffset, 4)),
+            BitConverter.ToInt32(body.Slice(ListingIdOffset, 4)),
+            BitConverter.ToUInt32(body.Slice(ExpiresEchoOffset, 4)),
+            BitConverter.ToInt32(body.Slice(ItemTemplateIdOffset, 4)));
+    }
+
+    public string ReservedHex(ReadOnlySpan<byte> body) =>
+        body.Length >= ReservedOffset + ReservedWidth ? Convert.ToHexString(body.Slice(ReservedOffset, ReservedWidth)) : "";
+}
+
+/// <summary>
 /// 请求金额 `[1..4]` 命中的是哪一个口径。**两个样本的数量都是 1，单价与总额同值 ⇒ 现有样本区分不了**；
 /// 这一项就是「第三个样本（数量 &gt; 1 的挂牌）一次判定」要读的字段：
 /// 命中 <see cref="UnitPrice"/> 说明客户端发的是单价，命中 <see cref="TotalPrice"/> 说明是总额，
@@ -264,6 +298,10 @@ internal sealed record AuctionBuyPlan(
     long ExpiresAtUnix)
 {
     public ImmutableArray<byte> SourceItemEntry { get; init; } = [];
+    public int PurchaseCount { get; init; }
+    public int EffectivePurchaseCount => PurchaseCount > 0 ? PurchaseCount : ItemCount;
+    public int RemainingCount => ItemCount - EffectivePurchaseCount;
+    public ImmutableArray<byte> RemainingItemEntry { get; init; } = [];
 }
 
 /// <summary>规划结果：失败也返回同一种类型（`Error` 非 None、`Options` 为 null），并带上进日志的原因。</summary>

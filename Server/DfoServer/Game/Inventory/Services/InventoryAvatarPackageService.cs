@@ -67,7 +67,7 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
     }
 
     internal static bool SourceEligible(Character character, InventoryItem source, ItemTemplate template) =>
-        template.Id == source.Core.ItemId && template.Kind == source.Core.Kind && template.AllowsUse(character.Level, character.Job) &&
+        template.Id == source.Core.ItemId && template.Kind == source.Core.Kind && template.AllowsActivation(character.Level, character.Job) &&
         InventoryMoveService.RequiredSkillSatisfied(character, template);
 
     InventoryResult Grant(Character character, InventoryItem source, int count, AvatarPackageRow[] rows,

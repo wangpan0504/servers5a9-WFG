@@ -56,7 +56,7 @@ internal sealed class GuildManagementProjection(GuildManagementService service, 
         {
             context.Sender.Post(0, (ushort)NotiPacketType.USERINFO,
                 TownPackets.Actor(character, context.Session.ReadPvpGrade(character), context.Channel, adventureName: context.Session.ReadAdventureName(),
-                    premiumPcRoom: context.Session.PremiumPcRoom), "guild_member_actor",
+                    premiumPcRoom: context.Session.PremiumPcRoom, returningAdventurerType: context.Session.ReturningAdventurerType, marriage: context.MarriageAppearance), "guild_member_actor",
                 () => Current() && context.Session.Phase == SessionPhase.Town);
             context.Owner.Execute(() =>
             {

@@ -28,6 +28,20 @@ internal static class StackableActionTests
         booster[4] = new(2,BitConverter.SingleToInt32Bits(0.5f));
         That(StackableFile.Parse(2,"random.stk",booster,id=>boosterNames[id]) is { HasBoosterInfo:true, DeclaredBoosterEtc:null },
             "浮点或不完整的etc声明不伪装成原始整数奖池");
+        string[] commonNames = ["[stack in account common item inventory]", "[stackable type]", "[material]", "[stack limit]", "[stack in account inventory]"];
+        var common = StackableFile.Parse(3, "common.stk", [new(3, 0), new(3, 1), new(6, 2), new(0, 0),
+            new(3, 3), new(0, 200), new(3, 4), new(0, 0)], id => commonNames[id]);
+        That(common.HasCommonInventory && common.TypeDeclaration?.Label == "[material]" && common.DeclaredStackLimit == 200 &&
+            common.DeclaredStackInAccountInventory == 0 && !common.UnsupportedFields.Contains("stack in account common item inventory"),
+            "空stack in account common item inventory标记不读取标量，也不吞掉后续类型、堆叠上限和旧账号材料声明");
+        That(StackableFile.Parse(4, "account.stk", [new(3, 4), new(0, 1)], id => commonNames[id]) is
+            { HasCommonInventory: false, HasStackInAccountInventory: true, DeclaredStackInAccountInventory: 1 },
+            "旧账号材料标量独立保留，不因其存在启用45实体容器");
+        That(StackableFile.Parse(5, "empty-common.stk", [new(3, 0)], id => commonNames[id]) is { HasCommonInventory: true },
+            "只有stack in account common item inventory空标记也能识别，无须伪造数值参数");
+        That(StackableFile.Parse(6, "invalid-short-common.stk", [new(3, 0)], _ => "[common inventory]") is
+            { HasCommonInventory: false },
+            "缩写common inventory不是原始声明，不能启用45实体容器");
         var opaque = StackableFile.Parse(1, "stackable/fixture.stk", [new(3, 0), new(6, 1), new(7, 123), new(3, 3)], Resolve);
         That(opaque.ActionDeclaration is { HasIntegerArguments: false } && opaque.ActionDeclaration.Arguments[0] == new StackableActionArgument(7, 123) &&
             opaque.UnsupportedFields.Contains("action type"), "未知token保留原值并诊断，不伪装成无参动作");

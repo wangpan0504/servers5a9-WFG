@@ -1,6 +1,8 @@
 using static DfoServer.Testing.TestCheck;
+using DfoServer.Game.Characters;
 using DfoServer.Game.Dungeons;
 using DfoServer.Game.Inventory.Models;
+using DfoServer.Game.Quests;
 using DfoServer.Game.Session;
 using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Dungeons;
@@ -48,8 +50,8 @@ internal static class LostLandSessionTests
             requireTown: false, requiredPhase: SessionPhase.Dungeon);
         That(revision.Accepted && !session.CanPublishFormalDungeon(loaded), "正常资产提交使旧加载快照失效");
         var timer = session.StartedLostLandTimer(loaded) ?? throw new InvalidOperationException("资产revision变化后计时任务身份丢失");
-        That(loaded.LostLandStarted && timer.Remaining.TotalSeconds == 600 && timer.OpaqueValue == 1200 &&
-            session.CompleteFormalDungeonLoading() is null, "首次37才启动600秒，重复37不成功或重置");
+        That(loaded.LostLandStarted && timer.Remaining.TotalSeconds == LostLandAdmission.InitialSeconds && timer.OpaqueValue == 1200 &&
+            session.CompleteFormalDungeonLoading() is null, "首次37才启动1800秒，重复37不成功或重置");
         That(session.TickLostLandTimer(timer) is { Expired: false } && session.Phase == SessionPhase.Dungeon,
             "提前计时唤醒不结束实例");
         var originalKeys = loaded.Snapshot.LivingMonsters.ToArray();
@@ -96,7 +98,7 @@ internal static class LostLandSessionTests
         That(returned is { Snapshot.CurrentMap.Id: 11200, Snapshot.MapPayload: DungeonMapPayload.Cached } &&
             returned.Snapshot.LivingMonsters.SequenceEqual(originalKeys), "真实往返沿原缓存保留起点全部存活怪物key");
         That(session.CompleteFormalDungeonLoading() is { LostLandStarted: false } &&
-            session.TickLostLandTimer(timer) is { Expired: false, Remaining.TotalSeconds: 500 }, "往返加载不重发启动事实或重置600秒总时限");
+            session.TickLostLandTimer(timer) is { Expired: false, Remaining.TotalSeconds: LostLandAdmission.InitialSeconds - 100 }, "往返加载不重发启动事实或重置1800秒总时限");
         // 按实收路线抵达铁笼房；返程仍是本地救援ACT发起的导航，不代替机关或战斗确认。
         foreach (var (target,id) in new (DungeonPoint,int)[]
             { (new(8,6),11251),(new(8,7),11202),(new(0,9),11209),(new(0,8),11212),(new(1,8),11213),(new(1,9),11211) })
@@ -110,9 +112,9 @@ internal static class LostLandSessionTests
             rescued.Snapshot.LivingMonsters.SequenceEqual(originalKeys) && State() == beforeMove,
             "公主返程沿精确救援链回到起始缓存，不重扣次数或清除原怪物");
         That(session.CompleteFormalDungeonLoading() is { LostLandStarted: false } &&
-            session.TickLostLandTimer(timer) is { Expired: false, Remaining.TotalSeconds: 500 },
-            "救援返程不重启600秒时钟");
-        time.Advance(TimeSpan.FromSeconds(500));
+            session.TickLostLandTimer(timer) is { Expired: false, Remaining.TotalSeconds: LostLandAdmission.InitialSeconds - 100 },
+            "救援返程不重启1800秒时钟");
+        time.Advance(TimeSpan.FromSeconds(LostLandAdmission.InitialSeconds - 100));
         var expired = session.TickLostLandTimer(timer)!;
         That(expired.Expired && session.DungeonSnapshot!.Phase == SinglePlayerDungeonPhase.TimedOut &&
             !session.CanPublishLostLandTimer(timer) && session.CanPublishLostLandTimer(expired), "到期冻结原Run并使开始通知失效");
@@ -138,12 +140,62 @@ internal static class LostLandSessionTests
         var thirdTimer = session.StartedLostLandTimer(session.CompleteFormalDungeonLoading()!)!;
         session.ReturnToRoster();
         That(session.TickLostLandTimer(thirdTimer) is null && !session.CanPublishLostLandTimer(thirdTimer), "换角使旧计时失效");
-        Console.WriteLine($"PASS {Count - checks} 遗忘之地正式Session次数事务、600秒和退出生命周期断言（非客户端验收）");
+        VerifyAcceptedQuestEntry(towns, pvf, characters, incounts, dungeons, rooms);
+        Console.WriteLine($"PASS {Count - checks} 遗忘之地正式Session次数事务、1800秒和退出生命周期断言（非客户端验收）");
 
         FormalDungeonReceipt? Enter() => session.EnterFormalDungeon(4000, 0, 0, dungeons, rooms);
         string State() => $"{f.Query("SELECT printf('%d|%d|%d',c.revision,s.last_attempt,s.next_object_key) FROM characters c JOIN character_dungeon_state s ON s.character_id=c.id")};" +
             $"{f.Query("SELECT coalesce(sum(daily_used),0) FROM character_dungeon_incount WHERE dungeon=4000")};" +
             $"{f.Query("SELECT coalesce(sum(used),0) FROM account_dungeon_incount WHERE dungeon=4000")}";
+    }
+
+    static void VerifyAcceptedQuestEntry(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters,
+        DungeonIncountCatalog incounts, DungeonCatalog dungeons, DungeonRoomCatalog rooms)
+    {
+        var quests = SelfTestCatalogs.Quests(pvf);
+        var acceptance = Guid.NewGuid();
+        var seeking = quests.Get(13613);
+        var active = new ActiveMainQuest(0, 13613, 1) { AcceptanceId = acceptance };
+        var seeker = new Character(7, 0, "LostLandQuest", 0, new(40, 0, 845, 155), null)
+            { Level = 95, Job = 4, CompletedQuests = [13601, 3156], ActiveMainQuests = [active] };
+        That(DungeonEntryPlan.TryCreate(dungeons, seeker, 4000, 13613, 0, out var planned, out var reason, quest: seeking, quests: quests) &&
+            planned is { LostLand: not null, IsOrdinaryHunt: true, QuestId: 13613, RouteQuestId: 0, Difficulty: 0 } &&
+            planned.QuestAcceptanceId == acceptance,
+            "已接取13613沿普通迷宫进入遗忘之地：" + reason);
+        var hunt = quests.Get(13602);
+        var huntActive = new ActiveMainQuest(0, 13602, QuestHuntProgress.Initial(hunt)) { AcceptanceId = Guid.NewGuid() };
+        That(DungeonEntryPlan.TryCreate(dungeons, seeker with { ActiveMainQuests = [huntActive] }, 4000, 13602, 0, out var hunted, out var huntReason,
+                quest: hunt, quests: quests) &&
+            hunted is { LostLand: not null, IsOrdinaryHunt: true, QuestId: 13602 },
+            "已接取13602猎杀沿同一入口进入：" + huntReason);
+        var meet = quests.Get(13609);
+        var meetActive = new ActiveMainQuest(0, 13609, 1) { AcceptanceId = Guid.NewGuid() };
+        That(DungeonEntryPlan.TryCreate(dungeons, seeker with { ActiveMainQuests = [meetActive] }, 4000, 13609, 0, out var met, out var meetReason,
+                quest: meet, quests: quests) &&
+            met is { LostLand: not null, IsOrdinaryHunt: true, QuestId: 13609 },
+            "已接取13609会面沿同一入口进入：" + meetReason);
+        var other = quests.Get(6084);
+        var otherActive = new ActiveMainQuest(0, 6084, QuestHuntProgress.Initial(other)) { AcceptanceId = Guid.NewGuid() };
+        That(!DungeonEntryPlan.TryCreate(dungeons, seeker with { ActiveMainQuests = [otherActive] }, 4000, 6084, 0, out _, out var otherReason,
+                quest: other, quests: quests) && otherReason == "lost-land-mode-unsupported",
+            "未声明4000的任务不能进入遗忘之地：" + otherReason);
+
+        using var fixture = new QuestSceneTests.Fixture(towns, characters, SelfTestCatalogs.SkillLearning(pvf),
+            SelfTestCatalogs.Growth(pvf), quests, false, level: 95, job: 4,
+            completed: [3156], position: new(40, 0, 845, 155), incounts: incounts);
+        fixture.Sql("INSERT INTO character_completed_quests(character_id,quest_id,daily_period,answer) SELECT id,13601,0,NULL FROM characters");
+        fixture.Sql($"INSERT INTO character_active_main_quests(character_id,slot,quest_id,condition_state,acceptance_id) SELECT id,5,13613,1,'{acceptance:N}' FROM characters");
+        fixture.Session.ReturnToRoster();
+        fixture.Session.Select(0, resumeTown: true);
+        fixture.Session.MarkReady();
+        That(fixture.Session.EnterFormalDungeon(4000, 13613, 0, dungeons, rooms) is null &&
+            fixture.Session.LastFormalDungeonRejection == "lost-land-selection-mismatch",
+            "接取后直接16仍不能绕过乔安选图");
+        That(fixture.Session.BeginDungeonSelection() is not null, "接取13613后乔安仍能打开选图");
+        var entered = fixture.Session.EnterFormalDungeon(4000, 13613, 0, dungeons, rooms);
+        That(entered is { Entry.LostLand: not null, Entry.IsOrdinaryHunt: true, Entry.QuestId: 13613, Entry.RouteQuestId: 0 } &&
+            entered.Entry.QuestAcceptanceId == acceptance,
+            "选图后携带13613可以进入遗忘之地：" + fixture.Session.LastFormalDungeonRejection);
     }
 
     static void VerifyRescueSources(PvfArchive pvf, DungeonRoomCatalog rooms)

@@ -62,4 +62,25 @@ internal sealed partial class CharacterRepository
         command.Parameters.AddWithValue("$days",creation.RecreateDays);command.Parameters.AddWithValue("$now",creation.CreatedAtUnix);
         if(command.ExecuteNonQuery()!=1) throw new InvalidOperationException("专用角色创建资格已经变化");
     }
+
+    public Character ConvertPvpPrivateToNormal(AccountOwners.Lease owner, Character expected) => owner.Execute(() =>
+    {
+        if (!expected.IsPvpPrivate)
+            throw new InvalidOperationException("非决斗专用角色不可转换");
+        using var db = database.Open();
+        using var tx = db.BeginTransaction();
+        using var cmd = db.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.Parameters.AddWithValue("$account", owner.Account);
+        cmd.Parameters.AddWithValue("$id", expected.Id);
+        cmd.Parameters.AddWithValue("$rev", expected.Revision);
+        cmd.CommandText = "UPDATE account_pvp_private_characters SET character_id=NULL WHERE account=$account AND character_id=$id";
+        if (cmd.ExecuteNonQuery() != 1)
+            throw new InvalidOperationException("决斗专用角色身份不存在或已转换");
+        cmd.CommandText = "UPDATE characters SET revision=revision+1 WHERE id=$id AND account=$account AND revision=$rev";
+        if (cmd.ExecuteNonQuery() != 1)
+            throw new InvalidOperationException("角色版本不匹配");
+        tx.Commit();
+        return expected with { PvpPrivate = null, Revision = checked(expected.Revision + 1) };
+    });
 }

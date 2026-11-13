@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../SupportApcResourcePatch/*.cs" Exclude="../SupportApcResourcePatch/Program.cs" Link="Production/%(Filename)%(Extension)" />
+    <ProjectReference Include="../PvfLib/PvfLib.csproj" />
+  </ItemGroup>
+</Project>

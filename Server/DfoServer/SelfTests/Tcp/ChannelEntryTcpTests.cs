@@ -134,7 +134,7 @@ internal static class ChannelEntryTcpTests
         using var switched = Open(fixture, "entrya", gamePort: endpoints[21], channelNumber: 21);
         switched.ExpectedOpenEvents = [282, 2449, 414, 181, ServerEventService.NolanVisibilityId, ServerEventService.MileageShopId];
         var reentry = switched.Select(resumeTown: true, room: false, settings: settings);
-        That(switched.ClientSettings is [{ Kind: 0, Opcode: 390 }, { Kind: 0, Opcode: 454 }], "换频道的设置回放在最终24绑定后逐包核对，保留角色选项与账号键位");
+        That(switched.ClientSettings is [{ Kind: 0, Opcode: 390 }, { Kind: 0, Opcode: 454 }], "换频道的设置回放在最终24绑定后逐包核对，保留角色选项与角色键位");
         That(switched.Id == id && fixture.Query("SELECT count(*) FROM characters WHERE account='entrya'") is [[1L]] &&
             fixture.Snapshot("SELECT town,area,x,y,direction,revision,return_town,return_area FROM characters WHERE id=$p0", id) == location,
             "非gate原生换频道保留完整位置与revision，不建第二份角色或重新发放资产");
@@ -286,12 +286,12 @@ internal static class ChannelEntryTcpTests
         await fixture.StartAsync();
         using var peer = Open(fixture);
         peer.Create("NoPromo2520");
-        peer.ExpectedOpenEvents = [2532, 266, 2520];
+        peer.ExpectedOpenEvents = [282, 2449, 414, 181, 2532, 266, 2520];
         peer.ExpectedBattlePassEnd = checked((uint)policy.End.ToUnixTimeSeconds());
         for (int attempt = 0; attempt < 2; attempt++)
         {
             peer.Select();
-            That(U16(peer.EventInfoPayload, 0) == 3 + peer.ExpectedOpenEvents.Length,
+            That(U16(peer.EventInfoPayload, 0) == 4 + peer.ExpectedOpenEvents.Length,
                 "无10999时完整活动目录仍包含2520");
             peer.Expect(0, 1800);
             peer.Expect(0, 1801);
@@ -323,7 +323,7 @@ internal static class ChannelEntryTcpTests
         using var observerOwner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { });
         byte[] ReadMissions() => repository.ReadBattlePassMissions(observerOwner, clock.GetUtcNow())!.ToPayload();
         using var peer = Open(fixture);
-        peer.ExpectedOpenEvents = [2532, 266];
+        peer.ExpectedOpenEvents = [282, 2449, 414, 181, 2532, 266];
         peer.Select();
         CashShopTcpTests.AssertPromotionNativeEvents(peer.EventInfoPayload, 0L, null, peer.ExpectedOpenEvents);
         // 尚未开始的赛季不发布战令页，屏障不跳过任何战令通知。
@@ -365,7 +365,7 @@ internal static class ChannelEntryTcpTests
                 {
                     That(++refreshes <= expectedRefreshes, "赛季边界只发布一次完整108");
                     CashShopTcpTests.AssertPromotionNativeRefresh(packet, 0, false,
-                        active ? [2532, 266, 2520] : [2532, 266],
+                        active ? [282, 2449, 414, 181, 2532, 266, 2520] : [282, 2449, 414, 181, 2532, 266],
                         active ? checked((uint)end.ToUnixTimeSeconds()) : null);
                 }
                 else if (packet is { Kind: 0, Opcode: 706 })

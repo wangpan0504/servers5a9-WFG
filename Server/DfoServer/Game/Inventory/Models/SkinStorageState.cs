@@ -15,12 +15,15 @@ internal sealed record SkinStorageState(ImmutableArray<int> Owned, int Selected 
     public ImmutableArray<int> SelectedEmoticons { get; init; } = [];
     public const int RecentLimit = byte.MaxValue;
     public ImmutableArray<SkinAcquisition> Recent { get; init; } = [];
-    public bool Same(SkinStorageState other) => Selected == other.Selected && Owned.SequenceEqual(other.Owned) &&
-        SelectedDamageFont == other.SelectedDamageFont && DamageFonts.SequenceEqual(other.DamageFonts) &&
-        Cutscenes.SequenceEqual(other.Cutscenes) && SelectedCutscenes.SequenceEqual(other.SelectedCutscenes) &&
-        SelectedPartyFrame == other.SelectedPartyFrame && PartyFrames.SequenceEqual(other.PartyFrames) &&
-        Emoticons.SequenceEqual(other.Emoticons) && SelectedEmoticons.SequenceEqual(other.SelectedEmoticons) &&
-        Recent.SequenceEqual(other.Recent);
+    public bool Same(SkinStorageState other) => ReferenceEquals(this, other) ||
+        Selected == other.Selected && (Owned == other.Owned || Owned.SequenceEqual(other.Owned)) &&
+        SelectedDamageFont == other.SelectedDamageFont && (DamageFonts == other.DamageFonts || DamageFonts.SequenceEqual(other.DamageFonts)) &&
+        (Cutscenes == other.Cutscenes || Cutscenes.SequenceEqual(other.Cutscenes)) &&
+        (SelectedCutscenes == other.SelectedCutscenes || SelectedCutscenes.SequenceEqual(other.SelectedCutscenes)) &&
+        SelectedPartyFrame == other.SelectedPartyFrame && (PartyFrames == other.PartyFrames || PartyFrames.SequenceEqual(other.PartyFrames)) &&
+        (Emoticons == other.Emoticons || Emoticons.SequenceEqual(other.Emoticons)) &&
+        (SelectedEmoticons == other.SelectedEmoticons || SelectedEmoticons.SequenceEqual(other.SelectedEmoticons)) &&
+        (Recent == other.Recent || Recent.SequenceEqual(other.Recent));
 
     // 最近记录随归属仓库一起提交；同一皮肤续期时移到前面，不无限累积历史。
     public SkinStorageState Acquired(IEnumerable<SkinStorageKey> keys, long acquiredAt) => this with

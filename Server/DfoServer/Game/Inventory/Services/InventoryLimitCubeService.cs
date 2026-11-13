@@ -71,7 +71,7 @@ internal sealed class InventoryLimitCubeService(ItemCatalog items, LimitCubeCata
             targetTemplate.Id != target.Core.ItemId || targetTemplate.Kind != target.Core.Kind ||
             !ItemSlotBoundService.Allows(before, target.Position, targetTemplate.Kind))
             return Reject("template", out rejection);
-        if (!ticketTemplate.AllowsUse(character.Level, character.Job) ||
+        if (!ticketTemplate.AllowsActivation(character.Level, character.Job) ||
             !InventoryMoveService.RequiredSkillSatisfied(character, ticketTemplate))
             return Reject("qualification", out rejection);
         if (before.ConsumableStates.Any(row => row.Kind == ConsumableStateKind.Cooldown &&

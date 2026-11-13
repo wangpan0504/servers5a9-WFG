@@ -86,6 +86,11 @@ internal sealed partial class CharacterRepository
                         reader.GetInt64(7) < order.PlannedAt.ToUnixTimeSeconds())
                         return Unverified();
                     var awards = PageOrderAwards(rules, count, order.Units);
+                    if (!awards.SequenceEqual(business.Awards))
+                    {
+                        var legacyAwards = PageLegacyOrderAwards(rules, count, order.Units);
+                        if (legacyAwards.SequenceEqual(business.Awards)) awards = legacyAwards;
+                    }
                     int awardsPerMail = business.Deliveries.Length == awards.Count ? 1 : 10;
                     if (!awards.SequenceEqual(business.Awards) ||
                         business.Deliveries.Length != (awards.Count + awardsPerMail - 1) / awardsPerMail ||
@@ -193,6 +198,28 @@ internal sealed partial class CharacterRepository
     static List<PromotionAward> PageOrderAwards(PromotionRules rules, long before, int units)
     {
         // 每个已存订单最多循环64次，与累计i64数值大小无关。
+        var awards = new List<PromotionAward>();
+        for (int offset = 1; offset <= units; offset++)
+        {
+            long purchase = checked(before + offset);
+            int sequence = (int)((purchase - 1) % rules.CycleLength + 1);
+            bool matchedTier = false;
+            foreach (var tier in rules.Tiers)
+            {
+                if (tier.Sequence == sequence)
+                {
+                    awards.Add(new(purchase, tier.ItemId, tier.Count));
+                    matchedTier = true;
+                }
+            }
+            if (!matchedTier && purchase >= rules.OverflowFrom)
+                awards.Add(new(purchase, rules.OverflowItemId, rules.OverflowCount));
+        }
+        return awards;
+    }
+
+    static List<PromotionAward> PageLegacyOrderAwards(PromotionRules rules, long before, int units)
+    {
         var awards = new List<PromotionAward>();
         for (int offset = 1; offset <= units; offset++)
         {

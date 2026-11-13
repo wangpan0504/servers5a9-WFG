@@ -87,6 +87,7 @@ public static class ServerApplication
             return 0;
         }
 
+        using var packageLease = command.Kind == ServerCommandKind.Serve ? AcquirePackageLease() : null;
         ServerOptions options;
         try
         {
@@ -113,7 +114,7 @@ public static class ServerApplication
             SqliteDatabaseBootstrap.EnableRuntimePooling();
         if (command.Kind == ServerCommandKind.SelfTestCore)
         {
-            try { await SelfTestRunner.RunCoreAsync(); }
+            try { await SelfTestRunner.RunCoreAsync(options.PvfPath); }
             finally { SqliteDatabaseBootstrap.ReleaseRuntimePool(); }
             return 0;
         }
@@ -126,7 +127,8 @@ public static class ServerApplication
         }
         if (command.Kind == ServerCommandKind.AntonProbe)
             return AntonTcpProbe.Run(options, command.Arguments);
-        using var log = command.Kind == ServerCommandKind.Serve ? new ServerLog(options.LogDirectory, Console.Out) : null;
+        using var log = command.Kind == ServerCommandKind.Serve
+            ? new ServerLog(options.LogDirectory, options.FileLogsEnabled ? Console.Out : null, options.FileLogsEnabled) : null;
         // 数据库慢操作（>1000ms）诊断出口：由装配入口把统一日志交给 Persistence，仓储不持有 ServerLog 实例。
         // 只在本入口生命周期内有效，日志释放后不保留全局引用。
         SqliteDbDiagnostics.Sink = log is null ? null : log.Write;
@@ -138,6 +140,15 @@ public static class ServerApplication
         {
             SqliteDbDiagnostics.Sink = null;
         }
+    }
+
+    static FileStream? AcquirePackageLease()
+    {
+        // 独立 DLL 和启动器加载共用模块锁，防止资源加载阶段被安装器替换。
+        var directory = Path.GetDirectoryName(typeof(ServerApplication).Assembly.Location);
+        if (string.IsNullOrEmpty(directory) || !File.Exists(Path.Combine(directory, "server-module.json"))) return null;
+        return new FileStream(Path.Combine(directory, ".95jp-module.lock"), FileMode.OpenOrCreate,
+            FileAccess.ReadWrite, FileShare.ReadWrite);
     }
 
     static async Task<int> RunWithResourcesAsync(ServerCommand command, ServerOptions options, ServerLog? log)
@@ -194,7 +205,7 @@ public static class ServerApplication
             }
 
             var geometry = Load("Common map geometry", () => DfoServer.GameWorld.Maps.MapGeometryConfig.ReadFile(Path.Combine(options.DataDirectory, "DisplayCompat.world.json")));
-            var towns = Load("Town resources", () => TownCatalog.Load(pvf, geometry));
+            var towns = Load("Town resources", () => TownCatalog.Load(pvf, geometry, options.EpicRoad2019Enabled));
             if (command.Kind == ServerCommandKind.InspectTowns)
             {
                 Console.WriteLine(JsonSerializer.Serialize(new { Room = towns.Room, Return = towns.InitialReturn, Areas = towns.Areas.Values }));
@@ -203,7 +214,7 @@ public static class ServerApplication
 
             if (command.Kind == ServerCommandKind.Gm)
                 return DevelopmentCommands.RunGm(command.Arguments, options, pvf);
-            var itemResources = Load("Item resources", () => new ItemResources(pvf, StartupStage.DropDiagnostics(log)));
+            var itemResources = Load("Item resources", () => new ItemResources(pvf, StartupStage.DropDiagnostics(log), options.ResourcesDirectory));
             var particularHell = Load("Particular hell party table", () => ParticularHellPartyCatalog.Load(pvf, itemResources.Items.Contains));
             if (particularHell.ItemsByDungeon.Count == 0)
                 throw new InvalidDataException("particularhellparty 表是空的");
@@ -226,20 +237,30 @@ public static class ServerApplication
                 Directory.CreateDirectory(options.DataDirectory);
                 return new FileStream(Path.Combine(options.DataDirectory, "server.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
             });
+            Load("Save import recovery", () =>
+            {
+                SaveImportGuard.RequireNoPending(options.DataDirectory);
+                return true;
+            });
             if (command.Kind == ServerCommandKind.PrepareCharacter)
             {
                 OfflineCharacterPreparation.Run(options, pvf, towns, command.Arguments[0], command.Arguments[1]);
                 return 0;
             }
 
-            var quests = Load("Quest resources", () => DfoServer.GameWorld.Quests.QuestCatalog.Load(pvf).WithCreatures(itemResources.Creatures).WithItems(itemResources.Items));
+            var quests = Load("Quest resources", () => DfoServer.GameWorld.Quests.QuestCatalog.Load(pvf, options.EpicRoad2019Enabled).WithCreatures(itemResources.Creatures).WithItems(itemResources.Items));
             // 冒险团经验账本与角色成长共用同一份等级经验表，必须在仓储建立前装配。
             var learning = Load("Skill resources", () => SkillLearningCatalog.Load(pvf, itemResources.Contracts.ExpertSkillLevels));
             var adventureCatalog = Load("Adventure resources", () => new DfoServer.GameWorld.Adventure.AdventureCatalog(pvf));
             var growthCatalog = Load("Character growth resources", () => DfoServer.GameWorld.Characters.CharacterGrowthCatalog.Load(pvf, learning));
+            // 促销门禁与正式副本装配共享目录，候选只在本次启动计算一次。
+            var dungeonCatalog = Load("Dungeon resources", () => options.EpicRoad2019Enabled
+                ? DungeonCatalog.Load(pvf, EpicRoadResourcePaths.Dungeons, EpicRoadResourcePaths.Maps)
+                : DungeonCatalog.Load(pvf));
+            var hellTicketIds = DfoServer.Game.Dungeons.HellPartyTicketConsumers.From(towns, dungeonCatalog);
             var promotionConfiguration = Load("Cash shop promotions", () => new CashShopPromotionConfiguration(
-                Path.Combine(AppContext.BaseDirectory, "Resources", "cash-shop-promotions.json"),
-                ServerRuntime.ReadShippedPromotionConfig(), json => ServerRuntime.LoadCashShopPromotions(itemResources, json)));
+                Path.Combine(options.ResourcesDirectory, "cash-shop-promotions.json"),
+                ServerRuntime.ReadShippedPromotionConfig(options.ResourcesDirectory), json => ServerRuntime.LoadCashShopPromotions(itemResources, json, hellTicketIds)));
             DfoServer.GameWorld.Items.CashShopPromotionCatalog CurrentPromotions() => promotionConfiguration.Current;
             if (command.Kind == ServerCommandKind.Serve) SqliteDatabaseBootstrap.EnableRuntimePooling();
             var repository = Load("Database initialization", () => new CharacterRepository(Path.Combine(options.DataDirectory, "game.db"), quests,
@@ -275,7 +296,8 @@ public static class ServerApplication
             try
             {
                 await ServerLifetime.RunAsync(options, pvf, repository, towns, characters, learning, itemResources, quests, log!,
-                    adventureCatalog, growthCatalog, promotions: CurrentPromotions, promotionConfiguration: promotionConfiguration);
+                    adventureCatalog, growthCatalog, promotions: CurrentPromotions, promotionConfiguration: promotionConfiguration,
+                    dungeonCatalog: dungeonCatalog);
             }
             finally
             {
@@ -285,7 +307,7 @@ public static class ServerApplication
         }
         catch (Exception error) when (log is not null)
         {
-            Console.Error.WriteLine($"Server failed at {stage}: {error}");
+            if (options.FileLogsEnabled) Console.Error.WriteLine($"Server failed at {stage}: {error}");
             log.Write("server_failed", new { Stage = stage, Reason = error.GetType().Name, error.Message });
             return 1;
         }

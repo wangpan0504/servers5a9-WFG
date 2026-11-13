@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using DfoServer.Game.Characters;
 using DfoServer.Game.Party;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Session;
@@ -27,7 +28,7 @@ internal sealed record LukeRaidStartPolicy(string Source, RaidScript ExecutionSc
 
 internal sealed class LukeRaidStart(RaidRegistry registry, PartyService parties, IRaidStartStore store,
     TownCatalog towns, EpicPieceCatalog pieces, LukeRaidStartPolicy policy, TimeProvider? clock = null, ItemCatalog? rewardItems = null, LukeRaidClocks? timers = null,
-    LukeChannelCards? channelCards = null)
+    LukeChannelCards? channelCards = null, DfoServer.Game.Dungeons.DungeonDropControlSettings? dropControl = null)
 {
     public RaidStartResult Start(RaidActor actor, RaidParty expected, RaidDefinition definition,
         ImmutableArray<PartySnapshot> bindings, Func<bool> commandsCurrent)
@@ -56,13 +57,16 @@ internal sealed class LukeRaidStart(RaidRegistry registry, PartyService parties,
             : new RaidLifecycleAdmission(policy.Source, now);
         reservations = reservations.Select(row => row with { Lifecycle = admission }).ToImmutableArray();
         // 构造可执行聚合可能拒绝不支持规则，必须在SQL之前完成，不能付费后才发现语义缺失。
+        decimal epicMultiplier = dropControl?.Current.ResolveReward(DfoServer.Game.Dungeons.DungeonDropScope.Raid)?.Equipment ?? 1;
+        var songLimit = RaidSongQuota.Limit(rewardItems);
         var memberRewards = policy.ResourceRewards is { } resources
             ? reservations.ToImmutableDictionary(row => row.Expected.Id,
                 row => resources.Create(row.Actor.Session.PremiumPcRoom,
-                    row.Expected.Inventory.PrivilegeService.IsActive(now.ToUnixTimeSeconds())))
+                    row.Expected.Inventory.PrivilegeService.IsActive(now.ToUnixTimeSeconds()), epicMultiplier: epicMultiplier))
             : null;
-        if (PrepareBattle(out var preparedBattle, memberRewards, now) is { } executionRejection) return new(19, executionRejection);
+        if (PrepareBattle(out var preparedBattle, memberRewards, now, songLimit) is { } executionRejection) return new(19, executionRejection);
         var battle = preparedBattle!;
+        battle.PrepareRaidPayments(reservations);
         var instance = battle.Instance;
         bool needsClock = policy.Timers is not null || policy.PhaseTimeout is not null;
         var timerLease = needsClock ? timers?.Reserve(battle) : null;
@@ -118,10 +122,11 @@ internal sealed class LukeRaidStart(RaidRegistry registry, PartyService parties,
     }
 
     string? PrepareBattle(out AntonRaidBattle? battle,
-        ImmutableDictionary<ushort, ImmutableArray<RaidPhaseRewardPolicy>>? memberRewards = null, DateTimeOffset? startedAt = null)
+        ImmutableDictionary<ushort, ImmutableArray<RaidPhaseRewardPolicy>>? memberRewards = null, DateTimeOffset? startedAt = null,
+        AccountMaterialDefinition? undefeatedSongLimit = null)
     {
         battle = null;
-        try { battle = new AntonRaidBattle(policy.ExecutionScript, Guid.NewGuid(), RaidKind.Luke, policy.Completion, clock, policy.Revival, policy.PhaseTimeout, policy.Run?.FixedRoute, facilities: policy.Facilities, cardRoute: policy.Run?.CardRoute, lukeEnergyObjects: policy.Run?.UseEnergyObjects == true, pacing: policy.Pacing, flow: policy.Flow, lukeRewards: policy.ResourceRewards, memberRewards: memberRewards, lukeCards: policy.Cards, lukeMazes: policy.Run?.Mazes ?? [], lukeChannelCards: channelCards?.Select(startedAt ?? (clock ?? TimeProvider.System).GetUtcNow())); }
+        try { battle = new AntonRaidBattle(policy.ExecutionScript, Guid.NewGuid(), RaidKind.Luke, policy.Completion, clock, policy.Revival, policy.PhaseTimeout, policy.Run?.FixedRoute, facilities: policy.Facilities, cardRoute: policy.Run?.CardRoute, lukeEnergyObjects: policy.Run?.UseEnergyObjects == true, pacing: policy.Pacing, flow: policy.Flow, lukeRewards: policy.ResourceRewards, memberRewards: memberRewards, lukeCards: policy.Cards, lukeMazes: policy.Run?.Mazes ?? [], lukeChannelCards: channelCards?.Select(startedAt ?? (clock ?? TimeProvider.System).GetUtcNow()), undefeatedSongLimit: undefeatedSongLimit); }
         catch (InvalidDataException) { return "luke-execution-policy-invalid"; }
         catch (KeyNotFoundException) { return "luke-execution-policy-reference-invalid"; }
         catch (IndexOutOfRangeException) { return "luke-execution-policy-field-invalid"; }

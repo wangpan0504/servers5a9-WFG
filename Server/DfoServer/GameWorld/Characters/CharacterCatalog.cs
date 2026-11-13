@@ -10,11 +10,14 @@ internal sealed class CharacterCatalog(Dictionary<byte, CharacterProfile> profil
 {
     public IEnumerable<byte> Jobs => profiles.Keys.Order();
     private readonly Dictionary<byte, CharacterAttributeDefinition> attributeDefinitions = new();
+    private CharacterAdditionalStatDefinition? additionalStats;
     public CharacterDefaultAppearance DefaultAppearance { get; private set; } = new([]);
 
     public CharacterProfile Get(byte job) => profiles.GetValueOrDefault(job) ?? throw new InvalidDataException("Ordinary character job is not implemented");
     public CharacterAttributeDefinition GetAttributeDefinition(byte job) => attributeDefinitions.GetValueOrDefault(job)
         ?? throw new InvalidDataException("角色属性资源未装载");
+    public CharacterAdditionalStatDefinition AdditionalStats => additionalStats
+        ?? throw new InvalidDataException("角色额外属性资源未装载");
 
     internal static IReadOnlyDictionary<int, string> ReadJobList(PvfArchive pvf)
     {
@@ -119,6 +122,11 @@ internal sealed class CharacterCatalog(Dictionary<byte, CharacterProfile> profil
             }
         }
 
+        const string additionalStatPath = "character/chn_add_stat.etc";
+        if (pvf.FindFile(additionalStatPath)?.DataType != 1)
+            throw new InvalidDataException("角色额外属性资源缺失");
+        catalog.additionalStats = CharacterAdditionalStatDefinition.Parse(additionalStatPath,
+            pvf.ReadTokens(additionalStatPath), pvf.ResolveString);
         catalog.DefaultAppearance = CharacterDefaultAppearance.Load(pvf);
         return catalog;
     }

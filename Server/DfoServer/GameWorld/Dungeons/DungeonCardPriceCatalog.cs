@@ -12,6 +12,8 @@ internal sealed class DungeonCardPriceCatalog
         ImmutableDictionary<int, ImmutableArray<DungeonSpecificCardItem>>.Empty;
 
     public ImmutableArray<DungeonSpecificCardItem> TayberrsPaidRewards { get; private init; } = [];
+    public ImmutableDictionary<int, SpecialDungeonClearReward> SpecialClearRewards { get; private init; } =
+        ImmutableDictionary<int, SpecialDungeonClearReward>.Empty;
     public ImmutableArray<int> RarityDecision { get; private init; } = [];
     public ImmutableArray<DungeonDropItemReference> ItemReferences { get; private init; } = [];
 
@@ -43,6 +45,7 @@ internal sealed class DungeonCardPriceCatalog
         {
             SpecificRewards = DungeonSpecificCardRewards.Parse(tokens, resolve),
             TayberrsPaidRewards = DungeonSpecificCardRewards.ParseTayberrsPaid(tokens, resolve),
+            SpecialClearRewards = DungeonSpecificCardRewards.ParseSpecialClearRewards(tokens, resolve),
             RarityDecision = ReadRarity(),
             ItemReferences = ReadReferences()
         };
@@ -70,9 +73,9 @@ internal sealed class DungeonCardPriceCatalog
         {
             // 只读价格的旧输入仍合法；存在的生成声明必须完整，不能静默改用怪物阈值。
             if (ReadIntegers("basis of rarity dicision") is not { } data) return [];
-            if (data.Length != 7 || data[^1] < 1000000 || !data.SequenceEqual(data.Order()))
+            if (data.Length != 7 || data[^1] < DungeonRarityThresholds.Denominator || !data.SequenceEqual(data.Order()))
                 throw new InvalidDataException("翻牌稀有度须提供完整七档非递减阈值");
-            return data.ToImmutableArray();
+            return DungeonRarityThresholds.Normalize(data);
         }
         ImmutableArray<DungeonDropItemReference> ReadReferences()
         {

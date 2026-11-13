@@ -116,6 +116,7 @@ internal static class Strongway2019QuestTests
                 candidate.InitialLearning with { Experience = growth.GetLevelStartExperience(95) }, learning, learning.ExpertContractLevels) };
             var created = repository.Create(owner, candidate);
             var events = new ServerEventService(new ServerEventRepository(database));
+            events.Override(ServerEventService.Strongway2019Id, false);
             var tracked = new QuestCompletionRepositoryTests.LostResultRepository(repository) { LoseCompletionResult = false };
             var session = new GameSession(tracked, towns, owner, serverEvents: events);
             session.Select(created.Slot); session.MarkReady();

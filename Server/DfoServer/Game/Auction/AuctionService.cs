@@ -187,7 +187,7 @@ internal static class AuctionRegisterErrors
 }
 
 /// <summary>
-/// 拍卖行读用例：分页搜索（匹配总数 + 排除自己 + 分类过滤）与开发种子。
+/// 拍卖行读用例：分页搜索（匹配总数 + 可选卖家排除 + 分类过滤）与开发种子。
 /// 只依赖存储合同：条目字节的排列由物品模块的编码入口产生，在装配处传进来（见 <see cref="ResolveSeedItems"/>），
 /// 分类 id 的翻译由 <see cref="AuctionCategoryResolver"/> 负责，因此本层不引用 Network，也不需要 PVF 就能自测。
 ///
@@ -250,20 +250,37 @@ internal sealed class AuctionService(IAuctionListingStore store, AuctionCategory
         if (request.Offset < 0)
             throw new InvalidDataException("拍卖行翻页偏移不能为负");
         var plan = categories.Build(request, excludeSellerCharacterId, goldWindow);
-        if (plan.SlotDimensions is not { } dimensions)
+        if (plan.SlotDimensions is null && !request.HasAttributeFilter && request.SortOrder == AuctionSortOrder.Default)
             return store.Search(plan.Filter, now, request.Offset, PageSize) with { Plan = plan };
-        // 有内存维度（装备部位 / 武器族）：先取回 SQL 侧的全部匹配挂牌（已按 listing_id 稳定排序），
-        // 再按维度过滤，最后分页——顺序不能反，反了总数就不是过滤后的值。
+        // 有内存维度（装备部位 / 武器族 / 品级 / 等级 / 强化 / 自定义排序）：先取回 SQL 侧的全部匹配挂牌，
+        // 再按维度过滤与排序，最后分页——顺序不能反，反了总数就不是过滤后的值。
         var matches = store.LoadMatches(plan.Filter, now);
         var kept = ImmutableArray.CreateBuilder<AuctionListing>(matches.Length);
         foreach (var listing in matches)
         {
-            if (categories.InCategory(dimensions, listing.ItemTemplateId))
-                kept.Add(listing);
+            if (plan.SlotDimensions is { } dimensions && !categories.InCategory(dimensions, listing.ItemTemplateId))
+                continue;
+            if (!categories.MatchesAttributes(request, listing))
+                continue;
+            kept.Add(listing);
         }
-        var filtered = kept.ToImmutable();
+        var filtered = SortListings(kept.ToImmutable(), request.SortOrder);
         return new(filtered.Skip(request.Offset).Take(PageSize).ToImmutableArray(), filtered.Length) { Plan = plan };
     }
+
+    static ImmutableArray<AuctionListing> SortListings(ImmutableArray<AuctionListing> listings, AuctionSortOrder sortOrder) =>
+        sortOrder switch
+        {
+            AuctionSortOrder.PriceAsc => listings.OrderBy(row => row.DisplayPrice).ThenBy(row => row.ListingId).ToImmutableArray(),
+            AuctionSortOrder.PriceDesc => listings.OrderByDescending(row => row.DisplayPrice).ThenBy(row => row.ListingId).ToImmutableArray(),
+            AuctionSortOrder.BuyoutAsc => listings.OrderBy(row => row.BuyoutPrice < 0 ? 1 : 0)
+                .ThenBy(row => (long)row.BuyoutPrice * row.ItemCount).ThenBy(row => row.ListingId).ToImmutableArray(),
+            AuctionSortOrder.BuyoutDesc => listings.OrderBy(row => row.BuyoutPrice < 0 ? 1 : 0)
+                .ThenByDescending(row => (long)row.BuyoutPrice * row.ItemCount).ThenBy(row => row.ListingId).ToImmutableArray(),
+            AuctionSortOrder.ExpiresAsc => listings.OrderBy(row => row.ExpiresAtUnix).ThenBy(row => row.ListingId).ToImmutableArray(),
+            AuctionSortOrder.ExpiresDesc => listings.OrderByDescending(row => row.ExpiresAtUnix).ThenBy(row => row.ListingId).ToImmutableArray(),
+            _ => listings
+        };
 
     /// <summary>
     /// 某个物品模板当前在售挂牌的均价（整件，向下取整）。**不编造定价策略**：只对真实在售挂牌取统计量，
@@ -454,6 +471,7 @@ internal sealed class AuctionService(IAuctionListingStore store, AuctionCategory
         after = after with { Gold = before.Gold - (uint)ListingDepositGold };
         // 挂牌副本的数量：整件类沿用核心，堆叠类只取本次上架的数量（余量留在背包）。
         var core = item.Core.IsStackable ? item.Core with { Value = count } : item.Core;
+        if (core.Kind == ItemKind.Equipment) core = core with { Rune = 0 };
 
         return AuctionRegisterDecision.Ok(new(
             Source: item.Position,
@@ -602,11 +620,16 @@ internal sealed class AuctionService(IAuctionListingStore store, AuctionCategory
     /// <summary>
     /// 买方道具托管邮件的幂等键。按挂牌 id 命名：它与挂牌状态在同一事务提交，正常路径不可能重复；
     /// 真出现重复投递时由 <c>mailbox_messages.delivery_key</c> 的 UNIQUE 约束直接拒绝，而不是投两份。
+    /// 拆分购买（CMD 334）未买空整堆时附加剩余数量（余量严格递减，每一笔拆分唯一）。
     /// </summary>
     public static string CustodyItemKey(int listingId) => $"auction:item:{listingId}";
+    public static string CustodyItemKey(int listingId, int remainingCount) =>
+        remainingCount > 0 ? $"auction:item:{listingId}:rem:{remainingCount}" : CustodyItemKey(listingId);
 
-    /// <summary>卖方所得托管邮件的幂等键（同 <see cref="CustodyItemKey"/> 的口径，金币一封、道具一封）。</summary>
+    /// <summary>卖方所得托管邮件的幂等键（同 <see cref="CustodyItemKey(int)"/> 的口径，金币一封、道具一封）。</summary>
     public static string CustodyGoldKey(int listingId) => $"auction:gold:{listingId}";
+    public static string CustodyGoldKey(int listingId, int remainingCount) =>
+        remainingCount > 0 ? $"auction:gold:{listingId}:rem:{remainingCount}" : CustodyGoldKey(listingId);
 
     /// <summary>
     /// **只读规划**一口价购买：把成交所需的一切算出来并留下证据。
@@ -636,7 +659,7 @@ internal sealed class AuctionService(IAuctionListingStore store, AuctionCategory
         // 一口价 -1 = 纯竞拍：竞价不实现，绝不能按一口价把纯竞拍的挂牌卖掉。
         if (listing.BuyoutPrice < 0)
             return AuctionBuyDecision.Reject(AuctionBuyError.AuctionOnly, $"挂牌 {listing.ListingId} 的一口价是 {listing.BuyoutPrice}（-1 = 纯竞拍）");
-        // 买自己的挂牌：对应白名单里的 0x69（参考实现里该码就是这条语义，D95 未实测其文本）。
+        // 自买始终在服务端拒绝；0x69仅保留旧兼容选码，当前客户端专用文案由搜索记录的原生预检显示。
         if (listing.SellerCharacterId == buyer.Id)
             return AuctionBuyDecision.Reject(AuctionBuyError.SelfBuy, $"挂牌 {listing.ListingId} 的卖家就是当前角色 {buyer.Id}");
         // [26..29] 与库内的物品模板 id 交叉校验：不一致说明客户端窗口里那行与库里不是同一件东西。
@@ -702,7 +725,7 @@ internal sealed class AuctionService(IAuctionListingStore store, AuctionCategory
         if (TransferBlocked(core, template) is { } transferError)
             return AuctionBuyDecision.Reject(AuctionBuyError.Unavailable, transferError);
         core = StackableTradePolicy.AfterTransfer(core, template);
-        var itemText = $"拍卖行成交（挂牌 {listing.ListingId}）：您拍得的道具";
+        var itemText = $"您在拍卖行以{totalPrice}金币购买了{template.Name}（{listing.ItemCount}个），请领取附件。";
         var overlong = AuctionCustodyMail.TextTooLong(listing.SellerName, itemText);
         if (overlong is not null)
             return AuctionBuyDecision.Reject(AuctionBuyError.Unavailable, overlong);
@@ -714,7 +737,7 @@ internal sealed class AuctionService(IAuctionListingStore store, AuctionCategory
         long proceeds = SellerProceeds(totalPrice, taxPercent);
         if (listing.SellerCharacterId is { } sellerId)
         {
-            var goldText = $"拍卖行成交（挂牌 {listing.ListingId}）：卖方所得（已扣 {taxPercent}% 手续费）";
+            var goldText = $"您在拍卖行上架的{template.Name}（{listing.ItemCount}个）已售出。成交价{totalPrice}金币，扣除{taxPercent}%手续费{totalPrice - proceeds}金币，实收{proceeds}金币，请领取。";
             overlong = AuctionCustodyMail.TextTooLong(SystemSender, goldText);
             if (overlong is not null)
                 return AuctionBuyDecision.Reject(AuctionBuyError.Unavailable, overlong);
@@ -742,6 +765,140 @@ internal sealed class AuctionService(IAuctionListingStore store, AuctionCategory
             Inventory: new InventoryPlan(before, after, "auction_buy", new(buyer)),
             SettledAtUnix: now,
             ExpiresAtUnix: listing.ExpiresAtUnix) { SourceItemEntry = listing.ItemEntry.ToImmutableArray() });
+    }
+
+    /// <summary>
+    /// **只读规划**单件/拆分购买（CMD 334 `AUCTION_BUY_ITEM_APIECE`）：
+    /// 支持购买堆叠挂牌中的部分数量（`1 <= request.Count < listing.ItemCount`，挂牌保留 `state=0` 并更新余量）
+    /// 或全部余量（`request.Count == listing.ItemCount`，挂牌流转为 `state=1` 已成交）。
+    /// </summary>
+    public AuctionBuyDecision PlanBuyApiece(Character buyer, AuctionListing? listing, AuctionBuyApieceRequest request, long now)
+    {
+        if (request.ListingId <= 0 || request.Amount <= 0 || request.Count <= 0)
+            return AuctionBuyDecision.Reject(AuctionBuyError.InvalidRequest,
+                $"挂牌 id {request.ListingId}、金额 {request.Amount}、数量 {request.Count}");
+        if (listing is null)
+            return AuctionBuyDecision.Reject(AuctionBuyError.NotFound, $"挂牌 {request.ListingId} 不存在");
+        if (listing.State != AuctionListingState.Active)
+            return AuctionBuyDecision.Reject(AuctionBuyError.NotActive, $"挂牌 {listing.ListingId} 的 state={listing.State}（0 = 在售）");
+        if (listing.ExpiresAtUnix <= now)
+            return AuctionBuyDecision.Reject(AuctionBuyError.Expired, $"挂牌 {listing.ListingId} 已于 {listing.ExpiresAtUnix} 过期（now={now}）");
+        if (listing.BuyoutPrice < 0)
+            return AuctionBuyDecision.Reject(AuctionBuyError.AuctionOnly, $"挂牌 {listing.ListingId} 的一口价是 {listing.BuyoutPrice}（-1 = 纯竞拍）");
+        if (listing.SellerCharacterId == buyer.Id)
+            return AuctionBuyDecision.Reject(AuctionBuyError.SelfBuy, $"挂牌 {listing.ListingId} 的卖家就是当前角色 {buyer.Id}");
+        if (listing.ItemTemplateId != request.ItemTemplateId)
+            return AuctionBuyDecision.Reject(AuctionBuyError.TemplateMismatch,
+                $"请求里的模板 id {request.ItemTemplateId} 与挂牌 {listing.ListingId} 的 {listing.ItemTemplateId} 不符");
+        if (request.Count > listing.ItemCount)
+            return AuctionBuyDecision.Reject(AuctionBuyError.AmountMismatch,
+                $"请求购买数量 {request.Count} 超过挂牌当前余量 {listing.ItemCount}");
+
+        ItemTemplate template;
+        try
+        {
+            template = items.Get(listing.ItemTemplateId);
+        }
+        catch (Exception error)
+        {
+            return AuctionBuyDecision.Reject(AuctionBuyError.Unavailable, $"模板解析失败（{error.GetType().Name}）：{error.Message}");
+        }
+        if (!InventoryKindCompatibility.AcceptsKind((ItemKind)listing.ItemKind, template))
+            return AuctionBuyDecision.Reject(AuctionBuyError.Unavailable,
+                $"挂牌记录的物品种类 {listing.ItemKind} 与模板 {listing.ItemTemplateId} 的 {template.Kind} 不符");
+        ItemCore core;
+        try
+        {
+            core = itemCoreSnapshot(listing.ItemEntry, (ItemKind)listing.ItemKind);
+        }
+        catch (Exception error) when (error is InvalidDataException or ArgumentException or IndexOutOfRangeException or EndOfStreamException)
+        {
+            return AuctionBuyDecision.Reject(AuctionBuyError.Unavailable, "挂牌物品快照不可用：" + error.Message);
+        }
+        bool legacyRune = core.Kind == ItemKind.Consumable && template.Kind == ItemKind.Rune;
+        if (core.ItemId != listing.ItemTemplateId || !InventoryKindCompatibility.AcceptsKind(core.Kind, template) || core.Count <= 0 ||
+            core.Count != listing.ItemCount || !legacyRune && core.Count > template.StackLimit || core.IsExpired(now) ||
+            CurrencyWallet.RewardKind(core.ItemId) is not null || pieces.ByPiece.ContainsKey(core.ItemId))
+        {
+            return AuctionBuyDecision.Reject(AuctionBuyError.Unavailable,
+                $"挂牌物品核心不可托管：itemId={core.ItemId} kind={core.Kind} count={core.Count}（挂牌数量 {listing.ItemCount}、上限 {template.StackLimit}）");
+        }
+        if (request.Count < listing.ItemCount && !core.IsStackable)
+            return AuctionBuyDecision.Reject(AuctionBuyError.InvalidRequest, $"非堆叠物品不支持部分拆分购买（数量 {request.Count}/{listing.ItemCount}）");
+
+        long unitPrice = listing.BuyoutPrice;
+        long totalPrice = unitPrice * request.Count;
+        if (totalPrice <= 0 || totalPrice > int.MaxValue)
+            return AuctionBuyDecision.Reject(AuctionBuyError.Unavailable, $"成交价溢出或非法：{unitPrice} × {request.Count} = {totalPrice}");
+
+        bool unitHit = request.Amount == unitPrice;
+        bool totalHit = request.Amount == totalPrice;
+        if (!unitHit && !totalHit)
+            return AuctionBuyDecision.Reject(AuctionBuyError.AmountMismatch,
+                $"请求金额 {request.Amount} 既不是单价 {unitPrice} 也不是本次购买总额 {totalPrice}（购买数量 {request.Count}）");
+        var basis = unitHit && totalHit ? AuctionBuyAmountBasis.UnitEqualsTotal
+            : unitHit ? AuctionBuyAmountBasis.UnitPrice : AuctionBuyAmountBasis.TotalPrice;
+
+        if ((long)buyer.Inventory.Gold < totalPrice)
+            return AuctionBuyDecision.Reject(AuctionBuyError.InsufficientGold,
+                $"买方 {buyer.Id} 金币 {buyer.Inventory.Gold} < 成交价 {totalPrice}");
+
+        if (TransferBlocked(core, template) is { } transferError)
+            return AuctionBuyDecision.Reject(AuctionBuyError.Unavailable, transferError);
+
+        int remainingCount = listing.ItemCount - request.Count;
+        var purchasedCore = core.IsStackable ? core with { Value = request.Count } : core;
+        purchasedCore = StackableTradePolicy.AfterTransfer(purchasedCore, template);
+        var remainingEntry = remainingCount > 0
+            ? itemEntrySnapshot(core with { Value = remainingCount }).ToImmutableArray()
+            : ImmutableArray<byte>.Empty;
+
+        var custody = ImmutableArray.CreateBuilder<AuctionCustodyMail>();
+        var itemText = $"您在拍卖行以{totalPrice}金币购买了{template.Name}（{request.Count}个），请领取附件。";
+        var overlong = AuctionCustodyMail.TextTooLong(listing.SellerName, itemText);
+        if (overlong is not null)
+            return AuctionBuyDecision.Reject(AuctionBuyError.Unavailable, overlong);
+        custody.Add(new(CustodyItemKey(listing.ListingId, remainingCount), buyer.Id, Required: true, listing.SellerName,
+            itemText, 0, [InventoryRewardGrantService.CreateItem(template, new(InventoryListType.Main, 0), purchasedCore)], now, null));
+        bool coupon = listing.SellerCharacterId is long couponSeller && store.AuctionCouponActive(couponSeller, now);
+        bool goldListing = AuctionGoldTickets.IsTicket(listing.ItemTemplateId);
+        int taxPercent = TaxPercent(coupon, goldListing);
+        long proceeds = SellerProceeds(totalPrice, taxPercent);
+        if (listing.SellerCharacterId is { } sellerId)
+        {
+            var goldText = $"您在拍卖行上架的{template.Name}（{request.Count}个）已售出。成交价{totalPrice}金币，扣除{taxPercent}%手续费{totalPrice - proceeds}金币，实收{proceeds}金币，请领取。";
+            overlong = AuctionCustodyMail.TextTooLong(SystemSender, goldText);
+            if (overlong is not null)
+                return AuctionBuyDecision.Reject(AuctionBuyError.Unavailable, overlong);
+            custody.Add(new(CustodyGoldKey(listing.ListingId, remainingCount), sellerId, Required: false, SystemSender,
+                goldText, checked((uint)proceeds), [], now, null));
+        }
+
+        var before = buyer.Inventory;
+        var after = before with { Gold = checked(before.Gold - (uint)totalPrice) };
+        return AuctionBuyDecision.Ok(new(
+            ListingId: listing.ListingId,
+            ItemTemplateId: listing.ItemTemplateId,
+            ItemKind: listing.ItemKind,
+            ItemCount: listing.ItemCount,
+            SellerCharacterId: listing.SellerCharacterId,
+            SellerName: listing.SellerName,
+            UnitPrice: checked((int)unitPrice),
+            TotalPrice: totalPrice,
+            SellerProceeds: proceeds,
+            AmountBasis: basis,
+            RequestedAmount: request.Amount,
+            RequestExpiresAtUnix: request.ExpiresAtUnix,
+            ExpiresEchoMatches: listing.ExpiresAtUnix == request.ExpiresAtUnix,
+            Custody: custody.ToImmutable(),
+            Inventory: new InventoryPlan(before, after, "auction_buy", new(buyer)),
+            SettledAtUnix: now,
+            ExpiresAtUnix: listing.ExpiresAtUnix)
+        {
+            SourceItemEntry = listing.ItemEntry.ToImmutableArray(),
+            PurchaseCount = request.Count,
+            RemainingItemEntry = remainingEntry
+        });
     }
 
     /// <summary>
@@ -897,7 +1054,7 @@ internal sealed class AuctionService(IAuctionListingStore store, AuctionCategory
     /// 模板解析 + 可上架判定。判定口径与邮箱/仓库共用同一套物品模块字段（`TradeRestriction`、`SealFlag`、
     /// `Attr` 的高 3 位交易次数、`AttachType`、租赁标记、`ExpireTime`），**不新建第二套可交易判定**：
     ///   - 已锁定（排序锁 / 装备安全锁）拒绝 —— 锁定的实例不允许离开背包；
-    ///   - 已到期或**带期限**（租赁 / `ExpireTime > 0`）拒绝 —— 计时道具不能挂到拍卖行；
+    ///   - 已到期或**带期限**（租赁 / `ExpireTime > 0`）拒绝 —— 计时道具不能挂到拍卖行；邮箱已对普通相对/绝对期限放行，拍卖不跟随；
     ///   - `TradeRestriction != 0` 拒绝 —— 包含任务道具与各类绑定实例（PVF 的绑定标记落到这个字段）；
     ///   - `AttachType` 非 `free`：`trade limit` 要求还有剩余交易次数、`sealing`/`seal` 要求已解封、
     ///     `account` 等账号绑定类**一律拒绝**（拍卖行必然跨账号）。

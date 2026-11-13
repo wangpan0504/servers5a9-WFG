@@ -30,8 +30,7 @@ internal static class Strongway2019TailResourceTests
                 definition.AllowedDungeons is { } allowed && allowed.SetEquals(new uint[] { 5359, 5360, 5362, 5363, 5364 }),
                 "真实专用药保留五图白名单、日删除及共享冷却：" + id);
             resources.RecoveryConsumables.TryGet(id, out var actual);
-            foreach (byte job in Enumerable.Range(0, 16).Select(value => (byte)value))
-                That(actual.Allows(95, job), "真实专用药资源资格覆盖全部职业：" + id + ":" + job);
+            That(actual.Allows(95) && actual.Jobs == ushort.MaxValue, "真实专用药保留等级及全职业资源声明：" + id);
         }
         resources.RecoveryConsumables.TryGet(10309617, out var globe);
         That(globe.EffectMilliseconds == 10000 && globe.StatChanges.SequenceEqual(
@@ -66,12 +65,6 @@ internal static class Strongway2019TailResourceTests
         var dungeons = DungeonCatalog.Load(pvf);
         var rooms = DungeonRoomCatalog.Load(pvf);
         var drops = DungeonMonsterDropCatalog.Load(pvf);
-        foreach (var source in sources)
-        {
-            string saved = Saved(session);
-            That(Use(session, source, 1).Outcome == ConsumableUseOutcome.Rejected && Saved(session) == saved,
-                "真实专用药在城镇整拒，不扣件、不写revision：" + source.Core.ItemId);
-        }
         Enter(session);
         var first = Use(session, sources[0], 2);
         var remaining = session.Selected!.Inventory.Find(sources[0].Position);
@@ -315,7 +308,15 @@ internal static partial class ConsumableUseSessionTests
         That(f.Session.EnterFormalDungeon(3, 0, 0, global::DfoServer.Testing.SelfTestCatalogs.Dungeons(archive),
             global::DfoServer.Testing.SelfTestCatalogs.Rooms(archive)) is not null &&
             f.Session.CompleteFormalDungeonLoading() is not null, "真实专用药建立名单外的正式3号副本");
-        foreach (var source in sources) Refuse(source, "真实非活动副本3", "potion_dungeon_not_allowed");
+        foreach (var source in sources)
+        {
+            var result = f.Session.UseConsumable(new(source.Position, 8, source.Core.ItemId, 0), f.Service);
+            That(result.Outcome == ConsumableUseOutcome.Committed &&
+                f.Read().Inventory.Find(source.Position) == source with { Core = source.Core with { Value = 2 } },
+                "服务端不重复客户端活动副本名单，仍沿普通事务只扣原UID一件并保留期限：" + source.Core.ItemId);
+            Refuse(source, "真实共享组冷却", "cooldown");
+            f.Clock.Advance(TimeSpan.FromSeconds(10));
+        }
         void Refuse(InventoryItem source, string context, string expectedReason)
         {
             string persisted = JsonSerializer.Serialize(f.Read()), online = JsonSerializer.Serialize(f.Session.Selected);

@@ -27,10 +27,50 @@ internal static class ActionConsumableTests
             new[] { Array.Empty<int>(), new[] { 0 }, new[] { 30000 }, new[] { 3108, 1 } }.All(args =>
                 ActionConsumableDefinition.Parse(file with { Stackable = book with { ActionDeclaration = new("[story book]", args) } }, item) is null),
             "故事簿复用动作消费定义，只接受一个合法任务号，允许原生默认515入口");
+        var ridingRaw = raw with
+        {
+            ActionDeclaration = new("[riding]", [376, 60000]),
+            DeclaredActionUsablePlaces = ["[dungeon]", "[dont use exercise]", "[dont use assult]"]
+        };
+        var ridingFile = file with
+        {
+            Stackable = ridingRaw,
+            CoolTime = 180000,
+            CoolGroup = 10,
+            TotalUsableCount = null,
+            DeclaredFields = ["cool time", "cooltime group"],
+            LimitDungeons = [114, 115, 140],
+            ImpossibleContents = ["raid dungeon"]
+        };
+        var riding = ActionConsumableDefinition.Parse(ridingFile, item)!;
+        That(riding is { Label: "[riding]", Parameters: [376, 60000], CoolTime: 180000, CoolGroup: 10, RaidUseForbidden: true, AllowedDungeons: null } &&
+            riding.AllowsDungeon(100) && !riding.AllowsDungeon(114) && !riding.AllowsDungeon(140) && !riding.AllowsDungeon(100, inRaid: true) &&
+            ActionConsumableDefinition.Parse(ridingFile with
+            {
+                Stackable = ridingRaw with { HasUseActionPacket = false, DeclaredUseActionPacket = null },
+                ActionUsableDungeons = [60, 61],
+                DeclaredFields = ["cool time", "cooltime group", "action usable dungeon"]
+            }, item) is { Label: "[riding]", AllowedDungeons: { } allowedDungeons } restrictedRiding &&
+            allowedDungeons.SetEquals(new uint[] { 60, 61 }) &&
+            restrictedRiding.AllowsDungeon(60) && restrictedRiding.AllowsDungeon(62) && !restrictedRiding.AllowsDungeon(114) &&
+            new[] { Array.Empty<int>(), new[] { 376 }, new[] { 0, 60000 }, new[] { 376, 0 }, new[] { 376, 60000, 1 } }.All(args =>
+                ActionConsumableDefinition.Parse(ridingFile with { Stackable = ridingRaw with { ActionDeclaration = new("[riding]", args) } }, item) is null),
+            "骑乘变身药水按[riding]双正整数参数、禁用副本与团本限制解析，[action usable dungeon]保留资源元数据并交客户端校验");
         var clock = new ConsumableUseSessionTests.FakeClock();
         var slot = new InventorySlot(InventoryListType.Main,65);
         var source = new InventoryItem(77,slot,new(9000,ItemKind.Consumable,2));
         var character = new Character(1,0,"Action",1,new(1,0,1,1),null) { Inventory = new([source]) };
+        var clientQualified = definition with { Item = item with { Jobs = 1 << 3 } };
+        That(InventoryActionConsumableService.Plan(character,slot,clientQualified,"[village]",clock).Accepted &&
+            !clientQualified.Item.AllowsUse(character.Level,character.Job),
+            "源STK不复验usable job，装备适配查询仍保留职业匹配");
+        That(!InventoryActionConsumableService.Plan(character,slot,clientQualified with
+            { Item = clientQualified.Item with { UseForbidden = true } },"[village]",clock).Accepted &&
+            !InventoryActionConsumableService.Plan(character,slot,clientQualified with
+            { Item = clientQualified.Item with { MinimumLevel = 2 } },"[village]",clock).Accepted &&
+            !InventoryActionConsumableService.Plan(character,slot,clientQualified with
+            { Item = clientQualified.Item with { MaximumLevel = 0 } },"[village]",clock).Accepted,
+            "委派职业资格不放宽禁用及源STK等级范围");
         var paid = InventoryActionConsumableService.Plan(character,slot,definition,"[village]",clock);
         That(paid.Accepted && paid.Plan!.After.Find(slot)!.Core.Count == 1 && paid.Plan.After.ConsumableStates.Length == 1 &&
             paid.Plan.After.DailyBoosterUses.Length == 1 && character.Inventory.Find(slot)!.Core.Count == 2,

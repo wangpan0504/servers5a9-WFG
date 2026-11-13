@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Text.Json.Serialization;
 
 namespace DfoServer.Game.Dungeons;
 
@@ -7,20 +8,37 @@ internal sealed record EvildomWarView(Guid BattleId, long Revision, byte Mode, D
 {
     public bool Completed => Dungeons.Any(row => row.Kind == 1 && row.State == 2);
     public bool SealsCleared => Dungeons.Count(row => row.Kind == 0 && row.Attribute < 2 && row.State == 2) == 2;
+    // 旧检查点没有开战时刻，恢复时保留未知，不能用当前资源时限倒算。
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public DateTimeOffset? StartedAt { get; init; }
     public EvildomWarHiddenEncounter? Hidden { get; init; }
     public uint ActualDungeon(uint stage) => Hidden is { } hidden && hidden.StageDungeon == stage ? hidden.Dungeon : stage;
     public uint StageDungeon(uint actual) => Hidden is { } hidden && hidden.Dungeon == actual ? hidden.StageDungeon : actual;
 }
 
 internal sealed record EvildomWarCompletion(Guid BattleId, byte Mode, DateTimeOffset Created,
-    ImmutableArray<DungeonClearFact> Facts);
+    ImmutableArray<DungeonClearFact> Facts)
+{
+    // 零值不新增JSON字段，保留旧冻结奖励逐字节比对所依赖的原序列化形式。
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public uint ElapsedMilliseconds { get; init; }
+
+    internal static uint MeasureElapsed(DateTimeOffset? startedAt, DateTimeOffset completedAt)
+    {
+        if (startedAt is null) return 0;
+        long ticks = (completedAt - startedAt.Value).Ticks;
+        if (ticks < 0 || ticks / TimeSpan.TicksPerMillisecond > uint.MaxValue)
+            throw new InvalidDataException("魔界战役完成用时不能为负或溢出u32毫秒");
+        return (uint)(ticks / TimeSpan.TicksPerMillisecond);
+    }
+}
 
 // 战役跨多个正式Run；每名成员的身份与费用仍由原Session和全员入场事务负责。
 internal sealed class EvildomWarBattle(byte mode, DateTimeOffset deadline, ImmutableArray<EvildomWarDungeonState> dungeons,
-    EvildomWarHiddenEncounter? hidden = null)
+    EvildomWarHiddenEncounter? hidden = null, DateTimeOffset? startedAt = null)
 {
     readonly object gate = new();
-    EvildomWarView view = new(Guid.NewGuid(), 0, mode, deadline, dungeons) { Hidden = hidden };
+    EvildomWarView view = new(Guid.NewGuid(), 0, mode, deadline, dungeons) { Hidden = hidden, StartedAt = startedAt };
     uint activeDungeon;
     DungeonRunIdentity[] activeRuns = [];
     readonly HashSet<ushort> released = [];
@@ -112,11 +130,14 @@ internal sealed class EvildomWarBattle(byte mode, DateTimeOffset deadline, Immut
             bool unlock = completed.Count(row => row.Kind == 0 && row.Attribute < 2 && row.State == 2) == 2;
             var after = view with { Revision = view.Revision + 1, Dungeons = completed.Select(row =>
                 unlock && row.Kind == 1 && row.State == 3 ? row with { State = 0 } : row).ToImmutableArray() };
+            uint elapsed = EvildomWarCompletion.MeasureElapsed(view.StartedAt, now);
             var finished = after.Completed ? new EvildomWarCompletion(view.BattleId, view.Mode, now, facts.Select(fact => fact with
-                    { ConfirmedDeathEvents = fact.ConfirmedDeathEvents.ToImmutableArray() }).ToImmutableArray()) : null;
+                    { ConfirmedDeathEvents = fact.ConfirmedDeathEvents.ToImmutableArray() }).ToImmutableArray())
+                    { ElapsedMilliseconds = elapsed } : null;
             var laboratory = view.Hidden?.StageDungeon == completedDungeon
                 ? new EvildomWarCompletion(view.BattleId, view.Mode, now, facts.Select(fact => fact with
-                    { ConfirmedDeathEvents = fact.ConfirmedDeathEvents.ToImmutableArray() }).ToImmutableArray()) : hiddenCompletion;
+                    { ConfirmedDeathEvents = fact.ConfirmedDeathEvents.ToImmutableArray() }).ToImmutableArray())
+                    { ElapsedMilliseconds = elapsed } : hiddenCompletion;
             persist?.Invoke(view, new(after, finished) { HiddenCompletion = laboratory });
             activeRuns = [];
             released.Clear();

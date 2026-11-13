@@ -9,8 +9,14 @@ namespace DfoServer.Game.Quests;
 internal static class QuestInventoryProgress
 {
     public static ImmutableArray<ActiveMainQuest> Refresh(IReadOnlyList<ActiveMainQuest> active, InventorySnapshot inventory,
-        QuestCatalog quests, long utcSeconds, IReadOnlyCollection<int>? completed = null)
+        QuestCatalog quests, long utcSeconds, IReadOnlyCollection<int>? completed = null) =>
+        Refresh(active, inventory, quests, utcSeconds,
+            completed is null ? (Func<IReadOnlySet<int>>?)null : () => completed as IReadOnlySet<int> ?? completed.ToHashSet());
+
+    public static ImmutableArray<ActiveMainQuest> Refresh(IReadOnlyList<ActiveMainQuest> active, InventorySnapshot inventory,
+        QuestCatalog quests, long utcSeconds, Func<IReadOnlySet<int>>? completed)
     {
+        if (active.Count == 0) return [];
         var result = ImmutableArray.CreateBuilder<ActiveMainQuest>(active.Count);
         foreach (var row in active)
         {

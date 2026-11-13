@@ -24,6 +24,7 @@ internal static class EvildomWarTcpTests
         var catalog = EvildomWarCatalog.Load(resources.Archive, SelfTestCatalogs.Dungeons(resources.Archive));
         EvildomWarTransactionTests.Run(resources, catalog, root);
         EvildomWarRewardTransactionTests.Run(resources, catalog, root);
+        EvildomWarRewardBatchTests.Run(resources, catalog, root);
         EvildomWarRecoveryTransactionTests.Run(resources, catalog, root);
         EvildomWarHiddenTransactionTests.Run(resources, catalog, root);
         EvildomWarGuideTests.Run(resources, catalog, root);
@@ -46,8 +47,9 @@ internal static class EvildomWarTcpTests
             academyMaze.MapSpecification!.Select(map => map.Id).SequenceEqual([500095, 500096, 500097, 500098]),
             "5424顶层完整布局兼容解析，尺寸与四张地图均保持真实资源");
         // 固定本组业务时钟，保留全队1671整包精确断言；实际发送跨秒不应改变同一战况的测试预期。
+        var clock = new Inventory.DailyBoosterTestClock(DateTimeOffset.UtcNow);
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "evildom-war"), resources: resources, gm: true,
-            evildomHiddenDraw: _ => 0, clock: new Inventory.DailyBoosterTestClock(DateTimeOffset.UtcNow));
+            evildomHiddenDraw: _ => 0, clock: clock);
         await fixture.StartAsync();
         That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort, "infinite-fatigue off", out var fatigueMode) &&
             fatigueMode == "OK {\"infiniteFatigue\":false}", "魔界大战资格与扣费回归显式关闭开发无限疲劳");
@@ -161,6 +163,7 @@ internal static class EvildomWarTcpTests
                 That(All()[0].Any(packet => packet is { Kind: 1, Opcode: 15 } && packet.Body[0] == 0) && fixture.Snapshot() == assets,
                     "开战前的15不能绕过专用准入");
                 var requester = scenario == "not-leader" ? peers[1] : leader;
+                var battleStartedAt = clock.GetUtcNow();
                 requester.Send(1652);
                 var started = All(requester);
                 bool accepted = scenario is "rollback" or "hard" or "normal" or "guide" or "training-solo" or
@@ -208,7 +211,8 @@ internal static class EvildomWarTcpTests
                 }
                 var entered = All();
                 That(entered.All(rows => rows.Any(packet => packet is { Kind: 0, Opcode: 1671 } &&
-                    packet.Body[16 + stageOrder[0] * 7] == 1)), "全员入场事务完成后同步1671，将选中前置图置为战斗中");
+                    packet.Body[0] == 2 && packet.Body[16 + stageOrder[0] * 7] == 1)),
+                    "全员入场事务完成后同步战役state2，将选中前置图置为战斗中");
                 That(entered.All(rows => rows.Any(packet => packet is { Kind: 0, Opcode: 28 }) && rows.Any(packet => packet is { Kind: 0, Opcode: 29 })) &&
                     entered.All(rows => Array.FindIndex(rows, packet => packet.Opcode == 28) < Array.FindIndex(rows, packet => packet.Opcode == 29)),
                     "普通/困难/引导均沿正式28→29创建真实地图和怪物: " + scenario);
@@ -278,6 +282,7 @@ internal static class EvildomWarTcpTests
                     for (int step = 0; step < stageOrder.Length; step++)
                     {
                         int stage = stageOrder[step];
+                        if (stage == 4) clock.Advance(TimeSpan.FromMilliseconds(256780));
                         if (step == 1 && scenario is "hard" or "normal-solo")
                         {
                             foreach (var peer in peers) { peer.Send(37, new byte[8]); All(peer); }
@@ -311,45 +316,94 @@ internal static class EvildomWarTcpTests
                                     rewardNotices++;
                                     That(stage == 4 && killed.All(rows => rows.Count(packet => packet is { Kind: 0, Opcode: 1673 }) == 1),
                                         "仅王座真实完成后向每位成员发布一次1673");
-                                    foreach (var peer in peers)
+                                    That(killed.All(rows => rows.Single(packet => packet is { Kind: 0, Opcode: 1671 }).Body[0] == 3 &&
+                                        Array.FindIndex(rows, packet => packet is { Kind: 0, Opcode: 1671 }) <
+                                        Array.FindIndex(rows, packet => packet is { Kind: 0, Opcode: 1673 })),
+                                        "三模式全员先收到1671成功态3，再收到1673，沿原窗口收尾而不改变奖励包序");
+                                    var teamRewards = peers.Select(peer =>
                                     {
-                                        That(fixture.Query("SELECT count(*) FROM character_evildom_war_rewards WHERE character_id=$p0", peer.Id) is [[1L]] &&
-                                            fixture.Query("SELECT count(*) FROM mailbox_messages WHERE recipient_id=$p0", peer.Id) is [[> 0L]],
-                                            "显示奖励之前每人独立回执与永久奖励邮件已提交");
                                         string json = (string)fixture.Query("SELECT reward_json FROM character_evildom_war_rewards WHERE character_id=$p0 AND delivered=1", peer.Id)[0][0];
                                         var saved = JsonSerializer.Deserialize<EvildomWarRewardSnapshot>(json)!;
-                                        That(saved.Rule == EvildomWarRewardPolicy.Rule && saved.Reward.Items.All(row => row.Group != 1),
-                                            "新王座快照不重复发放实验室固定组");
-                                        var groups = saved.Reward.Items.GroupBy(row => row.Group).ToArray();
-                                        byte[] expected = Build(writer =>
+                                        string paymentJson = (string)fixture.Query("SELECT payment_json FROM character_evildom_war_seats WHERE character_id=$p0", peer.Id)[0][0];
+                                        var payment = JsonSerializer.Deserialize<EvildomWarPayment>(paymentJson)!;
+                                        return (Peer: peer, Slot: payment.Slot, Saved: saved);
+                                    }).OrderBy(row => row.Slot).ToArray();
+                                    That(teamRewards.Select(row => row.Slot).Distinct().Count() == peers.Count,
+                                        "奖励外层槽位来自实际付费席位，重连后仍唯一且不借用peers索引");
+                                    byte[] expected = Build(writer =>
+                                    {
+                                        writer.Write(256780u); writer.Write((byte)teamRewards.Length);
+                                        foreach (var member in teamRewards)
                                         {
-                                            writer.Write(0u); writer.Write((byte)groups.Length);
-                                            foreach (var group in groups)
+                                            writer.Write(member.Slot); writer.Write((byte)member.Saved.Reward.Items.Length);
+                                            foreach (var row in member.Saved.Reward.Items)
                                             {
-                                                writer.Write(group.Key); writer.Write((byte)group.Count());
-                                                foreach (var row in group) { writer.Write((byte)0); writer.Write(row.ItemId); writer.Write((uint)row.Count); }
+                                                writer.Write(row.Group); writer.Write(row.ItemId); writer.Write((uint)row.Count);
                                             }
-                                        });
-                                        That(killed[peers.IndexOf(peer)].Single(packet => packet.Opcode == 1673).Body.SequenceEqual(expected),
-                                            "1673独立读宽及每行物品数量逐字节等于已提交奖励");
-                                        var cores = fixture.Query("""
-                                            SELECT i.item_core FROM mailbox_messages m JOIN mailbox_attachments a ON a.mail_id=m.mail_id
-                                            JOIN character_inventory_items i ON i.item_uid=a.item_uid
-                                            WHERE m.recipient_id=$p0 AND m.delivery_key LIKE 'evildom-war:%' ORDER BY m.mail_id,a.ordinal
+                                        }
+                                    });
+                                    foreach (var member in teamRewards)
+                                    {
+                                        var peer = member.Peer;
+                                        var peerPackets = killed[peers.IndexOf(peer)];
+                                        That(fixture.Query("SELECT count(*) FROM character_evildom_war_rewards WHERE character_id=$p0", peer.Id) is [[1L]] &&
+                                            fixture.Query("SELECT count(*) FROM mailbox_messages WHERE recipient_id=$p0 AND delivery_key LIKE 'evildom-war%'", peer.Id) is [[0L]] &&
+                                            peerPackets.Any(packet => packet is { Kind: 0, Opcode: 14 }),
+                                            "显示奖励之前每人独立回执已提交，翻牌奖励直接入包并下发14背包增量");
+                                        var saved = member.Saved;
+                                        That(saved.Completion.ElapsedMilliseconds == 256780 &&
+                                            saved.Completion.Created == battleStartedAt.AddMilliseconds(256780),
+                                            "三模式真实结算冻结同一开战起点与非整数秒用时，逐成员奖励快照均保留毫秒");
+                                        That(saved.Rule == EvildomWarRewardPolicy.Rule &&
+                                            saved.Reward.Items.All(row => row.Group != 2) &&
+                                            saved.Reward.Items.Where(row => row.Group == 0 && resources.ItemResources.Items.Get(row.ItemId).Kind == ItemKind.Talisman).All(row => row.Count == 1) &&
+                                            saved.Reward.Items.Single(row => row.Group == 1) == new EvildomWarRewardItem(1, 10310786, mode == 1 ? 15 : 9),
+                                            "王座结算按是否通关实验室合并第1组符文原石（普通/引导9，困难15），不含第2组且护石逐格独立");
+                                        That(peerPackets.Single(packet => packet.Opcode == 1673).Body.SequenceEqual(expected),
+                                            "全员1673逐字节等于同一完整团队表，每槽每卡种物品数量均来自对应成员已提交奖励");
+                                        var bagItems = fixture.Query("""
+                                            SELECT i.item_core FROM character_inventory_slots s
+                                            JOIN character_inventory_items i ON i.item_uid=s.item_uid
+                                            WHERE s.character_id=$p0 AND s.list_type IN (0,46) ORDER BY s.list_type,s.slot_index
                                             """, peer.Id).Select(row => JsonSerializer.Deserialize<ItemCore>((string)row[0])!).ToArray();
-                                        That(cores.SequenceEqual(saved.Items.Select(item => item.Core)),
-                                            "邮件持久化全部完整核心含护石孔色，与冻结奖励逐件一致");
+                                        foreach (var expectedCore in saved.Items.Select(item => item.Core))
+                                            That(bagItems.Contains(expectedCore),
+                                                "直接入包持久化全部完整核心含护石孔色与符文原石，与冻结奖励逐件一致");
                                     }
                                 }
                                 That(killed.All(rows => rows.Any(packet => packet is { Kind: 0, Opcode: 38 })), "魔界正式怪物死亡逐成员提交后才广播");
+                                foreach (var rows in killed)
+                                {
+                                    var deathBody = rows.Last(packet => packet is { Kind: 0, Opcode: 38 }).Body;
+                                    ushort dropCount = U16(deathBody, 2);
+                                    if (stage == 4 && map[offset + 13] == 3)
+                                    {
+                                        That(BinaryPrimitives.ReadInt32LittleEndian(deathBody.AsSpan(10)) == 490014022 &&
+                                            BinaryPrimitives.ReadInt32LittleEndian(deathBody.AsSpan(14)) == 1 &&
+                                            mode switch
+                                            {
+                                                2 => dropCount is 13 or 14,
+                                                0 => dropCount == 22,
+                                                1 => dropCount is 23 or 26 or 27,
+                                                _ => false
+                                            },
+                                            "螺旋王座领主夏勒·弗兹按模式掉落不稳定的护石碎片与随机符文/耀眼的符文原石");
+                                    }
+                                    else
+                                    {
+                                        That(dropCount == 0, "魔界大战除螺旋王座领主外其他任何领主、精英与小怪均无地面掉落");
+                                    }
+                                }
                                 var changed = killed.Select(rows => rows.LastOrDefault(packet => packet is { Kind: 0, Opcode: 1671 })?.Body).ToArray();
                                 if (changed[0] is not null)
                                 {
                                     completed = changed[0]!;
                                     bool sealsCleared = stageOrder.Take(step + 1).Count(index => index < 4 && info[15 + index * 7] < 2) == 2;
                                     That(changed.All(body => body is not null && body.AsSpan().SequenceEqual(completed)) &&
+                                        completed[0] == (stage == 4 ? 3 : 2) && completed[1] == mode && U32(completed, 6) == 5 &&
+                                        U32(completed, 2) == (uint)(catalog.LimitTime - (stage == 4 ? 257 : 0)) &&
                                         completed[16 + stage * 7] == 2 && completed[44] == (stage == 4 ? 2 : sealsCleared ? 0 : 3),
-                                        "全队真实通关同步完成状态，钥匙魔法阵各解一层，剑盾可选");
+                                        "前置小图保留战役state2，王座完成才用3；全队保留真实非零剩余秒数、五图与结界状态");
                                 }
                             }
                             if (actualDungeon != stageDungeon && point == new DungeonPoint(stageEntry[8], stageEntry[9]))
@@ -365,25 +419,9 @@ internal static class EvildomWarTcpTests
                                 var cleared = All();
                                 completed = cleared[0].Single(packet => packet is { Kind: 0, Opcode: 1671 }).Body;
                                 That(cleared.All(rows => rows.Count(packet => packet is { Kind: 0, Opcode: 1671 }) == 1 &&
-                                        !rows.Any(packet => packet.Opcode == 1673)) && completed[16 + stage * 7] == 2,
-                                    "真实物件持久通关推进被替代前置图，不提前发整场奖励");
-                                foreach (var peer in peers)
-                                {
-                                    string json = (string)fixture.Query("SELECT reward_json FROM character_evildom_war_hidden_rewards WHERE character_id=$p0", peer.Id)[0][0];
-                                    var saved = JsonSerializer.Deserialize<EvildomWarRewardSnapshot>(json)!;
-                                    saved.Validate();
-                                    That(saved.Rule == EvildomWarRewardPolicy.HiddenRule && saved.Reward.Items is [{ Group: 1, ItemId: 10310786 }] &&
-                                        saved.Reward.Items[0].Count == (mode == 2 ? 9 : 15) &&
-                                        cleared[peers.IndexOf(peer)].Any(packet => packet is { Kind: 0, Opcode: 99 }),
-                                        "真实物件终点经正式Handler提交本人固定额外奖后通知邮箱");
-                                    var cores = fixture.Query("""
-                                        SELECT i.item_core FROM mailbox_messages m JOIN mailbox_attachments a ON a.mail_id=m.mail_id
-                                        JOIN character_inventory_items i ON i.item_uid=a.item_uid
-                                        WHERE m.recipient_id=$p0 AND m.delivery_key LIKE 'evildom-war-hidden:%' ORDER BY m.mail_id,a.ordinal
-                                        """, peer.Id).Select(row => JsonSerializer.Deserialize<ItemCore>((string)row[0])!).ToArray();
-                                    That(cores.SequenceEqual(saved.Items.Select(item => item.Core)),
-                                        "实验室独立永久邮件附件逐件等于隐藏快照，和王座邮件分开核对");
-                                }
+                                        !rows.Any(packet => packet.Opcode is 99 or 1673)) && completed[16 + stage * 7] == 2 &&
+                                    peers.All(peer => fixture.Query("SELECT count(*) FROM mailbox_messages WHERE recipient_id=$p0 AND delivery_key LIKE 'evildom-war%'", peer.Id) is [[0L]]),
+                                    "真实物件持久通关推进被替代前置图，实验室奖励留待王座结算翻牌直接入包，不中途发邮件");
                                 string hiddenAssets = fixture.Snapshot("SELECT * FROM mailbox_messages ORDER BY mail_id");
                                 leader.Send(39, passive);
                                 That(All().All(rows => rows.Count(packet => packet.Opcode == 1671) == 1 && !rows.Any(packet => packet.Opcode == 1673)) &&
@@ -420,10 +458,11 @@ internal static class EvildomWarTcpTests
                             string clearedMails = fixture.Snapshot("SELECT * FROM mailbox_messages ORDER BY mail_id");
                             leader.Send(39, lastDeath);
                             That(All().All(rows => !rows.Any(packet => packet.Opcode == 1673) &&
-                                (stage == 4 || actualDungeon != stageDungeon || !rows.Any(packet => packet.Opcode == 1671))) && fixture.Snapshot() == clearedAssets &&
+                                (stage == 4 ? rows.Single(packet => packet is { Kind: 0, Opcode: 1671 }).Body.SequenceEqual(completed!) :
+                                    actualDungeon != stageDungeon || !rows.Any(packet => packet.Opcode == 1671))) && fixture.Snapshot() == clearedAssets &&
                                 fixture.Snapshot("SELECT reward_json,mail_ids,delivered FROM character_evildom_war_rewards ORDER BY character_id") == clearedRewards &&
                                 fixture.Snapshot("SELECT * FROM mailbox_messages ORDER BY mail_id") == clearedMails,
-                                "重复末怪可以同步最终战况但不重复弹奖或写入资产");
+                                "重复王座末怪重同步同一成功态3及真实剩余时间，不重复弹奖或写入资产");
                         }
                         foreach (var peer in peers)
                         {

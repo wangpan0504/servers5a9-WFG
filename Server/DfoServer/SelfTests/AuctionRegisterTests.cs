@@ -105,6 +105,12 @@ internal static class AuctionRegisterTests
     {
         using var f = new Fixture();
 
+        var effectCore = f.Character.Inventory.Find(new(InventoryListType.Main, 27))!.Core with { Rune = 1 };
+        var effectListing = f.PlanWith(27, SampleTemplate, effectCore);
+        That(effectListing.Options is { } effectPlan &&
+            BitConverter.ToUInt16(effectPlan.ItemEntry, 69) == 0,
+            "拍卖挂牌清除装备特效，取消挂牌不得恢复已清除特效");
+
         // ① 槽位线索与实际内容不符 → 走「按 itemId 扫描」的回退路径，而不是按线索扣道具。
         var mismatched = f.Plan(body => body[2] = 99);
         var scanned = mismatched.Options;

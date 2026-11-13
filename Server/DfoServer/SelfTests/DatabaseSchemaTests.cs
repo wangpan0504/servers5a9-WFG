@@ -219,6 +219,7 @@ internal static partial class DatabaseSchemaTests
         Directory.CreateDirectory(root);
         try
         {
+            ClearRewardResetUpgrade(root);
             InventoryItemRevisionUpgrade(root);
             GuildExtensionsUpgrade(root);
             SkillTreeUpgrade(root);
@@ -265,6 +266,8 @@ internal static partial class DatabaseSchemaTests
             PickupUidUpgrade(root);
             ConsumableStatesUpgrade(root);
             BossSelectionBuffUpgrade(root);
+            VariousBuffUpgrade(root);
+            ReturningAdventurerUpgrade(root);
             BlacklistCountUpgrade(root);
             IncountNumberingUpgrade(root);
             Quest704NumberingUpgrade(root);
@@ -3634,7 +3637,7 @@ internal static partial class DatabaseSchemaTests
             Execute(db, "ALTER TABLE characters DROP COLUMN emotion");
     }
 
-    internal static void RemoveHotkeySchema(SqliteConnection db) => Execute(db, "DROP TABLE IF EXISTS account_hotkey_settings");
+    internal static void RemoveHotkeySchema(SqliteConnection db) => Execute(db, "DROP TABLE IF EXISTS character_hotkey_settings; DROP TABLE IF EXISTS account_hotkey_settings");
 
     internal static void RemoveTutorialSchema(SqliteConnection db) => Execute(db,
         "DROP TABLE IF EXISTS character_tutorial_receipts; DROP TABLE IF EXISTS character_tutorial_state");

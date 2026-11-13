@@ -22,7 +22,7 @@ internal sealed partial class InventoryRandomOptionService
         if (material is null || !material.Core.IsStackable || material.IsExpired(now)) return InventoryResult.Reject(17);
         var box = items.Get(material.Core.ItemId);
         var template = items.Get(target.Core.ItemId);
-        if (box.QualityBox is not { } policy || !box.AllowsUse(character.Level, character.Job) || !policy.Allows(template))
+        if (box.QualityBox is not { } policy || !box.AllowsActivation(character.Level, character.Job) || !policy.Allows(template))
             return InventoryResult.Reject(19);
         if (request.RandomOptions && (policy.Fixed || target.Core.Random0.Type == 0 || template.EquipmentSlot == 13))
             return InventoryResult.Reject(19);

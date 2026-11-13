@@ -4,14 +4,16 @@ using DfoServer.Game.Inventory.Models;
 using DfoServer.GameWorld.Items;
 using DfoServer.Game.Events;
 using DfoServer.Game.Strongway2019;
+using DfoServer.Game.EpicRoad2019;
 using System.Collections.Immutable;
 
 namespace DfoServer.Game.Inventory.Services;
 
 internal sealed class InventoryShopService(ItemCatalog catalog, NpcShopCatalog shops, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, TimeProvider? clock = null,
-    ServerItemUsageCatalog? serverItems = null)
+    ServerItemUsageCatalog? serverItems = null, bool epicRoadAvailable = false)
 {
     public TimeProvider Clock { get; } = clock ?? TimeProvider.System;
+    public bool EpicRoadAvailable { get; } = epicRoadAvailable;
     static readonly int[] CubeItemIds = [3033, 3034, 3035, 3036, 3037, 3262];
 
     public InventoryResult Buy(Character character, BuyItemRequest request, out ShopPurchaseReceipt? receipt, DateTimeOffset? utcNow = null,
@@ -20,6 +22,10 @@ internal sealed class InventoryShopService(ItemCatalog catalog, NpcShopCatalog s
         receipt = null;
         if (Strongway2019ShopRules.Handles(request.ShopId) &&
             (requiredEvent is null || requiredEvent.Schedule.EventId != ServerEventService.Strongway2019Id || !requiredEvent.Matches(requiredEvent.Schedule)))
+            return InventoryResult.Reject(17);
+        if (EpicRoad2019ShopRules.Handles(request.ShopId) &&
+            (!EpicRoadAvailable || requiredEvent is null || requiredEvent.Schedule.EventId != ServerEventService.EpicRoadId ||
+             !requiredEvent.Matches(requiredEvent.Schedule)))
             return InventoryResult.Reject(17);
         if (!shops.Allows(request.NpcId, request.ShopId, request.ItemId))
             return InventoryResult.Reject(17);
@@ -33,8 +39,8 @@ internal sealed class InventoryShopService(ItemCatalog catalog, NpcShopCatalog s
         catch (InvalidDataException) { return InventoryResult.Reject(17); }
         // ACK21必需实体核心并会解引用购入对象；服务商品不能伪造空槽或临时库存回执。
         if (template.IsPremiumService) return InventoryResult.Reject(17);
-        // Client 普通装备购买实收 count=0，仍按一件购买；其他商品数量须为正。
-        if (request.Count == 0 && template.Kind is not (ItemKind.Equipment or ItemKind.Talisman))
+        // 装备类购买的 count=0 表示一件，包含独立分类的护石和公会勋章；其他商品数量须为正。
+        if (request.Count == 0 && template.Kind is not (ItemKind.Equipment or ItemKind.Talisman or ItemKind.GuildMedal))
             return InventoryResult.Reject(0x85);
         int count = template.Kind is ItemKind.Equipment or ItemKind.Talisman or ItemKind.Avatar or ItemKind.Creature or ItemKind.CreatureEquipment or ItemKind.GuildMedal ? 1 : request.Count;
         // 交易窗口(ShopId<0)按名册买价结算；名册内没有金币买价也没有兑换材料的商品必须拒绝。
@@ -63,7 +69,8 @@ internal sealed class InventoryShopService(ItemCatalog catalog, NpcShopCatalog s
                 if (currency < CurrencyKind.Cera)
                     materials.Add(new(itemId, CurrencyWallet.Get(paid, currency)));
             }
-            else if (!pieces.ByPiece.ContainsKey(itemId) && catalog.Get(itemId).AccountMaterial is null)
+            else if (!pieces.ByPiece.ContainsKey(itemId) &&
+                catalog.Get(itemId) is { AccountMaterial: null, AccountCommonItem: false })
             {
                 var first = before.Items.Where(item => item.Position.List == InventoryListType.Main && item.Core.ItemId == itemId)
                     .OrderBy(item => item.Position.Index).First();
@@ -72,7 +79,7 @@ internal sealed class InventoryShopService(ItemCatalog catalog, NpcShopCatalog s
                 if (remaining != first)
                     materials.Add(new(itemId, remaining?.Core.Count ?? 0));
             }
-            // 图鉴和非Main钱包不伪装成实物材料，统一投影发送各自的最终余额。
+            // 图鉴、账号余额及公共实体不写Main材料尾段；公共实体由提交后的精确槽位差量同步。
         }
         if (materials.Count > byte.MaxValue)
             return InventoryResult.Reject(17); // 本版ACK的材料条数使用u8，必须在提交之前验证。
@@ -154,15 +161,27 @@ internal sealed class InventoryShopService(ItemCatalog catalog, NpcShopCatalog s
     {
         if (!shops.Shops.Values.Any(shop => shop.NpcId == npcId) && !shops.IsTradingNpc(npcId))
             return null;
-        int today = ShopPurchaseCount.Today(utcNow ?? DateTimeOffset.UtcNow);
+        int today = ShopPurchaseCount.Today(utcNow ?? Clock.GetUtcNow());
         var stock = shops.Shops.Values.Where(shop => shop.NpcId == npcId || shop.Raid).SelectMany(shop => shop.Items).ToHashSet();
         if (shops.Trading.TryGetValue(npcId, out var trading)) stock.UnionWith(trading.Keys);
-        return character.Inventory.ShopPurchases.Where(row => row.Effective(today) > 0 &&
-            (row.Period == ItemPurchasePeriod.Legacy ? row.NpcId == npcId &&
-                catalog.Get(row.ItemId).ShopPrice.Limit is { } limit && limit.AccountWide == row.AccountWide && limit.ResetDaily == row.ResetDaily :
-                stock.Contains(row.ItemId) && catalog.Get(row.ItemId).ShopPrice.PeriodicLimit is { } periodic &&
-                periodic.AccountWide == row.AccountWide && periodic.Period == row.Period))
-            .OrderBy(row => row.Period).ThenBy(row => row.ItemId).ToArray();
+        var legacy = character.Inventory.ShopPurchases.Where(row => row.Period == ItemPurchasePeriod.Legacy &&
+            row.NpcId != 0 && (row.NpcId == npcId || stock.Contains(row.ItemId)) && row.Effective(today) > 0 &&
+            catalog.Get(row.ItemId).ShopPrice.Limit is { } limit && limit.AccountWide == row.AccountWide && limit.ResetDaily == row.ResetDaily)
+            .GroupBy(row => (row.ItemId, row.AccountWide, row.ResetDaily))
+            .Select(group =>
+            {
+                var first = group.FirstOrDefault(row => row.NpcId == npcId) ?? group.First();
+                return first with
+                {
+                    NpcId = npcId,
+                    Day = first.ResetDaily ? today : 0,
+                    Count = checked((int)group.Sum(row => (long)row.Effective(today)))
+                };
+            });
+        var periodic = character.Inventory.ShopPurchases.Where(row => row.Period != ItemPurchasePeriod.Legacy &&
+            row.Effective(today) > 0 && stock.Contains(row.ItemId) &&
+            catalog.Get(row.ItemId).ShopPrice.PeriodicLimit is { } periodic && periodic.AccountWide == row.AccountWide && periodic.Period == row.Period);
+        return legacy.Concat(periodic).OrderBy(row => row.Period).ThenBy(row => row.ItemId).ToArray();
     }
 
     public InventoryResult Sell(Character character, SellItemRequest request)
@@ -193,7 +212,7 @@ internal sealed class InventoryShopService(ItemCatalog catalog, NpcShopCatalog s
             ?? template.ShopPrice.GetSellGold(source.Core.Durability, template.Durability);
         long gold = (long)before.Gold + (long)price * count;
         if (gold > int.MaxValue || gold > new CurrencyService(goldLimits).CarryLimit(character))
-            return InventoryResult.Reject(22);
+            return InventoryResult.Reject(22) with { RejectReason = "gold_carry_limit" };
         long? deadline = source.ExpireTime > 0 ? source.ExpireTime : null;
         var planned = before;
         if (template.ShopPrice.SaleLimit is { } saleLimit)
@@ -226,7 +245,7 @@ internal sealed class InventoryShopService(ItemCatalog catalog, NpcShopCatalog s
         int price = template.ShopPrice.GetSellGold(0, template.Durability);
         long gold = (long)before.Gold + (long)price * request.Count;
         if (gold > int.MaxValue || gold > new CurrencyService(goldLimits).CarryLimit(character))
-            return InventoryResult.Reject(22);
+            return InventoryResult.Reject(22) with { RejectReason = "gold_carry_limit" };
         var spent = CurrencyService.Spend(before, kind, request.Count);
         if (!spent.Accepted)
             return spent;

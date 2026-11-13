@@ -21,30 +21,15 @@ internal static class ConsumableStatePolicy
         if (definition.EffectMilliseconds <= 0 && (definition.CoolTime <= 0 || definition.CooltimeMaintenance == 0 && !sessionCooldown))
             return inventory;
         var rows = inventory.ConsumableStates.Where(row => row.Active(now)).ToList();
-        // 四种神圣祝福共用一次资格；再次使用覆盖截止，不叠加次数或保留另一种药的旧资格。
-        if (definition.RevivalBlessing)
-            rows.RemoveAll(row => row.Kind == ConsumableStateKind.Effect && ConsumableSpecialItems.IsRevivalBlessing(row.ItemId));
-        if (ConsumableSpecialItems.IsStaminaRecovery(definition.ItemId))
-            rows.RemoveAll(row => row.Kind == ConsumableStateKind.Effect && row.ItemId != definition.ItemId &&
-                ConsumableSpecialItems.IsStaminaRecovery(row.ItemId));
-        // 固定同族药剂覆盖效果期限，不叠加倍率；家族成员只来自已验证的资源映射。
-        if (definition.EpicDropBuff is { } epic)
-            rows.RemoveAll(row => row.Kind == ConsumableStateKind.Effect && row.ItemId != definition.ItemId && epic.IsFamilyItem(row.ItemId));
-        if (definition.HellLegendEpicDropBuff is { } hellLegend)
-            rows.RemoveAll(row => row.Kind == ConsumableStateKind.Effect && row.ItemId != definition.ItemId &&
-                hellLegend.IsFamilyItem(row.ItemId));
-        if (definition.VillageMoveSpeedBuff is { } villageSpeed)
-            rows.RemoveAll(row => row.Kind == ConsumableStateKind.Effect && row.ItemId != definition.ItemId &&
-                villageSpeed.IsFamilyItem(row.ItemId));
-        if (definition.EnhancementPotion is { } enhancement)
-            rows.RemoveAll(row => row.Kind == ConsumableStateKind.Effect && row.ItemId != definition.ItemId &&
-                enhancement.IsFamilyItem(row.ItemId));
+        // 同族资格按本次合法使用覆盖；不叠加倍率、次数或旧剩余时长。
+        rows.RemoveAll(row => row.Kind == ConsumableStateKind.Effect && row.ItemId != definition.ItemId &&
+            ReplacesEffect(definition, row.ItemId));
         void Put(ConsumableStateKind kind, int duration, byte maintenance)
         {
             if (duration <= 0) return;
             long until = checked(now + duration);
             var old = rows.Find(row => row.Kind == kind && row.ItemId == definition.ItemId);
-            if (old is not null) until = Math.Max(until, old.UntilMilliseconds);
+            if (old is not null && kind == ConsumableStateKind.Cooldown) until = Math.Max(until, old.UntilMilliseconds);
             rows.RemoveAll(row => row.Kind == kind && (row.ItemId == definition.ItemId ||
                 kind == ConsumableStateKind.Cooldown && row.CoolGroup == definition.CoolGroup));
             rows.Add(new(kind, definition.ItemId, until, maintenance, definition.CoolGroup));
@@ -63,5 +48,30 @@ internal static class ConsumableStatePolicy
     {
         var states = inventory.ConsumableStates.Where(row => row.Active(now) && row.Preserves(boundary)).ToImmutableArray();
         return states.SequenceEqual(inventory.ConsumableStates) ? inventory : inventory with { ConsumableStates = states };
+    }
+
+    internal static bool ReplacesEffect(RecoveryConsumableDefinition definition, int itemId) =>
+        definition.ItemId == itemId || definition.RevivalBlessing && ConsumableSpecialItems.IsRevivalBlessing(itemId) ||
+        ConsumableSpecialItems.IsStaminaRecovery(definition.ItemId) && ConsumableSpecialItems.IsStaminaRecovery(itemId) ||
+        definition.EpicDropBuff?.IsFamilyItem(itemId) == true || definition.HellLegendEpicDropBuff?.IsFamilyItem(itemId) == true ||
+        definition.DungeonEpicDropBuff?.IsFamilyItem(itemId) == true ||
+        definition.VillageMoveSpeedBuff?.IsFamilyItem(itemId) == true || definition.EnhancementPotion?.IsFamilyItem(itemId) == true ||
+        definition.TreasureHunterPotion is not null && TreasureHunterPotionDefinition.FamilyItems.Contains(itemId);
+
+    internal static int RemainingSeconds(long until, long now) => until <= now ? 0 :
+        (int)Math.Min(int.MaxValue / 1000, (until - now - 1) / 1000 + 1);
+
+    internal static ImmutableArray<ConsumableStateUpdate> RefreshEffects(RecoveryConsumableDefinition definition,
+        IEnumerable<ConsumableState> before, ConsumableState? effect, long now, bool explicitTimeRefresh)
+    {
+        if (effect is null || definition.EffectMaintenance == 0) return [];
+        var replaced = before.Where(row => row.Kind == ConsumableStateKind.Effect && row.Active(now) &&
+            ReplacesEffect(definition, row.ItemId)).ToArray();
+        if (replaced.Length == 0) return [];
+        var updates = replaced.Where(row => row.ItemId != effect.ItemId && (row.Maintenance & 8) == 0)
+            .Select(row => row.ItemId).Distinct().Select(id => new ConsumableStateUpdate(id, 0)).ToImmutableArray();
+        // 成功ACK已按新编号建立独立计时，旧项0秒不会删掉新项；免扣错误0才需要显式起算。
+        return explicitTimeRefresh
+            ? updates.Add(new(effect.ItemId, RemainingSeconds(effect.UntilMilliseconds, now))) : updates;
     }
 }

@@ -188,6 +188,8 @@ internal sealed partial class CharacterRepository
         using var db = database.Open();
         using var write = db.BeginWrite("CharacterRepository.SendMail");
         using var tx = write.Transaction;
+        if (plan.Attachments.Any(item => item.IsExpired(ObservedUnixSeconds(plan.Created))))
+            return MailboxResult.Reject(MailboxError.ExpiredItem);
         var recipient = FindMailRecipient(db, tx, plan.Request.Recipient);
         if (recipient is null || recipient.Id != plan.Recipient.Id || recipient.Account != plan.Recipient.Account)
             return MailboxResult.Reject(MailboxError.RecipientMissing);
@@ -318,7 +320,8 @@ internal sealed partial class CharacterRepository
         var mails = ids.Select(id => ReadMail(db, tx, characterId, id)).ToArray();
         if (mails.Any(mail => mail is null || !(state == 0 && mail.State == 0) && !mail.Available(now) && !force))
             return MailboxResult.Reject(MailboxError.MailMissing);
-        if (state == 0 && !force && mails.Any(mail => mail!.Gold != 0 || mail.Attachments.Length != 0))
+        // 未领金币或任一未到期附件仍整批拒绝。全部未领附件都已到期且没有金币时允许删除，含保存状态。
+        if (state == 0 && !force && mails.Any(mail => RetainsUnclaimedAssets(mail!, now)))
             return MailboxResult.Reject(MailboxError.UnclaimedAssets);
         using var command = db.CreateCommand();
         command.Transaction = tx;
@@ -334,16 +337,46 @@ internal sealed partial class CharacterRepository
             ushort next = state == 2 && mail.State == 3 ? (ushort)3 : state;
             if (next == mail.State)
                 continue;
+            bool voidExpired = state == 0 && !force && mail.Attachments.Length != 0;
+            if (voidExpired)
+                VoidExpiredMailAttachments(db, tx, owner.Account, characterId, mail, now);
             command.Parameters.Clear();
             command.Parameters.AddWithValue("$mail", mail.Id);
             command.Parameters.AddWithValue("$state", next);
-            command.CommandText = "UPDATE mailbox_messages SET state=$state,revision=revision+1 WHERE mail_id=$mail";
-            command.ExecuteNonQuery();
-            AuditMail(db, tx, mail.Id, owner.Account, characterId, owner.Generation, "state", now, new { Before = mail.State, After = next });
+            command.CommandText = voidExpired
+                ? "UPDATE mailbox_messages SET state=$state,gold=0,revision=revision+1 WHERE mail_id=$mail AND gold=0"
+                : "UPDATE mailbox_messages SET state=$state,revision=revision+1 WHERE mail_id=$mail";
+            if (command.ExecuteNonQuery() != 1)
+                throw new InvalidOperationException(voidExpired ? "过期附件邮件状态已变化" : "邮件状态已变化");
+            if (voidExpired)
+                AuditMail(db, tx, mail.Id, owner.Account, characterId, owner.Generation, "state", now,
+                    new { Before = mail.State, After = next, Voided = mail.Attachments });
+            else
+                AuditMail(db, tx, mail.Id, owner.Account, characterId, owner.Generation, "state", now, new { Before = mail.State, After = next });
         }
         tx.Commit();
         return new() { Changes = mails.Select(mail => new MailboxStateChange(mail!.Id, state == 2 && mail.State == 3 ? (ushort)3 : state)).ToImmutableArray() };
     });
+
+    static bool RetainsUnclaimedAssets(MailboxEntry mail, long now) =>
+        mail.Gold != 0 || mail.Attachments.Any(attachment => !attachment.Item.IsExpired(now));
+
+    /// <summary>
+    /// 到期附件随普通删除作废：不入包。资格、托管实例和邮件状态在调用方事务里一起提交或一起回滚。
+    /// </summary>
+    static void VoidExpiredMailAttachments(SqliteConnection db, SqliteTransaction tx, string account, ushort characterId, MailboxEntry mail, long now)
+    {
+        if (mail.Gold != 0 || mail.Attachments.Length == 0 || mail.Attachments.Any(attachment => !attachment.Item.IsExpired(now)))
+            throw new InvalidOperationException("只有全部到期且没有金币的附件可以随邮件作废");
+        using var command = db.CreateCommand();
+        command.Transaction = tx;
+        command.Parameters.AddWithValue("$mail", mail.Id);
+        command.CommandText = "UPDATE mailbox_attachments SET claimed=1,item_uid=NULL WHERE mail_id=$mail AND claimed=0";
+        if (command.ExecuteNonQuery() != mail.Attachments.Length)
+            throw new InvalidOperationException("过期邮件附件资格已变化");
+        foreach (var attachment in mail.Attachments)
+            DeleteHeldItem(db, tx, account, characterId, attachment.Item.Uid);
+    }
 
     /// <summary>
     /// GM 强制删除：不检查未领取资产、不过滤过期，直接把邮件移出收件箱（state=0）。
@@ -528,7 +561,9 @@ internal sealed partial class CharacterRepository
             }
             string key = $"inventory-overflow:{character.Id}:{character.Revision + 1}:{offset / 10}";
             string content = JsonSerializer.Serialize(new { plan.Reason, Items = items });
-            uint id = InsertMail(db, tx, recipient, 0, "奖励发放", "背包空间不足，奖励已通过邮件发放。", 0,
+            string sender = string.IsNullOrWhiteSpace(plan.OverflowMailSender) ? "奖励发放" : plan.OverflowMailSender;
+            string text = string.IsNullOrWhiteSpace(plan.OverflowMailText) ? "背包空间不足，奖励已通过邮件发放。" : plan.OverflowMailText;
+            uint id = InsertMail(db, tx, recipient, 0, sender, text, 0,
                 now, null, key, content);
             var held = ImmutableArray.CreateBuilder<InventoryItem>(items.Length);
             for (int index = 0; index < items.Length; index++)

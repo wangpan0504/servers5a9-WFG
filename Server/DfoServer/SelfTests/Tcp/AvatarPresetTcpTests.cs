@@ -59,10 +59,21 @@ internal static class AvatarPresetTcpTests
         long wornUid = role.Inventory.Find(new(InventoryListType.Equipment, 3))!.Uid;
         long spareUid = role.Inventory.Find(new(InventoryListType.Avatar, 0))!.Uid;
 
+        // 建角INSERT沿数据库默认扩展105；先读真实快照再提交0，不能把NewCharacter内存值当作已落库容量。
+        using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
+        {
+            var current = repository.LoadCharacter(owner, role.Slot);
+            role = InventoryService.Commit(repository, owner, current, new(true, 0,
+                new(current.Inventory, current.Inventory with { AvatarExpansion = 0 }, "avatar_preset_full_fixture")));
+        }
+        That(fixture.Query("SELECT avatar_expansion FROM characters WHERE id=$p0", role.Id) is [[0L]] &&
+            fixture.Query("SELECT count(*),min(slot_index),max(slot_index) FROM character_inventory_slots WHERE character_id=$p0 AND list_type=1",
+                role.Id) is [[105L, 0L, 104L]] && ItemSlotBoundService.Range(ItemKind.Avatar, role.Inventory) == (0, 104),
+            "开服前读回扩展0与实际105格容量，105件装扮占满0至104槽");
         await fixture.StartAsync();
         using (var peer = Open(fixture))
         {
-            peer.Select();
+            peer.Select(avatarExpansion: 0);
             var initial = Parse(peer.AvatarPresetList);
             That(initial is { Capacity: 1, ActiveSlot: 0 } && initial.Rows.Length == 1 &&
                 initial.Rows[0] is { Slot: 0, Name: "" } && initial.Rows[0].Parts.Length == 1 &&
@@ -137,8 +148,14 @@ internal static class AvatarPresetTcpTests
                 writer.Write((byte)1); writer.Write((byte)1); writer.Write((short)0); writer.Write(1);
                 writer.Write((byte)3); writer.Write((short)3);
             }));
-            peer.Expect(0, 1681);
-            peer.Expect(0, 1681);
+            var manualAvatarDelta = peer.Expect(0, 1681).Body;
+            That(manualAvatarDelta[0] == 1 && U16(manualAvatarDelta, 1) == 1 && U16(manualAvatarDelta, 3) == 0 &&
+                U32(manualAvatarDelta, 5) == uint.MaxValue && manualAvatarDelta.Length == 168,
+                "手动换装只清空变化的装扮槽，不重建整列");
+            var manualAvatarFill = peer.Expect(0, 1681).Body;
+            That(manualAvatarFill[0] == 1 && U16(manualAvatarFill, 1) == 1 && U16(manualAvatarFill, 3) == 0 &&
+                U32(manualAvatarFill, 5) == (uint)legs.Id && manualAvatarFill.Length == 168,
+                "手动互换回填同槽原实例的完整装扮核心与染色");
             // 当前橱窗跟着换装实时回写，服务端必须把新内容补回客户端缓存；否则装扮栏预览停在旧内容。
             var resampled = ParseRecord(peer.Expect(0, Update).Body);
             That(resampled is { Slot: 0, Name: "第二格" } && resampled.Parts.Length == 1 &&
@@ -147,17 +164,36 @@ internal static class AvatarPresetTcpTests
             That(peer.Expect(0, 2).Body[0] == 0 && peer.Expect(0, 2).Body[0] == 1, "手动互换后按Actor再Player刷新外观");
             peer.Barrier();
 
+            // 未变化末格保留双锁，局部差量不能重建该格或回放它的锁。
+            peer.Send(713, [1, 104, 0]);
+            peer.Expect(1, 713, [1, 1, 104, 0]);
+            peer.Send(267, [1, 104, 0]);
+            peer.Expect(1, 267, [1, 1, 104, 0]);
+            peer.Expect(0, 251, [1, 0, 1, 104, 0, 1]);
+            peer.Barrier();
+            string assetsBeforeSelect = Assets();
             peer.Send(Select, [1]);
-            var avatarDelta = peer.Expect(0, 14).Body;
-            That(avatarDelta[0] == 1 && U16(avatarDelta, 1) == 1 &&
-                U16(avatarDelta, 3) == 0 && U32(avatarDelta, 5) == (uint)legs.Id,
-                "满包选择预设直接互换，装扮栏只回放原槽最终实例，不制造额外空格");
-            var equipmentDelta = peer.Expect(0, 14).Body;
+            var selection = ReadSelection(peer);
+            var avatarDelta = AvatarDelta(selection, 0);
+            That(U32(avatarDelta, 5) == (uint)legs.Id &&
+                U16(avatarDelta, 164) == 11 && U16(avatarDelta, 166) == 13,
+                "满包选择预设只差量互换装扮原槽，保留换下实例和染色，不制造额外空格");
+            var equipmentPackets = selection.Where(packet => packet.Opcode is 14 or 1681 && packet.Body[0] == 3).ToArray();
+            That(equipmentPackets.Length == 2 && equipmentPackets.All(packet => packet.Opcode == 1681),
+                "已有穿戴实例先静默清槽再静默回填，不能走普通NOTI14");
+            That(equipmentPackets[0].Body.Length == 3 + 123 && U16(equipmentPackets[0].Body, 1) == 1 &&
+                U16(equipmentPackets[0].Body, 3) == 3 && U32(equipmentPackets[0].Body, 5) == uint.MaxValue,
+                "静默回填前先清掉被替换的穿戴部位，清空条目没有装扮RAW尾部");
+            var equipmentDelta = equipmentPackets.Single(packet => U32(packet.Body, 5) == (uint)legs.Id).Body;
             That(equipmentDelta[0] == 3 && U16(equipmentDelta, 1) == 1 && U16(equipmentDelta, 3) == 3 &&
-                U32(equipmentDelta, 5) == (uint)legs.Id, "装备栏差量把预设引用的实例穿回槽位0");
-            That(peer.Expect(0, 2).Body[0] == 0 && peer.Expect(0, 2).Body[0] == 1, "选择预设后按Actor再Player刷新外观");
-            // 整表首字段同步已应用槽与浏览槽，预览按当前穿戴显示，不得越界回槽0。
-            var applied = Parse(peer.Expect(0, List).Body);
+                U32(equipmentDelta, 5) == (uint)legs.Id && equipmentDelta.Length == 3 + 165 &&
+                U16(equipmentDelta, 164) == 3 && U16(equipmentDelta, 166) == 7,
+                "装备栏完整差量把预设引用的原实例及染色穿回部位3");
+            var appearance = selection.Where(packet => packet.Opcode == 2).ToArray();
+            That(appearance.Length == 2 && appearance[0].Body[0] == 0 && appearance[1].Body[0] == 1,
+                "选择预设后按Actor再Player刷新外观");
+            // 首字段同步已应用槽与浏览槽，预览按当前穿戴显示，不得越界回槽0。
+            var applied = Parse(selection[^1].Body);
             That(applied is { Capacity: 2, ActiveSlot: 1 } && applied.Rows.Single(row => row.Slot == 0).Name == "第二格" &&
                 applied.Rows.Single(row => row.Slot == 1).Name == "改名",
                 "选择预设换装后回放整表：客户端重建纸娃娃，两侧名字保持落库值");
@@ -167,6 +203,20 @@ internal static class AvatarPresetTcpTests
                 fixture.Query("SELECT s.item_uid FROM character_inventory_slots s WHERE s.list_type=1 AND s.slot_index=0") is [[var spareNow]] &&
                 Convert.ToInt64(spareNow) == spareUid,
                 "选择预设按UID换回原实例，不重建同模板外观");
+            That(Assets() == assetsBeforeSelect, "预设切换只移动既有实例，全部UID、完整核心与装扮详情不变");
+            That(!selection.Any(packet => packet.Opcode is 13 or 713 or 714 or 251 or 252),
+                "局部差量不重建整列，也不回放未变化末格的双锁");
+            That(fixture.Query("SELECT json_extract(i.item_core,'$.SortLockFlag'),json_extract(i.item_core,'$.EquipmentLockId') " +
+                    "FROM character_inventory_slots s JOIN character_inventory_items i USING(item_uid) " +
+                    "WHERE s.list_type=1 AND s.slot_index=104") is [[1L, 1L]],
+                "未变化末格双锁仍真实持久化");
+            // 用真实请求还原夹具，保留后续手动换装与重连原有的严格包序。
+            peer.Send(714, [1, 104, 0]);
+            peer.Expect(1, 714, [1, 1, 104, 0]);
+            peer.Send(268, [1, 104, 0]);
+            peer.Expect(1, 268, [1, 1, 104, 0, 0, 0, 0, 0]);
+            peer.Expect(0, 252, [1, 104, 0]);
+            peer.Barrier();
 
             // 已选中橱窗后的换装要实时回写，玩家不需要再点保存/应用。
             peer.Send(19, Build(writer =>
@@ -179,8 +229,14 @@ internal static class AvatarPresetTcpTests
                 writer.Write((byte)1); writer.Write((byte)1); writer.Write((short)0); writer.Write(1);
                 writer.Write((byte)3); writer.Write((short)3);
             }));
-            peer.Expect(0, 1681);
-            peer.Expect(0, 1681);
+            var activeAvatarDelta = peer.Expect(0, 1681).Body;
+            That(activeAvatarDelta[0] == 1 && U16(activeAvatarDelta, 1) == 1 && U16(activeAvatarDelta, 3) == 0 &&
+                activeAvatarDelta.Length == 168 && U32(activeAvatarDelta, 5) == uint.MaxValue,
+                "已选橱窗后的换装只同步变化的装扮槽");
+            var activeAvatarFill = peer.Expect(0, 1681).Body;
+            That(activeAvatarFill[0] == 1 && U16(activeAvatarFill, 1) == 1 && U16(activeAvatarFill, 3) == 0 &&
+                U32(activeAvatarFill, 5) == (uint)legs.Id && activeAvatarFill.Length == 168,
+                "已选橱窗后的换装回填完整装扮差量");
             var resampledActive = ParseRecord(peer.Expect(0, Update).Body);
             That(resampledActive is { Slot: 1, Name: "改名" } && resampledActive.Parts.Length == 1 &&
                 resampledActive.Parts[0] is { Slot: 3, Color1: 11, Color2: 13 },
@@ -217,6 +273,13 @@ internal static class AvatarPresetTcpTests
                 "两张扩展券按ACK逐张消耗，源槽随第二张清空");
             That(fixture.Query("SELECT count(*) FROM character_consumable_states WHERE character_id=$p0 AND item_id=$p1",
                     role.Id, CouponId) is [[1L]], "成功使用写入会话冷却，跨重连仍生效");
+            string beforeRejectedUnload = State(), assetsBeforeRejectedUnload = Assets();
+            peer.Send(Select, [2]);
+            peer.NoFrame(200, "满105格无法卸下当前装扮时不发任何成功库存或预设通知",
+                (0, 13), (0, 14), (0, 1681), (0, List), (0, Update));
+            peer.Barrier();
+            That(State() == beforeRejectedUnload && Assets() == assetsBeforeRejectedUnload,
+                "真正无空间的空预设选择保持全部UID、核心、详情、位置、预设及revision零写入");
         }
 
         That(fixture.Query("SELECT json_extract(avatar_preset_state,'$.Capacity'), count(*) FROM characters, " +
@@ -227,7 +290,7 @@ internal static class AvatarPresetTcpTests
 
         using (var peer = Open(fixture))
         {
-            peer.Select();
+            peer.Select(avatarExpansion: 0);
             var restored = Parse(peer.AvatarPresetList);
             That(restored is { Capacity: 3, ActiveSlot: 1 } && restored.Rows.Length == 3 &&
                 restored.Rows[0].Name == "第二格" && restored.Rows[1].Name == "改名" &&
@@ -237,9 +300,81 @@ internal static class AvatarPresetTcpTests
             peer.Barrier();
         }
 
+        // 原满包/重连覆盖保持不变；停宿主后只扩展隔离夹具7格，为空预设真正卸装准备空位。
+        await fixture.StopAsync();
+        using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
+        {
+            var current = repository.LoadCharacter(owner, role.Slot);
+            InventoryService.Commit(repository, owner, current, new(true, 0,
+                new(current.Inventory, current.Inventory with { AvatarExpansion = 7 }, "avatar_preset_unload_fixture")));
+        }
+        await fixture.StartAsync("unload");
+        using (var peer = Open(fixture))
+        {
+            peer.Select(avatarExpansion: 7);
+            peer.Barrier();
+            string assetsBeforeUnload = Assets();
+            peer.Send(Select, [2]);
+            var selection = ReadSelection(peer);
+            var unloadedAvatarDelta = AvatarDelta(selection, 105);
+            That(U32(unloadedAvatarDelta, 5) == (uint)legs.Id &&
+                U16(unloadedAvatarDelta, 164) == 11 && U16(unloadedAvatarDelta, 166) == 13,
+                "空预设只差量卸下实际穿戴的既有实例及染色，不制造奖励");
+            var cleared = selection.Single(packet => packet.Opcode is 14 or 1681 && packet.Body[0] == 3);
+            That(cleared.Opcode == 1681 && cleared.Body.Length == 3 + 123 && U16(cleared.Body, 1) == 1 &&
+                U16(cleared.Body, 3) == 3 && U32(cleared.Body, 5) == uint.MaxValue,
+                "真正卸空的穿戴部位必须收到1681的123B清空条目，不能遗漏或伪装成装扮正条目");
+            var appearance = selection.Where(packet => packet.Opcode == 2).ToArray();
+            That(appearance.Length == 2 && appearance[0].Body[0] == 0 && appearance[1].Body[0] == 1,
+                "空预设卸装仍按Actor再Player刷新外观");
+            var applied = Parse(selection[^1].Body);
+            That(applied is { Capacity: 3, ActiveSlot: 2 } && applied.Rows[2].Parts.Length == 0,
+                "空预设卸装成功后以1597同步第三格已应用且零部位");
+            peer.Barrier();
+            That(fixture.Query("SELECT count(*) FROM character_inventory_slots WHERE list_type=3 AND slot_index=3") is [[0L]] &&
+                fixture.Query("SELECT item_uid FROM character_inventory_slots WHERE list_type=1 AND slot_index=105") is [[var unloadedUid]] &&
+                Convert.ToInt64(unloadedUid) == spareUid && Assets() == assetsBeforeUnload,
+                "真正卸装只移动原UID，全部核心与详情不变且穿戴槽真实为空");
+        }
+
         string State() => fixture.Snapshot("SELECT id,revision,avatar_preset_state FROM characters") +
             fixture.Snapshot("SELECT s.list_type,s.slot_index,s.item_uid FROM character_inventory_slots s ORDER BY s.list_type,s.slot_index") +
             fixture.Snapshot("SELECT * FROM character_consumable_states ORDER BY character_id,item_id");
+        string Assets() => fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid") +
+            fixture.Snapshot("SELECT item_uid,detail FROM inventory_avatar_details ORDER BY item_uid");
+    }
+
+    // 1594没有ACK，以最终1597界定回复；严格区分713/714的ACK与251/252的NOTI。
+    static List<WirePacket> ReadSelection(TcpPeer peer)
+    {
+        var packets = new List<WirePacket>();
+        for (int frame = 0; frame < 16; frame++)
+        {
+            var packet = peer.Read();
+            That((packet.Kind, packet.Opcode) is (0, 13 or 14 or 1681 or 2 or Update or 1449 or 251 or 252 or List) or (1, 713 or 714),
+                "选择预设只回已知库存、外观、锁和预设帧，不吞未知包或混淆ACK方向");
+            packets.Add(packet);
+            if (packet.Opcode == List) return packets;
+        }
+        That(false, "选择预设须在有界回复内完成1597整表");
+        return packets;
+    }
+
+    static byte[] AvatarDelta(List<WirePacket> packets, ushort slot)
+    {
+        var packetsForSlot = packets.Where(packet => packet.Opcode == 1681 && packet.Body.Length >= 9 &&
+            packet.Body[0] == 1 && U16(packet.Body, 3) == slot).ToArray();
+        That(packetsForSlot.Length == 2 && packetsForSlot.All(packet => U16(packet.Body, 1) == 1) &&
+            packetsForSlot[0].Body.Length == 168 && U32(packetsForSlot[0].Body, 5) == uint.MaxValue &&
+            packetsForSlot[1].Body.Length == 168 && U32(packetsForSlot[1].Body, 5) != uint.MaxValue,
+            "预设切换仅对变化装扮槽先清空再完整回填165B核心");
+        That(!packets.Any(packet => packet.Opcode is 13 or 14) &&
+            packets.Count(packet => packet.Opcode == 1681 && packet.Body[0] == 1) == 2,
+            "预设切换不重建整列、不发送普通获得通知或无关装扮槽差量");
+        var body = packetsForSlot[1].Body;
+        That(U32(body, 126) == 30 && U32(body, 160) == 4,
+            "装扮差量保留完整核心与RAW30/RAW4尾部");
+        return body;
     }
 
     // 0x0639 = slot:u8 + nameLength:u32 + CP936字节（无结尾NUL），与客户端 FUN_03bdf8e0 写入一致。

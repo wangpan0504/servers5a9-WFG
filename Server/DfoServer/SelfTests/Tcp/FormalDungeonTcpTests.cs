@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Collections.Immutable;
 using System.Buffers.Binary;
 using System.Security.Cryptography;
 using DfoServer.Game.Dungeons;
@@ -103,6 +104,18 @@ internal static partial class FormalDungeonTcpTests
                 var grants = new DfoServer.Game.Inventory.Services.InventoryService(items.Items, items.GoldLimits, items.EpicPieces);
                 character = DfoServer.Game.Inventory.Services.InventoryService.Commit(repository, owner, character, grants.Grant(character, [new(1000, 5), new(1, 2)]));
                 PrepareDelilahServices(repository,owner,character,resources);
+                character = repository.LoadCharacter(owner, 0);
+                var goldTitle = new InventoryItem(0, new(InventoryListType.Equipment, 13),
+                    DfoServer.Game.Inventory.Services.InventoryRewardGrantService.Create(items.Items.Get(100331240)) with { ExpireTime = 0 });
+                DfoServer.Game.Inventory.Services.InventoryService.Commit(repository, owner, character,
+                    new(true, 0, new(character.Inventory, character.Inventory with
+                    {
+                        // 累计资源的随机金币可超过低等级容量；本组显式准备扩容资格，验证完整拾取和出售成功链。
+                        // 不改角色等级或生产容量规则，金币上限拒绝由货币专项验证。
+                        GoldCarryLimit = CurrencyService.ExpandedLimit(4),
+                        Items = character.Inventory.Items.Where(item => item.Position != goldTitle.Position).Append(goldTitle).ToImmutableArray()
+                    },
+                    "gold-bonus-tcp-fixture", new(character))));
             }
             fixture.Sql("UPDATE character_dungeon_state SET next_object_key=65536 WHERE character_id=$p0", peer.Id);
             peer.Select();
@@ -138,7 +151,7 @@ internal static partial class FormalDungeonTcpTests
                 if (room == 0)
                 {
                     movedSkill = VerifyDungeonActions(fixture, peer);
-                    RejectDelilahServices(fixture,peer,"Dungeon");
+                    RejectDelilahServices(fixture,peer,"Dungeon",acceptFullRepair:true);
                     VerifyDungeonShop(fixture,peer,"Dungeon");
                 }
                 if (room == 0)
@@ -267,7 +280,7 @@ internal static partial class FormalDungeonTcpTests
                 "Lv1零经验起步完整六房得到2868经验，升级后逐次调整击杀倍率");
             That(upgradedRoomMoves > 0, "副本升级只发Player后仍能清完当前房间、成功换房并加载下一房");
             var clearCatalog = SelfTestCatalogs.ClearExperience(resources.Archive);
-            RejectDelilahServices(fixture,peer,"Settlement before commit");
+            RejectDelilahServices(fixture,peer,"Settlement before commit",acceptFullRepair:true);
             // 修复后击杀XP为2868；最高评分456使首次通关跨过Lv3边界3315。
             var clearReward = clearCatalog.Calculate(SelfTestCatalogs.Dungeons(resources.Archive).Get(3), 0, 99);
             uint clearExperience = clearReward.TotalExperience;
@@ -469,7 +482,7 @@ internal static partial class FormalDungeonTcpTests
                         "清图未交重进逐房使用真实普通路线，回访不重建演员");
                     Load(peer, fatigue: false);
                     if (!revisit) repeatedRoomFatigue++;
-                    peer.Expect(0,36,[checked((byte)repeatedRoomFatigue),0,188,0,0,0,checked((byte)(188-repeatedRoomFatigue)),0,0,0]);
+                    peer.Expect(0,36,[checked((byte)repeatedRoomFatigue),0,188,0,0,0,0,0,0,0]);
                     That(fixture.Query("SELECT used,maximum,remaining FROM character_fatigue WHERE character_id=$p0",peer.Id) is
                         [[long used,188L,long remaining]] && used == repeatedRoomFatigue && remaining == 188-repeatedRoomFatigue,
                         "普通首次房间逐次扣一点，黑钻188上限的完整疲劳投影与SQLite相同且回访不重扣");
@@ -551,7 +564,7 @@ internal static partial class FormalDungeonTcpTests
             That(U16(map, 25) >= nextKey && U32(map,14) == 58548, "重登及服务重启进入普通路线且不复用旧实例怪key");
             Load(peer, fatigue: false);
             repeatedRoomFatigue++;
-            peer.Expect(0,36,[checked((byte)repeatedRoomFatigue),0,156,0,0,0,checked((byte)(156-repeatedRoomFatigue)),0,0,0]);
+            peer.Expect(0,36,[checked((byte)repeatedRoomFatigue),0,156,0,0,0,0,0,0,0]);
             That(repeatedRoomFatigue == 19 && fixture.Query("SELECT used,maximum,remaining FROM character_fatigue WHERE character_id=$p0",peer.Id)
                 is [[19L,188L,169L]], "重启首房继续扣第19点，关闭黑钻仅隐藏附加32点而不重置持久费用");
             peer.Send(39, oldReport!);
@@ -575,7 +588,7 @@ internal static partial class FormalDungeonTcpTests
                     SelfTestCatalogs.Quests(resources.Archive).Get(3145), SelfTestCatalogs.QuestRewardParameters(resources.Archive)).Amount;
             peer.Send(34, Convert.FromHexString("2200490CFFFF0100FFFF"));
             byte[] questAck = peer.Expect(1, 34).Body;
-            int[] rewards = [10165055, 101010438, 10403, 12403, 14403, 16403, 18403];
+            int[] rewards = [10165055, 10005531, 8050536, 12403, 14403, 16403, 18403];
             var rewardSlots = new Dictionary<ushort, int>();
             That(questAck.Length == 143 && questAck[0] == 1 && U16(questAck, 1) == 3145 && questAck[3] == 3 &&
                 U32(questAck, 4) == questExperience && questAck[8] == 0 && questAck[9] == 7,
@@ -585,7 +598,7 @@ internal static partial class FormalDungeonTcpTests
                 int at = 10 + 19 * index;
                 ushort slot = U16(questAck, at);
                 That(rewardSlots.TryAdd(slot, rewards[index]) && U32(questAck, at + 2) == rewards[index] &&
-                    U32(questAck, at + 6) == (index == 0 ? 1u : 999999998u), "七项任务奖励原序/实际槽/数量或特殊品级来源");
+                    U32(questAck, at + 6) == (index < 3 ? 1u : 999999998u), "七项任务奖励原序/实际槽/礼盒数量或装备特殊品级来源");
                 var row = fixture.Query("""
                     SELECT i.item_uid,i.item_core FROM character_inventory_items i JOIN character_inventory_slots s ON s.item_uid=i.item_uid
                     WHERE s.character_id=$p0 AND s.list_type=0 AND s.slot_index=$p1
@@ -668,22 +681,23 @@ internal static partial class FormalDungeonTcpTests
             That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort,line,out var text),"GM调试端口返回 " + line);
             return text;
         }
-        That(Command("infinite-fatigue") == "OK {\"infiniteFatigue\":true}" &&
-            Command("cash-shop-expiration") == "OK {\"ignoreAbsoluteExpiration\":true}", "两个调试开关默认开启");
+        That(Command("infinite-fatigue") == "OK {\"infiniteFatigue\":false}" &&
+            Command("cash-shop-expiration") == "OK {\"ignoreAbsoluteExpiration\":true}", "无限疲劳默认关闭，商城绝对期限默认开启");
+        That(Command("infinite-fatigue on").StartsWith("OK "), "本账号显式开启无限模式");
         using (var peer = Open(fixture))
         {
             peer.Create("InfiniteTcp");
             fixture.Sql("UPDATE character_fatigue SET used=maximum,remaining=0");
             string stored = fixture.Snapshot("SELECT * FROM character_fatigue");
             var selected = peer.Select().Single(row => row.Kind == 1 && row.Opcode == 4).Body;
-            That(U16(selected,11) == 0 && U16(selected,228) == 156 && fixture.Snapshot("SELECT * FROM character_fatigue") == stored,
-                "无限疲劳选角显示满值但不覆盖真实零疲劳");
+            That(U16(selected,11) == 0 && U16(selected,13) == 156 && fixture.Snapshot("SELECT * FROM character_fatigue") == stored,
+                "无限疲劳选角显示满值但不覆盖真实零疲劳；头=" + U16(selected,11) + ",疲劳=" + U16(selected,13) + ",前=" + stored + ",后=" + fixture.Snapshot("SELECT * FROM character_fatigue"));
             EntryTown(peer); SelectMap(peer);
             byte[] selection = Selection();
             BinaryPrimitives.WriteUInt32LittleEndian(selection.AsSpan(16),0);
             peer.Send(16,selection); peer.Expect(0,28); peer.Expect(0,29);
             long enteredRevision = Convert.ToInt64(fixture.Query("SELECT revision FROM characters")[0][0]);
-            Load(peer, fatigue: false); peer.Expect(0,36,[0,0,156,0,0,0,156,0,0,0]);
+            Load(peer, fatigue: false); peer.Expect(0,36,[0,0,156,0,0,0,0,0,0,0]);
             peer.Send(37,new byte[8]); peer.Barrier();
             That(fixture.Snapshot("SELECT * FROM character_fatigue") == stored &&
                 fixture.Query("SELECT count(*) FROM character_dungeon_fatigue_receipts") is [[0L]] &&
@@ -699,11 +713,11 @@ internal static partial class FormalDungeonTcpTests
             SelectMap(peer); peer.Send(16,selection); peer.Expect(1,16,[0,22,0,0]); peer.Barrier();
             That(fixture.Snapshot("SELECT * FROM character_fatigue") == stored, "关闭后真实零疲劳拒绝重新入场");
             That(Command("infinite-fatigue on").StartsWith("OK "), "重新开启无限疲劳");
-            peer.Expect(0,36,[0,0,156,0,0,0,156,0,0,0]);
+            peer.Expect(0,36,[0,0,156,0,0,0,0,0,0,0]);
             That(fixture.Snapshot("SELECT * FROM character_fatigue") == stored,
                 "开启开关立即刷新在线零疲劳客户端，实际余额仍为零");
             peer.Send(16,selection); peer.Expect(0,28); peer.Expect(0,29);
-            Load(peer, fatigue: false); peer.Expect(0,36,[0,0,156,0,0,0,156,0,0,0]);
+            Load(peer, fatigue: false); peer.Expect(0,36,[0,0,156,0,0,0,0,0,0,0]);
             peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]); peer.Expect(0,24); RefreshedQuests(peer); peer.Barrier();
         }
         That(Command("infinite-fatigue off").StartsWith("OK "), "普通扣点场景显式关闭无限模式");
@@ -713,7 +727,7 @@ internal static partial class FormalDungeonTcpTests
             byte[] selection = Selection(); BinaryPrimitives.WriteUInt32LittleEndian(selection.AsSpan(16),0);
             BinaryPrimitives.WriteUInt32LittleEndian(selection.AsSpan(21),0x12345678);
             peer.Send(16,selection); peer.Expect(0,28); peer.Expect(0,29);
-            Load(peer, fatigue: false); peer.Expect(0,36,[1,0,156,0,0,0,155,0,0,0]);
+            Load(peer, fatigue: false); peer.Expect(0,36,[1,0,156,0,0,0,0,0,0,0]);
             peer.Send(37,new byte[8]); peer.Barrier();
             That(fixture.Query("SELECT used,remaining FROM character_fatigue WHERE character_id=$p0",peer.Id) is [[1L,155L]] &&
                 fixture.Query("SELECT count(*) FROM character_dungeon_fatigue_receipts WHERE character_id=$p0",peer.Id) is [[0L]],
@@ -722,8 +736,8 @@ internal static partial class FormalDungeonTcpTests
         VerifyExhaustedOrdinaryRetry(fixture, resources);
         await fixture.StopAsync();
         await fixture.StartAsync("restart");
-        That(Command("infinite-fatigue") == "OK {\"infiniteFatigue\":true}" &&
-            Command("cash-shop-expiration") == "OK {\"ignoreAbsoluteExpiration\":true}", "服务重建恢复两个开关默认开启");
+        That(Command("infinite-fatigue") == "OK {\"infiniteFatigue\":false}" &&
+            Command("cash-shop-expiration") == "OK {\"ignoreAbsoluteExpiration\":true}", "服务重建保持本账号无限疲劳关闭与商城默认开启");
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0,
             "调试切换保留SQLite完整性");
         await fixture.StopAsync();
@@ -737,6 +751,9 @@ internal static partial class FormalDungeonTcpTests
         fixture.Sql("DELETE FROM character_active_main_quests WHERE character_id=$p0", peer.Id);
         fixture.Sql("INSERT INTO character_completed_quests(character_id,quest_id) VALUES($p0,3145)", peer.Id);
         fixture.Sql("UPDATE character_fatigue SET used=maximum-1,remaining=1 WHERE character_id=$p0", peer.Id);
+        int rentalLimit = resources.ItemResources.Rental.LuckyStarStackLimit;
+        That(rentalLimit > 0, "满额幸运星回归使用实际资源正上限");
+        fixture.Sql("UPDATE account_wallets SET rental_points=$p1 WHERE account=$p0", fixture.Options.DevelopmentAccount, rentalLimit);
         peer.Select(2, prepared: true);
         EntryTown(peer);
         SelectMap(peer);
@@ -767,10 +784,16 @@ internal static partial class FormalDungeonTcpTests
         }
         peer.Send(46, DungeonSettlementProtocolTests.Report(peer.Id, 99));
         var settled = Drain(peer);
+        int chargeIndex = Array.FindIndex(settled, packet => packet is { Kind: 1, Opcode: 1002 });
+        int listIndex = Array.FindIndex(settled, packet => packet is { Kind: 0, Opcode: 988 });
         That(settled.Any(packet => packet is { Kind: 0, Opcode: 34 }) &&
             settled.Any(packet => packet is { Kind: 0, Opcode: 35 }) &&
+            chargeIndex >= 0 && listIndex > chargeIndex &&
+            settled[chargeIndex].Body.SequenceEqual(DfoServer.Network.Builders.RentalPackets.ChargeSuccess(1, rentalLimit)) &&
+            U32(settled[listIndex].Body, 0) == rentalLimit &&
+            fixture.Query("SELECT rental_points FROM account_wallets WHERE account=$p0", fixture.Options.DevelopmentAccount) is [[long points]] && points == rentalLimit &&
             fixture.Query("SELECT remaining FROM character_fatigue WHERE character_id=$p0", peer.Id) is [[0L]],
-            "普通副本在真实零疲劳下完成结算");
+            "普通副本在真实零疲劳下完成结算，且资源满上限推荐通关仍先发1002触发超出上限公告再发988");
         peer.Send(69); Drain(peer);
         peer.Send(70); Drain(peer);
         peer.Send(71, [0, 0]);
@@ -812,11 +835,12 @@ internal static partial class FormalDungeonTcpTests
             That(actor[0] == 0 && U16(actor, 121) == peer.Id && actor[129 + nameLength] == level,
                 "城镇升级仍同步Actor实际等级");
         }
+        int cappedLevel = Math.Min((int)level, 70);
         var player = peer.Expect(0, 2).Body;
         That(player[0] == 1 && U16(player, 22) == peer.Id && U64(player, 24) == experience && U32(player, 32) == 89 &&
-            U32(player, 40) == 1400 + 250 * (level - 1) &&
-            BinaryPrimitives.ReadInt16LittleEndian(player.AsSpan(44)) == 75 + 48 * (level - 1),
-            "副本与结算升级只发Player，当前CHR基础/完整Core/双树来自实际提交角色");
+            U32(player, 40) == 1400 + 250 * (level - 1) + 150 * cappedLevel &&
+            BinaryPrimitives.ReadInt16LittleEndian(player.AsSpan(44)) == 75 + 48 * (level - 1) + 21 * cappedLevel,
+            "副本与结算升级只发Player，当前CHR+chn_add_stat.etc基础/完整Core/双树来自实际提交角色");
         SkillPacketsTests.WireTree[] skills;
         if (town)
             skills = SkillPacketsTests.DecodeInitialized(peer.Expect(0, 19).Body);
@@ -997,8 +1021,24 @@ internal static partial class FormalDungeonTcpTests
             using (var create = Open(fixture)) create.Create(name);
             That(ExecuteOfflineGm(fixture, $"level {name} {definition.MinimumLevel}", out var reply) && reply.StartsWith("OK "),
                 "独立测试角色经完整成长用例达到对应普通图等级，保留合法初装与两树状态：" + reply);
+            // 六图逐件拾取沿成功路径核对完整资源奖励；在选角前准备容量，避免随机金币填满低等级角色。
+            fixture.Sql("UPDATE characters SET gold_carry_limit=$p0 WHERE slot=$p1", CurrencyService.ExpandedLimit(4), slot);
+            bool guildCapacityCase = dungeonId is 5 or 6;
+            int guildId = 12380 + dungeonId;
+            int guildCredited = dungeonId == 5 ? 1 : 0;
+            if (guildCapacityCase)
+            {
+                fixture.Sql("""
+                    INSERT INTO guilds(guild_id,name,address,master_character_id,public_funds,created_at_unix)
+                    SELECT $p0,'容量公会'||$p0,'cap-'||$p0,id,$p1,1000 FROM characters WHERE slot=$p2;
+                    INSERT INTO guild_members(guild_id,character_id,grade,joined_at_unix)
+                    SELECT $p0,id,1,1000 FROM characters WHERE slot=$p2
+                    """, guildId, int.MaxValue - guildCredited, slot);
+            }
             using var peer = Open(fixture);
             peer.Select(slot);
+            if (guildCapacityCase)
+                peer.CheckGuildPassiveBuffs(peer.Expect(0, 487));
             EntryTown(peer);
             That(fixture.Query("SELECT count(*) FROM character_active_main_quests WHERE character_id=$p0", peer.Id) is [[0L]],
                 "六图生产挑战使用无活动主线角色，不伪造任务资格");
@@ -1006,6 +1046,10 @@ internal static partial class FormalDungeonTcpTests
             That(fixture.Query(equipmentQuery, peer.Id).Length > 0, "普通挑战保留真实职业初始装备，不能用空资产证明保全");
             string equipment = fixture.Snapshot(equipmentQuery, peer.Id);
             byte currentLevel = Convert.ToByte(fixture.Query("SELECT level FROM characters WHERE id=$p0", peer.Id)[0][0]);
+            if (guildCapacityCase)
+                That(GameWorld.Guilds.GuildDungeonMileageEligibility.IsEligible(definition, currentLevel) &&
+                    new GameWorld.Guilds.GuildContentCatalog(resources.Archive).DungeonMileage > guildCredited,
+                    "容量TCP选用真实合资格普通图，资源通关分值确实超过剩余容量");
             ulong experience = Experience(fixture, peer.Id);
             SelectMap(peer);
             byte[] selection = Selection();
@@ -1063,7 +1107,11 @@ internal static partial class FormalDungeonTcpTests
             That(visited.Count == maps.Count && fixture.Query(
                 "SELECT count(*) FROM character_dungeon_growth_receipts WHERE character_id=$p0 AND quest_id=0", peer.Id) is [[long storedDeaths]] && storedDeaths == deaths,
                 "六图逐房全部静态敌人经正式死亡与资源掉落通道提交，机关子对象不混入奖励事实");
-            peer.Send(46, DungeonSettlementProtocolTests.Report(peer.Id, 90));
+            long contributionBeforeClear = guildCapacityCase
+                ? Convert.ToInt64(fixture.Query("SELECT contribution FROM guild_members WHERE character_id=$p0", peer.Id)[0][0]) : 0;
+            byte beforeClearLevel = currentLevel;
+            byte[] resultReport = DungeonSettlementProtocolTests.Report(peer.Id, 90);
+            peer.Send(46, resultReport);
             peer.Expect(0, 34);
             var clearReward = clearRewards.Calculate(definition, 0, 90);
             experience += clearReward.TotalExperience;
@@ -1071,7 +1119,38 @@ internal static partial class FormalDungeonTcpTests
             peer.ReadCardMembershipState();
             byte[] settlement = peer.Expect(0, 35).Body;
             ReadChangedChatEmoticons(fixture, peer);
-            ReadCommittedCard(fixture, peer, settlement);
+            Func<WirePacket, bool>? guildRefresh = guildCapacityCase ? ReadGuildRefresh : null;
+            ReadCommittedCard(fixture, peer, settlement, guildRefresh: guildRefresh);
+            if (guildCapacityCase)
+            {
+                That(fixture.Query("SELECT public_funds FROM guilds WHERE guild_id=$p0", guildId) is [[2147483647L]] &&
+                    fixture.Query("SELECT guild_id,amount FROM guild_economy_events WHERE character_id=$p0", peer.Id)
+                        is [[long actualGuild, long actualCredit]] && actualGuild == guildId && actualCredit == guildCredited &&
+                    fixture.Query("SELECT COALESCE(SUM(amount),0),count(*) FROM guild_mileage_history WHERE character_id=$p0", peer.Id)
+                        is [[long historyAmount, long historyCount]] && historyAmount == guildCredited && historyCount == guildCredited &&
+                    Convert.ToInt64(fixture.Query("SELECT contribution FROM guild_members WHERE character_id=$p0", peer.Id)[0][0]) > contributionBeforeClear,
+                    "真实46部分/满额仍完整结算，历史和永久事件记实际积分，个人贡献独立增加");
+                string committed = OrdinaryPersistentState(fixture, peer.Id);
+                string guildEvents = fixture.Snapshot("SELECT * FROM guild_economy_events WHERE character_id=$p0", peer.Id) +
+                    fixture.Snapshot("SELECT * FROM guild_mileage_history WHERE character_id=$p0", peer.Id) +
+                    fixture.Snapshot("SELECT contribution FROM guild_members WHERE character_id=$p0", peer.Id);
+                fixture.Sql("UPDATE guilds SET public_funds=$p0 WHERE guild_id=$p1", int.MaxValue - 20, guildId);
+                peer.Send(46, resultReport);
+                peer.Expect(0, 34);
+                currentLevel = beforeClearLevel;
+                ReadGrowth();
+                peer.ReadCardMembershipState();
+                var repeatedSettlement = peer.Expect(0, 35).Body;
+                ReadChangedChatEmoticons(fixture, peer);
+                ReadCommittedCard(fixture, peer, repeatedSettlement, duplicate: true, guildRefresh: guildRefresh);
+                peer.Barrier();
+                That(OrdinaryPersistentState(fixture, peer.Id) == committed &&
+                    fixture.Query("SELECT public_funds FROM guilds WHERE guild_id=$p0", guildId) is [[2147483627L]] &&
+                    guildEvents == fixture.Snapshot("SELECT * FROM guild_economy_events WHERE character_id=$p0", peer.Id) +
+                        fixture.Snapshot("SELECT * FROM guild_mileage_history WHERE character_id=$p0", peer.Id) +
+                        fixture.Snapshot("SELECT contribution FROM guild_members WHERE character_id=$p0", peer.Id),
+                    "重复46后实际屏障仍可达，腾出容量不补发公共积分、贡献或角色奖励");
+            }
             peer.Send(69);
             peer.Expect(1, 69, [1]);
             peer.Send(70);
@@ -1108,13 +1187,82 @@ internal static partial class FormalDungeonTcpTests
             That(U32(peer.Expect(0, 28).Body, 0) == dungeonId && U32(peer.Expect(0, 29).Body, 14) == startMap.Id,
                 "普通六图再挑战或重选后保持原资源路线，创建新的尝试");
             Load(peer, fatigue: false);
+            ExpectGuildReinstall();
             ExpectFatigue(visited.Count + 1);
-            peer.Send(42); peer.Expect(1, 42, [1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]); peer.Expect(0, 24); RefreshedQuests(peer); peer.Barrier();
+            peer.Send(42); peer.Expect(1, 42, [1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]); peer.Expect(0, 24); RefreshedQuests(peer);
+            if (guildCapacityCase)
+            {
+                peer.ReadGuildDungeon();
+                ExpectGuildReinstall();
+            }
+            peer.Barrier();
             That(fixture.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0", peer.Id) is [[2L]] &&
                 fixture.Query("SELECT quest_id FROM character_dungeon_settlement_receipts WHERE character_id=$p0", peer.Id) is [[0L]] &&
                 fixture.Snapshot(equipmentQuery, peer.Id) == equipment && Experience(fixture, peer.Id) == experience,
                 "普通六图再挑战及返回保留原完整装备和累计成长，不创建任务结算身份");
             Console.WriteLine($"PASS 普通图{dungeonId}完整生产TCP挑战：{visited.Count}房、{deaths}静态死亡、{pickups}拾取、实际翻牌与再挑战（合成战斗，非客户端验收）");
+
+            bool ReadGuildRefresh(WirePacket packet)
+            {
+                if (packet is { Kind: 0, Opcode: 488 })
+                {
+                    Bytes(packet.Body, Convert.FromHexString("01FC040000"), "容量公会刷新只移除已投影的守护石1276");
+                    return true;
+                }
+                if (packet is { Kind: 0, Opcode: 487 })
+                {
+                    peer.CheckGuildPassiveBuffs(packet);
+                    return true;
+                }
+                if (packet is { Kind: 0, Opcode: 70 })
+                {
+                    var state = fixture.Query("SELECT tier,level,experience,public_funds,guild_crystal FROM guilds WHERE guild_id=$p0", guildId).Single();
+                    byte[] body = packet.Body;
+                    // 名称、公告和福利使前缀变长；现代成长尾固定29B，资金位于尾部倒数9B。
+                    That(body.Length >= 29 && U32(body, body.Length - 29) == Convert.ToUInt32(state[0]) &&
+                        U32(body, body.Length - 25) == Convert.ToUInt32(state[1]) &&
+                        U64(body, body.Length - 21) == Convert.ToUInt64(state[2]) &&
+                        U32(body, body.Length - 13) == 0 &&
+                        U32(body, body.Length - 9) == Convert.ToUInt32(state[3]) &&
+                        U32(body, body.Length - 5) == Convert.ToUInt32(state[4]) && body[^1] == 0,
+                        "通关管理刷新完整成长尾对应实际档位、等级、经验、资金及结晶，不发送溢出候选额");
+                    return true;
+                }
+                if (packet is { Kind: 0, Opcode: 744 })
+                {
+                    peer.CheckGuildDungeon(packet.Body);
+                    return true;
+                }
+                if (packet is { Kind: 1, Opcode: 140 or 141 })
+                {
+                    That(packet.Body.Length >= 7 && packet.Body[0] == 1 && U32(packet.Body, 1) == guildId,
+                        "结算公会名册保持原公会身份及成功帧");
+                    return true;
+                }
+                if (packet is { Kind: 1, Opcode: 1454 })
+                {
+                    That(packet.Body.Length > 0 && packet.Body[0] == 1, "结算账号公会索引完整成功刷新");
+                    return true;
+                }
+                if (packet is { Kind: 1, Opcode: 744 })
+                {
+                    That(fixture.Query("SELECT guild_id FROM guild_members WHERE character_id=$p0", peer.Id)
+                            is [[long currentGuild]] && currentGuild == guildId &&
+                        fixture.Query("SELECT count(*) FROM guild_applications WHERE character_id=$p0", peer.Id) is [[0L]],
+                        "容量角色仍属原公会且没有待审申请，账号申请列表应为空");
+                    Bytes(packet.Body, [1, 0], "CMD744完整成功空申请列表，与NOTI744公会副本进度分别核对");
+                    return true;
+                }
+                return false;
+            }
+
+            void ExpectGuildReinstall()
+            {
+                if (!guildCapacityCase) return;
+                // 入房及返城重建Actor强制重装；夹具只有默认一级守护石，不跳过其他属性通知。
+                peer.Expect(0, 488, Convert.FromHexString("01FC040000"));
+                peer.CheckGuildPassiveBuffs(peer.Expect(0, 487));
+            }
 
             void VerifyRoom()
             {
@@ -1123,6 +1271,7 @@ internal static partial class FormalDungeonTcpTests
                     (revisit ? mapBody.Length == 16 && mapBody[13] == 0 : mapBody[13] == 1 && U32(mapBody, 14) == currentMap.Id),
                     "普通六图首次按实际资源初始化，回访复用缓存而不重新生成演员");
                 Load(peer, fatigue: false);
+                ExpectGuildReinstall();
                 ExpectFatigue(visited.Count);
                 if (revisit) return;
                 var room = rooms.Get(currentMap, requirePassiveDefinitions: false);
@@ -1176,7 +1325,7 @@ internal static partial class FormalDungeonTcpTests
             }
 
             void ExpectFatigue(int used) => peer.Expect(0, 36,
-                [checked((byte)used), 0, 156, 0, 0, 0, checked((byte)(156 - used)), 0, 0, 0]);
+                [checked((byte)used), 0, 156, 0, 0, 0, 0, 0, 0, 0]);
         }
     }
 
@@ -1195,7 +1344,7 @@ internal static partial class FormalDungeonTcpTests
         var map = peer.Expect(0, 29).Body;
         That(information[7] == 0 && U32(map, 14) == 58548 && map[18] == 4, "真实普通请求加载普通地图和全部资源怪物");
         Load(peer, fatigue: false);
-        byte[] expectedFatigue = [1, 0, 156, 0, 0, 0, 155, 0, 0, 0];
+        byte[] expectedFatigue = [1, 0, 156, 0, 0, 0, 0, 0, 0, 0];
         peer.Expect(0, 36, expectedFatigue);
         peer.Send(37, new byte[8]); peer.Barrier();
         That(fixture.Query("SELECT used,remaining FROM character_fatigue WHERE character_id=$p0", peer.Id) is [[1L, 155L]],
@@ -1203,7 +1352,7 @@ internal static partial class FormalDungeonTcpTests
         peer.Send(42); peer.Expect(1, 42, [1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]); peer.Expect(0, 24); RefreshedQuests(peer); peer.Barrier();
         SelectMap(peer); peer.Send(16, selection);
         peer.Expect(0, 28); var current = peer.Expect(0, 29).Body; Load(peer, fatigue: false);
-        peer.Expect(0, 36, [2, 0, 156, 0, 0, 0, 154, 0, 0, 0]);
+        peer.Expect(0, 36, [2, 0, 156, 0, 0, 0, 0, 0, 0, 0]);
         byte currentLevel = checked((byte)Convert.ToInt32(fixture.Query("SELECT level FROM characters WHERE id=$p0", peer.Id)[0][0]));
         for (int room = 0; room < 2; room++)
         {
@@ -1222,7 +1371,7 @@ internal static partial class FormalDungeonTcpTests
             }
             byte[] move = new byte[100]; move[0] = 1; move[1] = room == 0 ? (byte)1 : (byte)0;
             peer.Send(45, move); peer.Expect(1, 45, [1]); current = peer.Expect(0, 29).Body; Load(peer, fatigue: false);
-            peer.Expect(0, 36, [checked((byte)(3 + room)), 0, 156, 0, 0, 0, checked((byte)(153 - room)), 0, 0, 0]);
+            peer.Expect(0, 36, [checked((byte)(3 + room)), 0, 156, 0, 0, 0, 0, 0, 0, 0]);
         }
         That(U32(current, 14) == 58550 && current[18] == 8 && current[19 + 7 * 22 + 13] == 9,
             "普通实际过房生产NOTI29完整保留五只静态怪、两个机关子怪和原父对象");
@@ -1246,7 +1395,7 @@ internal static partial class FormalDungeonTcpTests
             "普通完整TCP挑战复用真实领奖角色，不伪造任务完成或清空活动任务");
         long[] originalRewardUids = fixture.Query("""
             SELECT item_uid FROM character_inventory_items WHERE character_id=$p0 AND
-              json_extract(item_core,'$.ItemId') IN (10165055,101010438,10403,12403,14403,16403,18403) ORDER BY item_uid
+              json_extract(item_core,'$.ItemId') IN (10165055,10005531,8050536,12403,14403,16403,18403) ORDER BY item_uid
             """, peer.Id).Select(row => Convert.ToInt64(row[0])).ToArray();
         That(originalRewardUids.Length >= 7, "普通挑战前确有完整七项领奖实例，不能用空查询证明资产保全");
         string originalRewardQuery = "SELECT item_uid,item_core FROM character_inventory_items WHERE character_id=$p0 AND item_uid IN (" +
@@ -1254,7 +1403,7 @@ internal static partial class FormalDungeonTcpTests
         string questAssets = fixture.Snapshot(originalRewardQuery, peer.Id);
         long attempt = Convert.ToInt64(fixture.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0", peer.Id)[0][0]);
         // 本用例此前明确关闭黑钻，客户端上限回到156；持久历史仍保留原黑钻上限，不能据此丢失已扣点。
-        var initialFatigue = fixture.Query("SELECT used,maximum,used_maximum,remaining,context_auxiliary FROM character_fatigue WHERE character_id=$p0", peer.Id)
+        var initialFatigue = fixture.Query("SELECT f.used,f.maximum,f.used_maximum,COALESCE(b.buff,0),f.context_auxiliary FROM character_fatigue f LEFT JOIN character_fatigue_battery b ON b.character_id=f.character_id WHERE f.character_id=$p0", peer.Id)
             .Single().Select(Convert.ToUInt16).ToArray();
         ulong experience = Experience(fixture, peer.Id);
         byte currentLevel = Convert.ToByte(fixture.Query("SELECT level FROM characters WHERE id=$p0", peer.Id)[0][0]);
@@ -1390,7 +1539,7 @@ internal static partial class FormalDungeonTcpTests
         void ExpectFatigue(int rooms)
         {
             int used = usedBefore + rooms;
-            peer.Expect(0,36,[checked((byte)used),0,156,0,0,0,checked((byte)(156-used)),0,0,0]);
+            peer.Expect(0,36,[checked((byte)used),0,156,0,0,0,0,0,0,0]);
             That(fixture.Query("SELECT used,maximum,remaining FROM character_fatigue WHERE character_id=$p0",peer.Id) is
                 [[long storedUsed,188L,long remaining]] && storedUsed == used && remaining == 188-used,
                 "领奖后的普通挑战沿原累计疲劳扣费，关闭黑钻不清旧费用或重复赠点");
@@ -1414,7 +1563,8 @@ internal static partial class FormalDungeonTcpTests
         fixture.Snapshot("SELECT * FROM character_dungeon_settlement_receipts WHERE character_id=$p0 ORDER BY instance_id", id) +
         fixture.Snapshot("SELECT * FROM character_quest_completion_receipts WHERE character_id=$p0", id);
 
-    internal static void ReadCommittedCard(TcpTestFixture fixture, TcpPeer peer, byte[] body, bool duplicate = false)
+    internal static void ReadCommittedCard(TcpTestFixture fixture, TcpPeer peer, byte[] body, bool duplicate = false,
+        Func<WirePacket, bool>? guildRefresh = null)
     {
         var row = fixture.Query("SELECT reward_json FROM character_dungeon_card_rewards WHERE character_id=$p0 ORDER BY revision DESC LIMIT 1",peer.Id).Single();
         var card = JsonSerializer.Deserialize<DfoServer.Game.Dungeons.DungeonCardReward>((string)row[0])!;
@@ -1442,13 +1592,14 @@ internal static partial class FormalDungeonTcpTests
         for (int index = 0; index < bonusPairs.Count; index++)
             That(U32(body,bonusAt+1+index*8) == bonusPairs[index].Item && U32(body,bonusAt+5+index*8) == bonusPairs[index].Amount,
                 "35黑钻条目精确对应同事务追加的实际金币及冻结核心数量");
-        int inventoryNotices = DrainCardInventory(peer, fixture);
+        int inventoryNotices = DrainCardInventory(peer, fixture, guildRefresh);
         That(inventoryNotices == 0,"首次和重复通关都不提前发翻牌库存差量，幸运星余额仍按既有链发布");
     }
 
-    static int DrainCardInventory(TcpPeer peer, TcpTestFixture? fixture = null)
+    static int DrainCardInventory(TcpPeer peer, TcpTestFixture? fixture = null, Func<WirePacket, bool>? guildRefresh = null)
     {
         int inventoryNotices = 0;
+        bool chargeAckSeen = false;
         bool luckyStarSeen = false;
         peer.SendBarrier();
         while (true)
@@ -1459,6 +1610,16 @@ internal static partial class FormalDungeonTcpTests
                 TestCheck.Bytes(packet.Body,[1],"翻牌库存更新后同步屏障");
                 return inventoryNotices;
             }
+            if (packet.Kind == 1 && packet.Opcode == 1002 && fixture is not null)
+            {
+                That(!chargeAckSeen && !luckyStarSeen && inventoryNotices == 0 && packet.Body.Length == 13 &&
+                    packet.Body[0] == 1 && U64(packet.Body,1) == 1 &&
+                    U32(packet.Body,9) == Convert.ToInt64(fixture.Query("SELECT rental_points FROM account_wallets WHERE account=$p0",
+                        fixture.Options.DevelopmentAccount).Single()[0]),
+                    "推荐地下城首次结算在988前发送1002幸运星获得/上限提示，重复回放不重发");
+                chargeAckSeen = true;
+                continue;
+            }
             if (packet.Kind == 0 && packet.Opcode == 988 && fixture is not null)
             {
                 That(!luckyStarSeen && inventoryNotices == 0 && packet.Body.Length == 8 && U32(packet.Body,4) == 0 &&
@@ -1468,9 +1629,45 @@ internal static partial class FormalDungeonTcpTests
                 luckyStarSeen = true;
                 continue;
             }
+            if (guildRefresh?.Invoke(packet) == true) continue;
             That(packet.Kind == 0 && packet.Opcode == 14,"翻牌/德利拉出售在提交后发送完整库存差量");
             inventoryNotices++;
         }
+    }
+
+    static void ExpectAdventureProgress(TcpTestFixture fixture, TcpTestResources resources, TcpPeer peer)
+        => AssertAdventureProgress(fixture, resources, peer, peer.Expect(0, 1349));
+
+    static (uint Level, ulong Experience, ulong CapsuleExperience) AdventureProgressSnapshot(TcpTestFixture fixture, TcpPeer peer)
+    {
+        var progress = fixture.Query("""
+            SELECT a.level,a.experience,a.capsule_experience FROM account_adventures a
+            JOIN characters c ON c.account=a.account WHERE c.id=$p0
+            """, peer.Id).Single();
+        return (Convert.ToUInt32(progress[0]), Convert.ToUInt64(progress[1]), Convert.ToUInt64(progress[2]));
+    }
+
+    static void ExpectAdventureProgressIfChanged(TcpTestFixture fixture, TcpTestResources resources, TcpPeer peer,
+        (uint Level, ulong Experience, ulong CapsuleExperience) before)
+    {
+        if (AdventureProgressSnapshot(fixture, peer) != before)
+            ExpectAdventureProgress(fixture, resources, peer);
+    }
+
+    static void AssertAdventureProgress(TcpTestFixture fixture, TcpTestResources resources, TcpPeer peer, WirePacket packet)
+    {
+        That(packet is { Kind: 0, Opcode: 1349 }, "冒险团进度保留通知类型及编号");
+        var body = packet.Body;
+        var progress = fixture.Query("""
+            SELECT a.level,a.experience,a.capsule_experience FROM account_adventures a
+            JOIN characters c ON c.account=a.account WHERE c.id=$p0
+            """, peer.Id).Single();
+        That(body.Length == 50 && U16(body, 0) == peer.Id && U32(body, 2) == 40 &&
+            U32(body, 6) == Convert.ToUInt32(progress[0]) &&
+            BinaryPrimitives.ReadUInt64LittleEndian(body.AsSpan(14)) == Convert.ToUInt64(progress[1]) &&
+            BinaryPrimitives.ReadUInt64LittleEndian(body.AsSpan(22)) == resources.Adventure.Experience.GetValueOrDefault(Convert.ToInt32(progress[0]) + 1) &&
+            BinaryPrimitives.ReadUInt64LittleEndian(body.AsSpan(30)) == Convert.ToUInt64(progress[2]),
+            "逐怪进度通知绑定本次角色及其账号真实已提交冒险团状态");
     }
 
     static ulong Experience(TcpTestFixture fixture, ushort id) => checked((ulong)Convert.ToInt64(fixture.Query("SELECT experience FROM characters WHERE id=$p0", id)[0][0]));
@@ -1489,10 +1686,21 @@ internal static partial class FormalDungeonTcpTests
             if (pickup.Length == 18) { BinaryPrimitives.WriteUInt16LittleEndian(pickup, (ushort)ground); pickup[2] = 1; }
             else BinaryPrimitives.WriteUInt32LittleEndian(pickup, ground);
             long beforeGold = Convert.ToInt64(fixture.Query("SELECT gold FROM characters WHERE id=$p0", peer.Id)[0][0]);
+            // 预期独立按本组真实穿戴的10%称号计算，不调用生产加成策略生成预期。
+            uint extraGold = itemId == 0 && fixture.Query("""
+                SELECT 1 FROM character_inventory_slots s JOIN character_inventory_items i USING(item_uid)
+                WHERE s.character_id=$p0 AND s.list_type=3 AND s.slot_index=13 AND json_extract(i.item_core,'$.ItemId')=100331240
+                """, peer.Id).Length == 1 ? value / 10 : 0;
             long beforeReceipts = Convert.ToInt64(fixture.Query(
                 "SELECT count(*) FROM character_dungeon_drop_pickups WHERE character_id=$p0 AND receipt_format=1", peer.Id)[0][0]);
             peer.Send(43, pickup);
-            byte[] got = peer.Expect(0, 39).Body;
+            byte[] got;
+            try { got = peer.Expect(0, 39).Body; }
+            catch (InvalidOperationException exception)
+            {
+                throw new InvalidOperationException(
+                    $"正式逐件拾取失败：ground={ground}, item={itemId}, value={value}, ordinal={ordinal}", exception);
+            }
             That(U32(got, 0) == ground && U16(got, 4) == peer.Id, "逐件拾取回报本次实际地面与本人身份");
             if (itemId == 0)
             {
@@ -1500,11 +1708,11 @@ internal static partial class FormalDungeonTcpTests
                 for (int member = 0; member < 8; member++)
                 {
                     byte active = got[cursor++]; uint amount = U32(got, cursor); cursor += 4;
-                    That(active == (member == 0 ? 1 : 0) && amount == (member == 0 ? value : 0), "金币八成员分支保留实际金额");
+                    That(active == (member == 0 ? 1 : 0) && amount == (member == 0 ? value + extraGold : 0), "金币八成员分支保留含装备加成的实际金额");
                     if (active != 0)
                     {
-                        That(got[cursor++] == 1 && U32(got, cursor) == 0 && U32(got, cursor + 4) == 0,
-                            "无附加金币也进入保留地面上下文的扩展表现分支，不伪造奖金或公会基金");
+                        That(got[cursor++] == 1 && U32(got, cursor) == extraGold && U32(got, cursor + 4) == 0,
+                            "金币原生扩展携带实际装备附加额，零加成仍保留完整扩展且基金为零");
                         cursor += 8;
                     }
                 }
@@ -1522,6 +1730,37 @@ internal static partial class FormalDungeonTcpTests
                 int found = Enumerable.Range(0, materialSet[1]).Select(index => 2 + index * 8)
                     .Where(at => U32(materialSet, at) == itemId).DefaultIfEmpty(-1).First();
                 That(found >= 0 && U32(materialSet, found + 4) >= value, "账号材料拾取后563实发该项余额");
+                // 这些拾取调用均使用关闭2257的业务夹具；活动页未登记材料，仍须恢复资源中的攻坚材料槽。
+                That(fixture.Query("SELECT override_active FROM server_events WHERE event_id=2257") is [[long endless]] && endless == 0,
+                    "共用拾取夹具明确关闭材料日历活动，活动开启另由专用TCP覆盖");
+                var items = resources.ItemResources.Items;
+                int[] projected = items.RaidAccountMaterialLimits.Keys.Order()
+                    .Where(id => items.TryGet(id, out var material) && material.AccountMaterial is not null).ToArray();
+                if (projected.Length != 0)
+                {
+                    var balances = fixture.Query("""
+                        SELECT item_id,balance FROM account_material_balances
+                        WHERE account=(SELECT account FROM characters WHERE id=$p0)
+                        """, peer.Id).ToDictionary(row => Convert.ToInt32(row[0]), row => Convert.ToInt32(row[1]));
+                    foreach (byte list in new byte[] { 44, 45 })
+                    {
+                        int[] registered = projected.Where(id => items.Get(id).AccountMaterial!.CommonInventory == (list == 45)).ToArray();
+                        That(registered.Length <= (list == 44 ? 64 : 50), "日历模板按资源归属和原生容量固定槽序");
+                        int[] occupied = Enumerable.Range(0, registered.Length)
+                            .Where(slot => balances.GetValueOrDefault(registered[slot]) > 0).ToArray();
+                        byte[] expected = new byte[3 + 123 * occupied.Length];
+                        expected[0] = list;
+                        BinaryPrimitives.WriteUInt16LittleEndian(expected.AsSpan(1), checked((ushort)occupied.Length));
+                        for (int row = 0; row < occupied.Length; row++)
+                        {
+                            int slot = occupied[row], at = 3 + 123 * row, id = registered[slot];
+                            BinaryPrimitives.WriteUInt16LittleEndian(expected.AsSpan(at), checked((ushort)slot));
+                            BinaryPrimitives.WriteInt32LittleEndian(expected.AsSpan(at + 2), id);
+                            BinaryPrimitives.WriteInt32LittleEndian(expected.AsSpan(at + 6), balances[id]);
+                        }
+                        peer.Expect(0, 13, expected);
+                    }
+                }
                 foreach (ushort limitOpcode in new ushort[] { 1460, 1461 })
                 {
                     byte[] limits = peer.Expect(0, limitOpcode).Body;
@@ -1534,8 +1773,8 @@ internal static partial class FormalDungeonTcpTests
                 "集合拾取保留本次真实任务/普通死亡的持久成长来源，不借旧实例身份");
             That(Convert.ToInt64(fixture.Query("SELECT count(*) FROM character_dungeon_drop_pickups WHERE character_id=$p0 AND receipt_format=1", peer.Id)[0][0]) == beforeReceipts + 1,
                 "拾取与资产同事务保存一次当前格式的实际回执");
-            if (itemId == 0) That(Convert.ToInt64(fixture.Query("SELECT gold FROM characters WHERE id=$p0", peer.Id)[0][0]) - beforeGold == value,
-                "金币地面与实际余额增量一致，不制造背包UID");
+            if (itemId == 0) That(Convert.ToInt64(fixture.Query("SELECT gold FROM characters WHERE id=$p0", peer.Id)[0][0]) - beforeGold == value + extraGold,
+                "金币原地面金额加称号实际增量与数据库一致，不制造背包UID");
             else if (CurrencyWallet.RewardKind(checked((int)itemId)) is { } currency)
             {
                 var audit = fixture.Query("SELECT balance_after-balance_before FROM currency_audit_log WHERE character_id=$p0 AND currency_kind=$p1 ORDER BY audit_id DESC LIMIT 1",
@@ -1708,6 +1947,7 @@ internal static partial class FormalDungeonTcpTests
                     }
                     else Bytes(death.AsSpan(tail).ToArray(),[0,0,255,0,0],"普通死亡不混入Boss坐标更新");
                     peer.Expect(0,37);
+                    ExpectAdventureProgress(fixture, resources, peer);
                     if (template == 1077)
                     {
                         That(map[at+13] == 3 && current == goal && advances == 2,"两次dummy标记推进后才抵达唯一真Boss");

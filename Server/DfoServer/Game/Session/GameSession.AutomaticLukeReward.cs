@@ -23,7 +23,10 @@ internal sealed partial class GameSession
         RaidRewardOffer offer, ILukeRewardRecoveryStore store, Func<AccountOwners.Lease, ushort, Character?> load,
         ItemCatalog items, GoldLimitCatalog gold, EpicPieceCatalog pieces, DateTimeOffset now) => owner.Execute(() =>
     {
-        if (HasPendingInventoryCommit) return (false, (InventoryResult?)null, (PreparedRaidReward?)null);
+        if (HasPendingInventoryCommit || eligibility.RaidType == RaidKind.Prey &&
+            (eligibility.Source is not (PreyGuideRewards.Source or PreyGuideRewards.TeamSource) ||
+                offer.Kind is not (0 or 1) || offer.Card != 0))
+            return (false, (InventoryResult?)null, (PreparedRaidReward?)null);
         var before = Selected;
         var target = before?.Id == eligibility.Character ? before : load(owner, eligibility.Character);
         if (target is null) return (false, (InventoryResult?)null, (PreparedRaidReward?)null);

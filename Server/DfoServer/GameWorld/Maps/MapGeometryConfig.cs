@@ -7,7 +7,7 @@ using PvfLib;
 namespace DfoServer.GameWorld.Maps;
 
 // 同一份world文件供客户端及服务端读取；仅派生目录数据，不改写归档或角色状态。
-internal sealed class MapGeometryConfig
+internal sealed partial class MapGeometryConfig
 {
     private sealed record Atom(byte Kind, int Number, string? Text);
     private sealed record Rule(string Id, string Tag, int Occurrence, Atom[][] From, Atom[] To, string Kind);
@@ -15,16 +15,28 @@ internal sealed class MapGeometryConfig
     private readonly Dictionary<string, string> aliases;
     private readonly Dictionary<string, int> stringIds;
     private readonly Dictionary<int, string> strings;
+    private IReadOnlyDictionary<string, DungeonCollisionPlan> collisionPlans = new Dictionary<string, DungeonCollisionPlan>(StringComparer.Ordinal);
+    internal IReadOnlyDictionary<string, DungeonCollisionPlan> CollisionPlans => collisionPlans;
     public static MapGeometryConfig Empty { get; } = new([],[]);
-    public IReadOnlyCollection<string> Paths => maps.Keys;
+    public IReadOnlyCollection<string> Paths => maps.Keys.Concat(collisionPlans.Keys).Distinct(StringComparer.Ordinal).ToArray();
     public IReadOnlyDictionary<string, string> Aliases => aliases;
+    // 只为原入口的两种加载名建立同源能力，不放宽其他地图的缺失检查。
+    internal string? EpicRoadEntrySource(string path)
+    {
+        const string canonical = "map/common/gate_seria.map", regional = "map/common/(r)gate_seria.map";
+        if (path != canonical || !maps.TryGetValue(canonical, out var left) || !maps.TryGetValue(regional, out var right) ||
+            left.Length != 1 || right.Length != 1 || left[0].Kind != "epic_road_npc_restore" || right[0].Kind != "epic_road_npc_restore" ||
+            !left[0].To.SequenceEqual(right[0].To) || !Enumerable.Range(0, 3).All(i => left[0].From[i].SequenceEqual(right[0].From[i])))
+            return null;
+        return regional;
+    }
     internal IEnumerable<(string Missing, string Empty)> ExtensionRepairs()
     {
         foreach (var row in maps)
-            foreach (var rule in row.Value.Where(rule => rule.Kind == "dungeon_ext_tilefiles_repair"))
+            foreach (var rule in row.Value.Where(rule => rule.Kind is "dungeon_ext_tilefiles_repair" or "native_ext_tilefiles"))
             {
-                int slot = RepairSlot(rule.From[0],rule.To);
-                yield return (ResolveReference(row.Key,rule.From[0][slot].Text!),ResolveReference(row.Key,rule.To[slot].Text!));
+                foreach (int slot in rule.Kind == "dungeon_ext_tilefiles_repair" ? [RepairSlot(rule.From[0],rule.To)] : NativeRepairSlots(row.Key,rule,aliases))
+                    yield return (ResolveReference(row.Key,rule.From[0][slot].Text!),ResolveReference(row.Key,rule.To[slot].Text!));
             }
     }
     internal static bool EmptyExtendedTile(IReadOnlyList<PvfToken> tokens, Func<int,string> resolve) =>
@@ -48,13 +60,14 @@ internal sealed class MapGeometryConfig
     {
         path = Normalize(path);
         if (path.EndsWith(".til",StringComparison.Ordinal)) return "DCT1";
-        if (maps.TryGetValue(path,out var anchored) && anchored.Any(rule => MapGeometrySignature.AnchorTags.Contains(rule.Tag))) return "DCG3";
-        return maps.TryGetValue(path,out var rules) && rules.Any(rule => rule.Tag is "[tile]" or "[tile files]" or "[tile map]" or "[pathgate pos]" or "[pathgate recognize range]" or "[dungeon movable area]") ? "DCG2" : "DCG1";
+        if (collisionPlans.ContainsKey(path)) return "DCG4";
+        if (maps.TryGetValue(path,out var anchored) && anchored.Any(rule => MapGeometrySignature.AnchorTags.Contains(rule.Tag) || rule.Kind == "native_anchor_restore")) return "DCG3";
+        return maps.TryGetValue(path,out var rules) && rules.Any(rule => rule.Kind == "native_geometry_restore" || rule.Tag is "[tile]" or "[tile files]" or "[tile map]" or "[pathgate pos]" or "[pathgate recognize range]" or "[dungeon movable area]") ? "DCG2" : "DCG1";
     }
     private static (int Stride, int X, int Strings) AnchorLayout(string kind) => kind switch
     {
-        "dungeon_animation5" => (5,2,3),
-        "dungeon_passive4" => (4,1,0),
+        "dungeon_animation5" or "dungeon_tent_animation5" => (5,2,3),
+        "dungeon_passive4" or "dungeon_tent_passive4" => (4,1,0),
         "dungeon_monster10_fixed_normal" => (10,3,(1 << 8) | (1 << 9)),
         "dungeon_ai8" => (8,1,(1 << 4) | (1 << 5)),
         "dungeon_ai10_npc_monster_boss" => (10,1,(1 << 4) | (1 << 5) | (1 << 7)),
@@ -64,6 +77,7 @@ internal sealed class MapGeometryConfig
     };
     private static void ValidateAnchor(string kind, Atom[] before, Atom[] after)
     {
+        if (TentKind(kind)) { ValidateTentRecord(kind,before,after); return; }
         var layout = AnchorLayout(kind);
         if (before.Length == 0 || before.Length != after.Length || before.Length % layout.Stride != 0)
             throw new InvalidDataException("World anchor record shape");
@@ -89,9 +103,26 @@ internal sealed class MapGeometryConfig
                 throw new InvalidDataException("World anchor NPC AI tail");
         }
     }
-    private static void ValidateAnimationAppend(Atom[] before, Atom[] after)
+
+    private static void ValidateEpicRoadNpc(Atom[] before, Atom[] after)
     {
+        Atom[] original = [new(0,400001102,null),new(6,0,"[right]"),new(0,535,null),new(0,165,null),new(0,0,null)];
         if (before.Length == 0 || before.Length % 5 != 0 || after.Length != before.Length + 5 ||
+            !before.SequenceEqual(after.Take(before.Length)) || !original.SequenceEqual(after.Skip(before.Length)))
+            throw new InvalidDataException("World epic NPC restore must preserve prefix and original placement");
+        for (int at = 0; at < before.Length; at += 5)
+        {
+            if (before[at].Kind != 0 || before[at].Number < 0 || before[at].Number == 400001102 ||
+                before[at + 1].Kind != 6 || before[at + 1].Text is not ("[left]" or "[right]"))
+                throw new InvalidDataException("World epic NPC restore source identity");
+            for (int n = 2; n < 5; n++)
+                if (before[at + n].Kind != 0 || before[at + n].Number is < -1048576 or > 1048576)
+                    throw new InvalidDataException("World epic NPC restore source coordinates");
+        }
+    }
+    private static void ValidateAnimationAppend(Atom[] before, Atom[] after, bool town = false)
+    {
+        if (before.Length == 0 || before.Length % 5 != 0 || after.Length != before.Length + (town ? 10 : 5) ||
             !before.SequenceEqual(after.Take(before.Length)))
             throw new InvalidDataException("World animation append prefix/shape");
         for (int at = 0; at < after.Length; at += 5)
@@ -99,14 +130,21 @@ internal sealed class MapGeometryConfig
                 if (after[at + n].Kind != (n < 2 ? 6 : 0) ||
                     n >= 2 && after[at + n].Number is < -1048576 or > 1048576)
                     throw new InvalidDataException("World animation append record kind/range");
-        int target = before.Length;
-        if (after[target + 2].Number != 1008)
-            throw new InvalidDataException("World animation append target X");
-        bool source = false;
-        for (int at = 0; at < before.Length; at += 5)
-            if (before[at + 2].Number == 784 && Enumerable.Range(0,5).All(n =>
-                n == 2 || before[at + n] == after[target + n])) source = true;
-        if (!source) throw new InvalidDataException("World animation append source identity");
+        for (int added = before.Length; added < after.Length; added += 5)
+        {
+            bool source = false;
+            for (int at = 0; at < before.Length; at += 5)
+            {
+                int donorX = before[at + 2].Number;
+                int targetX = town ? donorX switch { 771 => 995, 664 => 888, _ => int.MinValue } : donorX == 784 ? 1008 : int.MinValue;
+                if (targetX != int.MinValue && after[added + 2].Number == targetX && Enumerable.Range(0,5).All(n =>
+                    n == 2 || before[at + n] == after[added + n])) source = true;
+            }
+            if (!source) throw new InvalidDataException("World animation append source identity");
+            for (int at = 0; at < added; at += 5)
+                if (after.AsSpan(at,5).SequenceEqual(after.AsSpan(added,5)))
+                    throw new InvalidDataException("World animation append duplicate");
+        }
     }
     private MapGeometryConfig(Dictionary<string, Rule[]> maps, Dictionary<string, string> aliases)
     {
@@ -140,7 +178,7 @@ internal sealed class MapGeometryConfig
         int nodes = 0;
         ValidateJson(doc.RootElement, ref nodes);
         var root = doc.RootElement;
-        Keys(root, "schema", "layer", "rules", "aliases");
+        Keys(root, "schema", "layer", "rules", "aliases", "collision_plans");
         if (root.GetProperty("schema").GetInt32() != 1 || Text(root, "layer") != "world") throw new InvalidDataException("World schema/layer");
         var rows = root.GetProperty("rules");
         if (rows.ValueKind != JsonValueKind.Array || rows.GetArrayLength() > 32768) throw new InvalidDataException("World rule budget");
@@ -162,7 +200,9 @@ internal sealed class MapGeometryConfig
         var ids = new HashSet<string>(StringComparer.Ordinal);
         foreach (var row in rows.EnumerateArray())
         {
-            Keys(row, "id", "enabled", "map", "kind", "tag", "occurrence", "first", "last", "left", "right", "from", "to");
+            if (Text(row,"kind") == "native_geometry_restore")
+                Keys(row, "id", "enabled", "map", "kind", "tag", "occurrence", "first", "last", "left", "right", "from", "to", "original_section_present", "section_closed");
+            else Keys(row, "id", "enabled", "map", "kind", "tag", "occurrence", "first", "last", "left", "right", "from", "to");
             string id = Text(row, "id");
             if (id.Length == 0 || Encoding.UTF8.GetByteCount(id) > 128 || !ids.Add(id)) throw new InvalidDataException("World duplicate rule identity");
             if (!row.GetProperty("enabled").GetBoolean()) continue;
@@ -176,6 +216,7 @@ internal sealed class MapGeometryConfig
                 ("town_gate", "[town movable area]") => 6,
                 ("walk_area", "[virtual movable area]") => 4,
                 ("npc_position", "[npc]") => 5,
+                ("epic_road_npc_restore", "[npc]") => 5,
                 ("gate_points8", "[pathgate pos]") => 8,
                 ("gate_recognize8", "[pathgate recognize range]") => 8,
                 ("tile_pass14", "[pass type]") => 14,
@@ -187,8 +228,10 @@ internal sealed class MapGeometryConfig
                 ("dungeon_ext_tilemap", "[tile map]") => 1,
                 ("dungeon_ext_tilemap3", "[tile map]") => 1,
                 ("dungeon_animation5", "[animation]") => 5,
-                ("dungeon_animation5_append", "[animation]") => 5,
+                ("dungeon_tent_animation5", "[animation]") => 5,
+                ("dungeon_animation5_append" or "town_animation5_append", "[animation]") => 5,
                 ("dungeon_passive4", "[passive object]") => 4,
+                ("dungeon_tent_passive4", "[passive object]") => 4,
                 ("dungeon_monster10_fixed_normal", "[monster]") => 10,
                 ("dungeon_ai8", "[ai character]") => 8,
                 ("dungeon_ai10_npc_monster_boss", "[ai character]") => 10,
@@ -197,22 +240,41 @@ internal sealed class MapGeometryConfig
                 ("dungeon_movable_xywh3", "[dungeon movable area]") => 4,
                 ("dungeon_virtual_xywh1", "[virtual movable area]") => 4,
                 ("dungeon_virtual_xywh4_append", "[virtual movable area]") => 4,
+                ("native_tiles", "[tile]") => 1,
+                ("native_ext_tilefiles" or "native_ext_tilefiles_clone", "[tile files]") => 2,
+                ("native_ext_tilemap", "[tile map]") => 1,
+                ("native_geometry_restore", "[force map width]" or "[virtual movable area]") => 1,
+                ("native_anchor_restore", "[animation]" or "[passive object]" or "[monster]" or "[ai character]" or "[event monster position]" or "[special passive object]" or "[dungeon movable area]") => 1,
                 _ => throw new InvalidDataException("World mechanism has no verified record adapter")
             };
             var from = Profiles(row.GetProperty("from"));
             var to = Profiles(row.GetProperty("to"));
+            if (kind == "epic_road_npc_restore" && (occurrence != 0 ||
+                path is not ("map/common/gate_seria.map" or "map/common/(r)gate_seria.map")))
+                throw new InvalidDataException("World epic NPC restore map/occurrence");
             if (!to[0].SequenceEqual(to[1]) || !to[0].SequenceEqual(to[2])) throw new InvalidDataException("Ratio-dependent world geometry");
             bool gate = kind is "gate_points8" or "gate_recognize8", tile = kind == "tile_pass14";
             bool anchor = AnchorLayout(kind).Stride != 0, metadata = kind is "dungeon_movable_xywh3" or "dungeon_virtual_xywh1" or "dungeon_virtual_xywh4_append";
-            bool dungeon = kind is "dungeon_tiles" or "dungeon_tiles3" or "dungeon_tiles1" or "dungeon_ext_tilefiles" or "dungeon_ext_tilefiles_repair" or "dungeon_ext_tilemap" or "dungeon_ext_tilemap3" or "dungeon_animation5_append";
-            if ((metadata || anchor || gate || tile || dungeon) && occurrence != 0)
+            bool dungeon = kind is "dungeon_tiles" or "dungeon_tiles3" or "dungeon_tiles1" or "dungeon_ext_tilefiles" or "dungeon_ext_tilefiles_repair" or "dungeon_ext_tilemap" or "dungeon_ext_tilemap3" or "dungeon_animation5_append" or "town_animation5_append";
+            bool native = IsNativeRestore(kind);
+            if (kind == "native_geometry_restore")
+            {
+                if (from.Any(values => !values.SequenceEqual(from[0])))
+                    throw new InvalidDataException("World native geometry requires common physical source");
+                if (row.TryGetProperty("original_section_present",out var present) && present.GetBoolean() != (to[0].Length != 0) ||
+                    row.TryGetProperty("section_closed",out var closed) && closed.GetBoolean() != (tag == "[virtual movable area]"))
+                    throw new InvalidDataException("World native geometry section contract");
+            }
+            if ((metadata || anchor || gate || tile || dungeon || native) && occurrence != 0)
                 throw new InvalidDataException("World dungeon/grid adapter requires the unique first record");
-            if ((metadata || anchor || gate || dungeon) && !path.EndsWith(".map",StringComparison.Ordinal) ||
+            if ((metadata || anchor || gate || dungeon || native) && !path.EndsWith(".map",StringComparison.Ordinal) ||
                 tile && (!path.EndsWith(".til",StringComparison.Ordinal) || !aliases.ContainsKey(path)))
                 throw new InvalidDataException("World mechanism resource kind/alias");
             foreach (var before in from)
             {
-                if (kind == "dungeon_animation5_append") { ValidateAnimationAppend(before,to[0]); continue; }
+                if (native) { ValidateNativeRecord(path,kind,tag,before,to[0]); continue; }
+                if (kind == "epic_road_npc_restore") { ValidateEpicRoadNpc(before,to[0]); continue; }
+                if (kind is "dungeon_animation5_append" or "town_animation5_append") { ValidateAnimationAppend(before,to[0],kind == "town_animation5_append"); continue; }
                 if (anchor) { ValidateAnchor(kind,before,to[0]); continue; }
                 if (metadata)
                 {
@@ -291,23 +353,33 @@ internal sealed class MapGeometryConfig
             throw new InvalidDataException("World alias requires guarded pass grid");
         foreach (var row in result)
         {
+            ValidateTentPlan(row.Value);
             ValidateExtendedRecipe(row.Key,row.Value,aliases);
+            ValidateVisibleExtensionClone(row.Key,row.Value,aliases,result);
             if (row.Value.Any(rule => rule.Kind is "dungeon_animation5_append" or "dungeon_virtual_xywh1") && row.Value.Count(rule => rule.Kind == "dungeon_tiles") != 1)
                 throw new InvalidDataException("World animation append requires the same map four-to-five tile root");
+            if (row.Value.Any(rule => rule.Kind == "town_animation5_append") &&
+                (row.Key != "map/town/metrocenter/metro_time_waiting.map" || row.Value.Count(rule => rule.Kind == "town_gate") != 1 || row.Value.Count(rule => rule.Kind == "walk_area") != 1))
+                throw new InvalidDataException("World town animation requires metro town geometry");
             if (row.Value.Any(rule => rule.Kind == "dungeon_virtual_xywh4_append") && row.Value.Count(rule => rule.Kind == "dungeon_tiles3") != 1)
                 throw new InvalidDataException("World four virtual rectangles require the same map three-to-five tile root");
         }
         foreach (var row in result)
-            foreach (var repair in row.Value.Where(rule => rule.Kind == "dungeon_ext_tilefiles_repair"))
+            foreach (var repair in row.Value.Where(rule => rule.Kind is "dungeon_ext_tilefiles_repair" or "native_ext_tilefiles"))
             {
-                string target = ResolveReference(row.Key,repair.To[RepairSlot(repair.From[0],repair.To)].Text!);
-                if (!aliases.ContainsKey(target) || !result.TryGetValue(target,out var guarded) || guarded.Count != 1)
-                    throw new InvalidDataException("World repaired extension alias missing");
-                var pass = guarded[0];
-                if (pass.Kind != "tile_pass14" || pass.To.Length < 140 || pass.From.Any(before => !before.SequenceEqual(pass.To) || before.Any(atom => atom.Kind != 0 || atom.Number != 2)))
-                    throw new InvalidDataException("World repaired extension must preserve all-blocked source");
+                foreach (int slot in repair.Kind == "dungeon_ext_tilefiles_repair" ? [RepairSlot(repair.From[0],repair.To)] : NativeRepairSlots(row.Key,repair,aliases))
+                {
+                    string target = ResolveReference(row.Key,repair.To[slot].Text!);
+                    if (!aliases.ContainsKey(target) || !result.TryGetValue(target,out var guarded) || guarded.Count != 1)
+                        throw new InvalidDataException("World repaired extension alias missing");
+                    var pass = guarded[0];
+                    if (pass.Kind != "tile_pass14" || pass.To.Length < 140 || pass.From.Any(before => !before.SequenceEqual(pass.To) || before.Any(atom => atom.Kind != 0 || atom.Number != 2)))
+                        throw new InvalidDataException("World repaired extension must preserve all-blocked source");
+                }
             }
-        return new(result.ToDictionary(pair => pair.Key, pair => pair.Value.ToArray(), StringComparer.Ordinal),aliases);
+        var config = new MapGeometryConfig(result.ToDictionary(pair => pair.Key, pair => pair.Value.ToArray(), StringComparer.Ordinal),aliases);
+        if (root.TryGetProperty("collision_plans", out var collisionRows)) config.collisionPlans = DungeonCollisionPlan.Parse(collisionRows, Normalize);
+        return config;
     }
 
     public PvfToken[] Apply(string path, PvfToken[] input, Func<int, string> resolve)
@@ -317,6 +389,38 @@ internal sealed class MapGeometryConfig
         var writes = new List<(int At, int Length, PvfToken[] Tokens)>();
         foreach (var rule in rules)
         {
+            if (rule.Kind == "native_geometry_restore")
+            {
+                string close = "[/" + rule.Tag[1..];
+                bool closed = rule.Tag == "[virtual movable area]";
+                int opens = 0, closes = 0, start = -1;
+                for (int i = 0; i < input.Length; ++i)
+                    if (input[i].Type == 3)
+                    {
+                        string tag = Resolve(input[i].Value);
+                        if (tag.Equals(rule.Tag,StringComparison.OrdinalIgnoreCase)) { ++opens; start = i; }
+                        if (tag.Equals(close,StringComparison.OrdinalIgnoreCase)) ++closes;
+                    }
+                // 空目标表示整个新增段不存在，孤立闭标签不能当作已恢复成功。
+                if (opens == 0)
+                {
+                    if (rule.To.Length == 0 && closes == 0) continue;
+                    throw new InvalidDataException($"World native geometry tag missing: {path} {rule.Id}");
+                }
+                if (opens != 1 || closes != (closed ? 1 : 0))
+                    throw new InvalidDataException("World native geometry section duplicated or unbalanced");
+                int stop = start + 1;
+                while (stop < input.Length && input[stop].Type != 3) ++stop;
+                if (closed && (stop == input.Length || !Resolve(input[stop].Value).Equals(close,StringComparison.OrdinalIgnoreCase)))
+                    throw new InvalidDataException("World native geometry closure mismatch");
+                bool Match(Atom[] values) => values.Length == stop - start - 1 &&
+                    values.Select((atom,index) => input[start + 1 + index].Type == atom.Kind && input[start + 1 + index].Value == atom.Number).All(value => value);
+                if (rule.To.Length != 0 && Match(rule.To)) continue;
+                if (!Match(rule.From[0])) throw new InvalidDataException($"Unmatched native geometry endpoint: {path} {rule.Id}");
+                var nativeReplacement = rule.To.Select(atom => new PvfToken(0,atom.Number)).ToArray();
+                writes.Add(rule.To.Length == 0 ? (start,stop - start + (closed ? 1 : 0),nativeReplacement) : (start + 1,stop - start - 1,nativeReplacement));
+                continue;
+            }
             if ((rule.Tag is "[pathgate pos]" or "[pathgate recognize range]" or "[pass type]" or "[tile]" or "[tile files]" or "[tile map]") &&
                 input.Count(token => token.Type == 3 && Resolve(token.Value).Equals(rule.Tag,StringComparison.OrdinalIgnoreCase)) != 1)
                 throw new InvalidDataException("World dungeon/grid tag missing or duplicated");
@@ -326,7 +430,7 @@ internal sealed class MapGeometryConfig
                 { begin = i + 1; break; }
             if (begin < 0) throw new InvalidDataException($"Unmatched world tag: {path} {rule.Id}");
             for (int i = begin; i < input.Length; ++i) if (input[i].Type == 3) { end = i; break; }
-            if (MapGeometrySignature.AnchorTags.Contains(rule.Tag) || rule.Kind is "dungeon_movable_xywh3" or "dungeon_virtual_xywh1" or "dungeon_virtual_xywh4_append")
+            if (MapGeometrySignature.AnchorTags.Contains(rule.Tag) || rule.Kind is "dungeon_movable_xywh3" or "dungeon_virtual_xywh1" or "dungeon_virtual_xywh4_append" or "epic_road_npc_restore" || rule.Kind == "native_anchor_restore" && rule.Tag == "[dungeon movable area]")
             {
                 string close = "[/" + rule.Tag[1..];
                 if (end == input.Length || Resolve(input[end].Value).ToLowerInvariant() != close ||
@@ -391,13 +495,35 @@ internal sealed class MapGeometryConfig
     public string ReadText(PvfArchive pvf, string path)
     {
         string text = pvf.ReadText(SourcePath(pvf,path));
+        if (!maps.ContainsKey(Normalize(path))) return text;
+        return ApplyText(path,text,pvf.ReadTokens(SourcePath(pvf,path)),pvf.ResolveString);
+    }
+
+    internal string ApplyText(string path, string text, PvfToken[] input, Func<int,string> resolve)
+    {
         if (!maps.TryGetValue(Normalize(path), out var rules)) return text;
         // 先按无损token验证所有守卫；城镇旧文本解析只替换已核实的完整几何段。
-        _ = ReadTokens(pvf, path);
+        _ = Apply(path,input,resolve);
         var writes = new List<(int At, int Length, string Text)>();
         foreach (var rule in rules)
         {
             var matches = Regex.Matches(text, @"(?m)^" + Regex.Escape(rule.Tag) + @"\r?$", RegexOptions.IgnoreCase);
+            if (rule.Kind == "native_geometry_restore" && rule.To.Length == 0)
+            {
+                if (matches.Count == 0) continue;
+                if (matches.Count != 1) throw new InvalidDataException("World native text section duplicated");
+                int start = matches[0].Index, bodyStart = start + matches[0].Length;
+                var following = Regex.Match(text[bodyStart..], @"(?m)^\[");
+                int stop = following.Success ? bodyStart + following.Index : text.Length;
+                if (rule.Tag == "[virtual movable area]")
+                {
+                    var closing = Regex.Match(text[stop..], @"^" + Regex.Escape("[/" + rule.Tag[1..]) + @"\r?(?:\n|$)",RegexOptions.IgnoreCase);
+                    if (!closing.Success) throw new InvalidDataException("World native text closure mismatch");
+                    stop += closing.Length;
+                }
+                writes.Add((start,stop - start,""));
+                continue;
+            }
             if (rule.Occurrence >= matches.Count) throw new InvalidDataException("World text/token tag mismatch");
             int begin = matches[rule.Occurrence].Index + matches[rule.Occurrence].Length;
             var next = Regex.Match(text[begin..], @"(?m)^\[");
@@ -412,7 +538,7 @@ internal sealed class MapGeometryConfig
     private static string Normalize(string path)
     {
         path = path.Replace('\\', '/').ToLowerInvariant();
-        if (!path.StartsWith("map/", StringComparison.Ordinal) || Encoding.UTF8.GetByteCount(path) > 480 || path.Contains("..", StringComparison.Ordinal) || path.Contains(':') || path.Contains('\0'))
+        if (!path.StartsWith("map/", StringComparison.Ordinal) || Encoding.UTF8.GetByteCount(path) > 480 || path.Split('/').Contains("..", StringComparer.Ordinal) || path.Contains(':') || path.Contains('\0'))
             throw new InvalidDataException("World resource path");
         return path;
     }
@@ -445,6 +571,11 @@ internal sealed class MapGeometryConfig
 
     private static void ValidateExtendedRecipe(string path, List<Rule> rules, Dictionary<string,string> aliases)
     {
+        if (rules.Any(rule => rule.Kind is "native_ext_tilefiles" or "native_ext_tilefiles_clone" or "native_ext_tilemap"))
+        {
+            ValidateNativeExtendedRecipe(rules);
+            return;
+        }
         var fileRules = rules.Where(rule => rule.Tag == "[tile files]").ToArray();
         var mapRules = rules.Where(rule => rule.Tag == "[tile map]").ToArray();
         if (fileRules.Length == 0 && mapRules.Length == 0) return;

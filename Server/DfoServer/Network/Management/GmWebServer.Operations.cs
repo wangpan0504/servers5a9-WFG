@@ -1,4 +1,4 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -135,6 +135,12 @@ internal static partial class GmWebServer
             if (!TitleSpec.IsMatch(b.Spec ?? "")) return Bad("成就范围无效");
             return await RunReturning(http, data, "title-complete", b.Account, b.Name, $"account {b.Account} title-complete {b.Name} {b.Spec}", b.ReturnFirst == true, Snapshot(b.Account, b.Name));
         });
+        app.MapPost("/api/npc-favor/max", (HttpContext http, NameBody b) =>
+        {
+            if (Invalid(b.Account, b.Name, b.Confirm) is { } bad) return bad;
+            return Run(http, data, "npc-favor-max", b.Account, b.Name,
+                $"account {b.Account} npc-favor-max {b.Name}", null);
+        });
         // 扩展装备栏：flags 只能由 1 辅助装备、2 魔法石、16 耳环按位或组成，只增不减；写角色标志须在选角界面，returnFirst 先强制小退。
         app.MapPost("/api/equip-slots", async (HttpContext http, EquipSlotsBody b) =>
         {
@@ -149,6 +155,18 @@ internal static partial class GmWebServer
             if (!Token.IsMatch(b.Account)) return Bad("账号无效");
             if (b.Confirm != true) return Bad("需要二次确认");
             return Run(http, data, "weekly-entry-reset", b.Account, "*", $"account {b.Account} weekly-entry-reset", null);
+        });
+        app.MapPost("/api/fatigue-battery-fill", (HttpContext http, KickBody b) =>
+        {
+            if (b.Confirm != true || string.IsNullOrEmpty(b.Account) || !Token.IsMatch(b.Account))
+                return Bad("需要有效账号与确认");
+            return Run(http, data, "fatigue-battery-fill", b.Account, "*", $"account {b.Account} fatigue-battery-fill", null);
+        });
+        app.MapPost("/api/dungeon-limit-reset", (HttpContext http, KickBody b) =>
+        {
+            if (b.Confirm != true || string.IsNullOrEmpty(b.Account) || !Token.IsMatch(b.Account))
+                return Bad("需要有效账号与二次确认");
+            return Run(http, data, "dungeon-limit-reset", b.Account, "*", $"account {b.Account} dungeon-limit-reset", null);
         });
         app.MapPost("/api/reward-limit-reset", (HttpContext http, KickBody b) =>
         {

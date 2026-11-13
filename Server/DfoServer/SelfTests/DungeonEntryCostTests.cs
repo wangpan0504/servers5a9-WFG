@@ -11,6 +11,7 @@ using DfoServer.GameWorld.Items;
 using DfoServer.GameWorld.Quests;
 using DfoServer.GameWorld.Towns;
 using PvfLib;
+using Microsoft.Data.Sqlite;
 using static DfoServer.Testing.TestCheck;
 
 namespace DfoServer;
@@ -27,14 +28,93 @@ internal static class DungeonEntryCostTests
         System.Collections.Immutable.ImmutableArray<CosmoPassCost> Parse(params int[] values) => CosmoPassCost.Parse(
             [new(3,1),.. values.Select(v=>new PvfToken(0,v)),new(3,2)],
             id=>id==1?"[hell cosmo freepass item]":"[/hell cosmo freepass item]");
-        That(Parse(100,1,-1,0,200,1,-1,2).SequenceEqual([new CosmoPassCost(100,1,0),new(200,1,2)]),
-            "超星空通行证四元组保留券数量和额外灵石，不把星空券当全免票");
+        That(Parse(100,1,-1,0,200,1,-1,2).SequenceEqual([
+                new CosmoPassCost(100,1,0),new(200,1,2),
+                new(CosmoPassCost.DailyAttendanceStarPass,1,2),new(CosmoPassCost.DailyAttendanceCosmoPass,1,0)]) &&
+            Parse(CosmoPassCost.DailyAttendanceStarPass,1,-1,2,CosmoPassCost.DailyAttendanceCosmoPass,1,-1,0).SequenceEqual([
+                new CosmoPassCost(CosmoPassCost.DailyAttendanceStarPass,1,2),new(CosmoPassCost.DailyAttendanceCosmoPass,1,0)]),
+            "超星空通行证四元组保留券数量和额外灵石，补充日签到星空/超星空通行证且不重复添加");
         foreach(var malformed in new[] {new[]{100,1,-1},new[]{100,0,-1,0},new[]{100,1,0,0},
             new[]{100,1,-1,-1},new[]{100,1,-1,0,100,1,-1,2}})
             Reject<InvalidDataException>(()=>Parse(malformed),"通行证残缺、零数量、未确认附加条件及重复条目拒绝");
         PartyEntryTransaction();
+        DaybreakPass();
         DazzlementTowerAdmissionTests.RunCore();
-        Console.WriteLine($"PASS {Count-checks} 超星空通行证声明边界断言");
+        Console.WriteLine($"PASS {Count-checks} 副本入场费用声明与抵料边界断言");
+    }
+
+    static void DaybreakPass()
+    {
+        DaybreakPass(490011739);
+        DaybreakPass(490013045);
+        var now = DateTimeOffset.Parse("2026-11-12T00:00:00Z");
+        var pieces = new EpicPieceCatalog("[piece list]\n1 2\n[/piece list]");
+        var required = new DungeonRequiredItem(10161610, 20, 1);
+        var fatiguePass = new InventoryItem(71, new(InventoryListType.Main, 122), new(490011739, ItemKind.Material, 1));
+        var attendancePass = new InventoryItem(72, new(InventoryListType.Main, 121), new(490013045, ItemKind.Material, 1));
+        That(DaybreakEntryCost.Select(530, required, new([attendancePass, fatiguePass]), pieces, now) ==
+            new DungeonRequiredItem(490011739, 1, 1), "两券并存时保留原疲劳商店券优先的兼容选择，不按新券槽位抢先");
+        foreach (var unavailable in new[]
+        {
+            fatiguePass with { Core = fatiguePass.Core with { EquipmentLockId = 1 } },
+            fatiguePass with { Core = fatiguePass.Core with { ExpireTime = (int)now.ToUnixTimeSeconds() } },
+            fatiguePass with { Position = new(InventoryListType.PersonalCargo, 0) },
+        })
+            That(DaybreakEntryCost.Select(530, required, new([unavailable, attendancePass]), pieces, now) ==
+                new DungeonRequiredItem(490013045, 1, 1), "旧券不可支付时选择有效签到券的实际ID，不回退芽或消费旧券");
+    }
+
+    static void DaybreakPass(int passItemId)
+    {
+        var now = DateTimeOffset.Parse("2026-11-09T00:00:00Z");
+        var pieces = new EpicPieceCatalog("[piece list]\n1 2\n[/piece list]");
+        var required = new DungeonRequiredItem(10161610, 20, 1);
+        var pass = new InventoryItem(71, new(InventoryListType.Main, 121), new(passItemId, ItemKind.Material, 2));
+        var buds = new InventoryItem(72, new(InventoryListType.Main, 122), new(10161610, ItemKind.Material, 20));
+        var mixed = new InventorySnapshot([pass, buds]);
+        var selected = DaybreakEntryCost.Select(530, required, mixed, pieces, now)!;
+        var payment = InventoryMaterialConsumptionService.Plan(mixed, [new(selected.ItemId, selected.Count)], pieces, now);
+        That(selected == new DungeonRequiredItem(passItemId, 1, 1) && payment.Plan is { } plan &&
+            plan.After.Items.SequenceEqual([pass with { Core = pass.Core with { Value = 1 } }, buds]) &&
+            plan.ChangedSlots.SequenceEqual([pass.Position]) && mixed.Items.SequenceEqual([pass, buds]),
+            "黎明券优先于材料，规划只扣一张原UID券，保留芽及原始快照");
+        That(DaybreakEntryCost.Select(530, required, new([pass]), pieces, now) == selected,
+            "只有有效通行证时仍能选择抵料费用");
+        That(DaybreakEntryCost.Select(530, required,
+                new([pass with { Core = pass.Core with { ExpireTime = (int)now.ToUnixTimeSeconds() + 1 } }]), pieces, now) == selected &&
+            DaybreakEntryCost.Select(530, required,
+                new([pass with { Position = new(InventoryListType.AccountCommon, 0) }]), pieces, now) == selected,
+            "到期前一秒及账号公共背包中的券仍沿统一材料规划可用");
+        That(!InventoryMaterialConsumptionService.Plan(new([buds]), [new(selected.ItemId, selected.Count)], pieces, now).Accepted &&
+            !InventoryMaterialConsumptionService.Plan(new([pass with { Core = pass.Core with { ExpireTime = (int)now.ToUnixTimeSeconds() } }, buds]),
+                [new(selected.ItemId, selected.Count)], pieces, now).Accepted,
+            "已冻结的券费用在提交时缺券或到期则拒绝，不悄悄改扣普通材料");
+        foreach (var unavailable in new[]
+        {
+            pass with { Core = pass.Core with { EquipmentLockId = 1 } },
+            pass with { Core = pass.Core with { ExpireTime = (int)now.ToUnixTimeSeconds() } },
+            pass with { Position = new(InventoryListType.PersonalCargo, 0) },
+            pass with { Position = new(InventoryListType.AccountCargo, 0) },
+        })
+        {
+            That(DaybreakEntryCost.Select(530, required, new([unavailable, buds]), pieces, now) == required,
+                "锁定、恰好到期或仓库券不抵料，仍回退普通材料");
+            var rejected = DaybreakEntryCost.Select(530, required, new([unavailable]), pieces, now)!;
+            That(rejected == required &&
+                !InventoryMaterialConsumptionService.Plan(new([unavailable]), [new(rejected.ItemId, rejected.Count)], pieces, now).Accepted,
+                "不可支付券且无芽时原材料费用仍拒绝，不由持券直接放行");
+        }
+        That(DaybreakEntryCost.Select(530, required, new([buds]), pieces, now) == required &&
+            DaybreakEntryCost.Select(531, required, mixed, pieces, now) == required &&
+            DaybreakEntryCost.Select(530, required with { Flag = 0 }, mixed, pieces, now)?.Flag == 0 &&
+            DaybreakEntryCost.Select(530, required with { Count = 21 }, mixed, pieces, now)?.Count == 21 &&
+            DaybreakEntryCost.Select(530, required, mixed, null, now) == required,
+            "无券、其它副本、持有型或变更资源合同及缺目录时不猜测抵料");
+        var definition = new DungeonDefinition(530, "fixture", null, null, [],
+            [new("required item", [new(0, 10161610), new(0, 20), new(0, 1)])]);
+        That(ChannelTownDungeonRequirement.Check(definition, new([pass]), pieces, now) is null &&
+            ChannelTownDungeonRequirement.Check(definition, InventorySnapshot.Empty, pieces, now) is not null,
+            "频道城镇持料门禁复用同一抵料规则，无券无芽仍拒绝");
     }
 
     static void PartyEntryTransaction()
@@ -121,11 +201,29 @@ internal static class DungeonEntryCostTests
         var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf, skills);
         var dungeons = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf);
         var rooms = global::DfoServer.Testing.SelfTestCatalogs.Rooms(pvf);
+        That(dungeons.Get(530).RequiredItem == new DungeonRequiredItem(10161610, 20, 1) &&
+            items.Items.Get(490011739).Kind == ItemKind.Material,
+            "黎明真实资源仍为20诞生之芽消耗型费用，疲劳商店券保持材料类型");
+        var attendancePass = new InventoryItem(73, new(InventoryListType.Main, 121),
+            new(490013045, items.Items.Get(490013045).Kind, 2));
+        var attendanceBuds = new InventoryItem(74, new(InventoryListType.Main, 122), new(10161610, ItemKind.Material, 20));
+        var attendanceCost = DaybreakEntryCost.Select(530, dungeons.Get(530).RequiredItem,
+            new([attendancePass, attendanceBuds]), items.EpicPieces, DateTimeOffset.Parse("2026-11-12T00:00:00Z"));
+        That(attendanceCost == new DungeonRequiredItem(490013045, 1, 1),
+            $"日签到490013045有效券与20芽并存时应优先选择一张券，实际{attendanceCost?.ItemId}×{attendanceCost?.Count}");
+        That(items.Items.Get(490013045).Kind == ItemKind.Material, "日签到黎明通行证保持当前资源的材料类型");
+        DaybreakPass();
+        var daybreakIncounts = DungeonIncountCatalog.Load(pvf);
+        foreach (int passItemId in new[] { 490011739, 490013045 })
+            DaybreakEntryTransaction(towns, characters, skills, growth, quests, dungeons, rooms, items, daybreakIncounts, passItemId);
+        ImmortalCorridor(towns, characters, skills, growth, quests, dungeons, rooms);
 
         var passIds = items.Items.CosmoPasses();
-        That(passIds.Length == 48 && passIds.Count(row=>row.AdditionalStones==0)==36 && passIds.Count(row=>row.AdditionalStones==2)==12 &&
+        That(passIds.Length == 50 && passIds.Count(row=>row.AdditionalStones==0)==37 && passIds.Count(row=>row.AdditionalStones==2)==13 &&
+            passIds.Contains(new(CosmoPassCost.DailyAttendanceStarPass, 1, 2)) &&
+            passIds.Contains(new(CosmoPassCost.DailyAttendanceCosmoPass, 1, 0)) &&
             passIds.All(row=>row.Count==1) && !passIds.Any(row=>row.ItemId is 490703708 or 490703706),
-            "按freepassitem匹配48种声明：36种完整券和12种需额外2石的星空券，不按名称扩大旧券或礼盒");
+            "按freepassitem与签到活动声明匹配50种：37种完整券和13种需额外2石的星空券，不按名称扩大旧券或礼盒");
         var passNow = DateTimeOffset.Parse("2026-10-23T00:00:00Z");
         InventoryItem Pass(long uid, short slot, int id = 490705255) =>
             new(uid, new(InventoryListType.Main, slot), new(id, ItemKind.Material, 1));
@@ -146,6 +244,25 @@ internal static class DungeonEntryCostTests
         That(HellPartyEntryCost.CosmoPass(starPaid,passIds,items.EpicPieces,passNow) is
             {Ticket:{ItemId:490703917,Count:1},Stone:{ItemId:10305821,Count:2},Plan.After.Items.Length:0},
             "资源声明的星空券与额外2灵石作为完整组合规划");
+        var attendanceStarMixed = new InventorySnapshot([
+            Pass(1, 152, CosmoPassCost.DailyAttendanceStarPass),
+            new(2, new(InventoryListType.Main, 154), new(HellPartyEntryCost.DailyAttendanceLegendStone, ItemKind.Material, 1)),
+            new(3, new(InventoryListType.Main, 155), new(HellPartyEntryCost.LegendStone, ItemKind.Material, 1)),
+        ]);
+        That(HellPartyEntryCost.CosmoPass(attendanceStarMixed, passIds, items.EpicPieces, passNow).Plan is null,
+            "签到星空裂缝通行证的2枚附加灵石不跨不同物品ID混扣");
+        var attendanceStarPaid = new InventorySnapshot([
+            Pass(1, 152, CosmoPassCost.DailyAttendanceStarPass),
+            new(2, new(InventoryListType.Main, 154), new(HellPartyEntryCost.DailyAttendanceLegendStone, ItemKind.Material, 2)),
+            new(3, new(InventoryListType.Main, 155), new(HellPartyEntryCost.LegendStone, ItemKind.Material, 2)),
+        ]);
+        That(HellPartyEntryCost.CosmoPass(attendanceStarPaid, passIds, items.EpicPieces, passNow) is
+            { Ticket: { ItemId: CosmoPassCost.DailyAttendanceStarPass, Count: 1 }, Stone: { ItemId: HellPartyEntryCost.DailyAttendanceLegendStone, Count: 2 }, Plan.After.Items: [{ Core: { ItemId: HellPartyEntryCost.LegendStone, Count: 2 } }] },
+            "签到星空裂缝通行证优先搭配2枚[活动]星空深渊灵石规划入场");
+        var attendanceCosmoPaid = new InventorySnapshot([Pass(1, 152, CosmoPassCost.DailyAttendanceCosmoPass)]);
+        That(HellPartyEntryCost.CosmoPass(attendanceCosmoPaid, passIds, items.EpicPieces, passNow) is
+            { Ticket: { ItemId: CosmoPassCost.DailyAttendanceCosmoPass, Count: 1 }, Stone: null, Plan.After.Items.Length: 0 },
+            "签到超·星空裂缝通行证单张免灵石规划入场");
         var fullFallback=starOnly with {Items=starOnly.Items.Add(Pass(3,122,490705255))};
         That(HellPartyEntryCost.CosmoPass(fullFallback,passIds,items.EpicPieces,passNow).Ticket is {ItemId:490705255},
             "前方星空券缺灵石时仍可使用后方完整超星空券");
@@ -243,11 +360,11 @@ internal static class DungeonEntryCostTests
                 "超星空加载不重复扣疲劳，消耗计数仍为8");
         }
 
-        foreach (bool partialPass in new[] {false,true})
+        foreach (var (passId, stoneId) in new[] { (490705255, 0), (490703917, 10305821), (CosmoPassCost.DailyAttendanceStarPass, HellPartyEntryCost.DailyAttendanceLegendStone), (CosmoPassCost.DailyAttendanceCosmoPass, 0) })
         {
-            int passId=partialPass?490703917:490705255;
+            bool partialPass = stoneId != 0;
             using (var passOnly = new QuestSceneTests.Fixture(towns,characters,skills,growth,quests,false,95,
-                [.. cosmoDone.Order()],position:cosmoPosition,items:partialPass?[(490703917,2),(10305821,4)]:[(490705255,2)],fatigueRemaining:16))
+                [.. cosmoDone.Order()],position:cosmoPosition,items:partialPass?[(passId,2),(stoneId,4)]:[(passId,2)],fatigueRemaining:16))
             {
                 var before = passOnly.Read();
                 passOnly.Sql("CREATE TRIGGER cosmo_pass_fail BEFORE UPDATE ON character_dungeon_state WHEN NEW.last_attempt>OLD.last_attempt BEGIN SELECT RAISE(ABORT,'cosmo pass rollback'); END");
@@ -259,10 +376,10 @@ internal static class DungeonEntryCostTests
                 var receipt = passOnly.Session.EnterFormalDungeon(7191,0,4,dungeons,rooms,
                     drops:Testing.SelfTestCatalogs.MonsterDrops(pvf),items:items.Items,pieces:items.EpicPieces,hellParty:true);
                 That(receipt is { HellTicket.Count: 1, EntryFatigueCharged: 8 } && receipt.HellTicket.ItemId==passId &&
-                    (partialPass?receipt.LegendTicket is {Count:2,ItemId:10305821}:receipt.LegendTicket is null) &&
+                    (partialPass?receipt.LegendTicket is {Count:2}&&receipt.LegendTicket.ItemId==stoneId:receipt.LegendTicket is null) &&
                     receipt.HellConsumedSlots.Length == (partialPass?2:1) && ItemCount(passOnly.Read(),passId) == 1 &&
-                    ItemCount(passOnly.Read(),10305821)==(partialPass?2:0),
-                    "入场重试按资源准确消耗一张券，星空券额外2石，超星空券无需灵石");
+                    (partialPass?ItemCount(passOnly.Read(),stoneId)==2:true),
+                    "入场重试按资源准确消耗一张券，星空券额外2石（含签到星空券+活动灵石），超星空券无需灵石");
             }
 
         }
@@ -297,9 +414,22 @@ internal static class DungeonEntryCostTests
         }
         // 票够、疲劳够：入场提交一次扣 1 张票 + 10 点疲劳；重复请求与首次加载都不再扣。
         using (var rich = new QuestSceneTests.Fixture(towns, characters, skills, growth, quests, false, 95, completed, position: position,
-            items: [(RefinedStone, 2)]))
+            items: [(RefinedStone, 2)], itemCatalog: items.Items, inventorySetup: role => new(role.Inventory, role.Inventory with
+                { Items = role.Inventory.Items.Add(new(0, new(InventoryListType.Main, 3),
+                    InventoryRewardGrantService.Create(items.Items.Get(400360000)) with { Durability = 7 })) }, "test_entry_energy")))
         {
             var before = rich.Read();
+            rich.Sql("CREATE TRIGGER entry_energy_abort AFTER UPDATE ON character_fatigue BEGIN SELECT RAISE(ABORT,'entry energy rollback'); END");
+            try
+            {
+                Reject<SqliteException>(() => rich.Session.EnterFormalDungeon(Tayberrs, 0, difficulty, dungeons, rooms,
+                    pieces: items.EpicPieces), "入场能量、门票写后疲劳失败整笔回滚");
+                var rejected = rich.Read();
+                That(rejected.Revision == before.Revision && rejected.Fatigue == before.Fatigue &&
+                    rejected.DungeonState == before.DungeonState && rejected.Inventory.Items.SequenceEqual(before.Inventory.Items),
+                    "拒绝后不留半笔能量、门票、疲劳或尝试号");
+            }
+            finally { rich.Sql("DROP TRIGGER entry_energy_abort"); }
             var receipt = rich.Session.EnterFormalDungeon(Tayberrs, 0, difficulty, dungeons, rooms, pieces: items.EpicPieces);
             var after = rich.Read();
             That(receipt is not null && receipt.Entry.EntryItem == new DungeonRequiredItemRow(RefinedStone, 1, 1) && receipt.Entry.StartFatigue == 10 &&
@@ -308,6 +438,10 @@ internal static class DungeonEntryCostTests
                 after.Revision == before.Revision + 2 && after.DungeonState?.LastAttempt == before.DungeonState!.LastAttempt + 1 &&
                 receipt.Entry.CharacterRevision == after.Revision,
                 "入场提交：扣 1 张 10158964、扣 10 点疲劳、尝试号 +1，同一事务：" + rich.Session.LastFormalDungeonRejection);
+            var source = before.Inventory.Find(new(InventoryListType.Main, 3))!;
+            That(after.Inventory.Find(source.Position) == source with { Core = source.Core with { Durability = 0 } } &&
+                receipt!.FatigueEnergySlots.SequenceEqual([source.Position]),
+                "一次性疲劳10消耗剩余能量7至0，不因能量不足阻止入场，复用原库存提交及角色版本");
             That(Receipts(rich, CharacterFatigueState.StartDungeonRuleId) == 1 && Receipts(rich, CharacterFatigueState.NormalRoomRuleId) == 0,
                 "入场一次性疲劳写一条 local-start-dungeon-fatigue-v1 账本，不写逐房账本");
             That(rich.Session.EnterFormalDungeon(Tayberrs, 0, difficulty, dungeons, rooms, pieces: items.EpicPieces) is null &&
@@ -315,7 +449,8 @@ internal static class DungeonEntryCostTests
                 "重复入场请求被拒，不再扣票或疲劳");
             var loaded = rich.Session.CompleteFormalDungeonLoading();
             That(loaded is not null && loaded.Snapshot.ConsumedFatigue == 10 && rich.Read().Fatigue == after.Fatigue &&
-                rich.Read().Revision == after.Revision && Receipts(rich, CharacterFatigueState.NormalRoomRuleId) == 0,
+                loaded.FatigueEnergySlots.IsEmpty && rich.Read().Revision == after.Revision &&
+                rich.Read().Inventory.Items.SequenceEqual(after.Inventory.Items) && Receipts(rich, CharacterFatigueState.NormalRoomRuleId) == 0,
                 "首次房间加载不再逐房扣点，当局应耗疲劳计 10");
             That(rich.Session.CompleteFormalDungeonLoading() is null && rich.Read().Fatigue == after.Fatigue && Stones(rich.Read()) == 1,
                 "重复加载不重复扣");
@@ -340,6 +475,73 @@ internal static class DungeonEntryCostTests
                 "入场费用必须绑定本次待安装的尝试号");
         }
         Console.WriteLine($"Dungeon entry cost checks passed: {Count - checks}");
+    }
+
+    static void DaybreakEntryTransaction(TownCatalog towns, CharacterCatalog characters, SkillLearningCatalog skills,
+        CharacterGrowthCatalog growth, QuestCatalog quests, DungeonCatalog dungeons, DungeonRoomCatalog rooms,
+        ItemResources items, DungeonIncountCatalog incounts, int passItemId)
+    {
+        var (done, position) = Selection(towns, 530);
+        done.UnionWith([6030, 6080, 6082, 10112]);
+        using var fixture = new QuestSceneTests.Fixture(towns, characters, skills, growth, quests, false, 95,
+            [.. done], position: position, items: [(passItemId, 2), (10161610, 20)], fatigueRemaining: 16, incounts: incounts);
+        That(fixture.Session.BeginDungeonSelection() is not null, "黎明抵料事务从真实选图入口准备");
+        var before = fixture.Read();
+        var originalPass = before.Inventory.Items.Single(item => item.Core.ItemId == passItemId);
+        long IncountRows() => Convert.ToInt64(fixture.Query("SELECT count(*) FROM character_dungeon_incount"));
+        long beforeRows = IncountRows();
+        fixture.Sql("CREATE TRIGGER daybreak_entry_fail AFTER UPDATE ON character_fatigue WHEN NEW.remaining<OLD.remaining AND NEW.used>OLD.used BEGIN SELECT RAISE(ABORT,'daybreak entry rollback'); END");
+        Reject<SqliteException>(() => fixture.Session.EnterFormalDungeon(530, 0, 3, dungeons, rooms,
+            pieces: items.EpicPieces), "黎明扣料、次数与预留提交后实际疲劳写的真实SQL故障");
+        That(QuestCompletionRepositoryTests.Same(before, fixture.Read()) &&
+            QuestCompletionRepositoryTests.Same(before, fixture.Session.Selected!) && IncountRows() == beforeRows &&
+            fixture.Session.DungeonSnapshot is null,
+            "晚期失败同时回滚券、芽、疲劳、次数、revision、对象键和attempt，不安装实例");
+        fixture.Sql("DROP TRIGGER daybreak_entry_fail");
+        var receipt = fixture.Session.EnterFormalDungeon(530, 0, 3, dungeons, rooms, pieces: items.EpicPieces);
+        var after = fixture.Read();
+        var counts = fixture.Repository.LoadDungeonIncounts(fixture.Owner, before.Id);
+        That(receipt is { EntryFatigueCharged: 8, ChannelConsumedSlots.Length: 1, EntryItemConsumedSlots.IsEmpty: true } &&
+            ItemCount(after, passItemId) == 1 && ItemCount(after, 10161610) == 20 && after.Fatigue?.Remaining == 8 &&
+            after.Inventory.Items.Single(item => item.Uid == originalPass.Uid) ==
+                (originalPass with { Core = originalPass.Core with { Value = 1 } }) &&
+            after.Inventory.Items.Where(item => item.Uid != originalPass.Uid).SequenceEqual(
+                before.Inventory.Items.Where(item => item.Uid != originalPass.Uid)) &&
+            receipt.ChannelConsumedSlots.SequenceEqual([originalPass.Position]) &&
+            after.DungeonState!.LastAttempt == before.DungeonState!.LastAttempt + 1 &&
+            after.DungeonState.NextObjectKey > before.DungeonState.NextObjectKey &&
+            counts is [{ Dungeon: 530, Usage: { DailyUsed: 1, WeeklyUsed: 1 } }],
+            "移除故障后重新准备只扣一张券、一次次数及8疲劳，原频道差量只发布实际券槽");
+        That(fixture.Session.EnterFormalDungeon(530, 0, 3, dungeons, rooms, pieces: items.EpicPieces) is null &&
+            QuestCompletionRepositoryTests.Same(after, fixture.Read()) && IncountRows() == beforeRows + 1,
+            "已安装实例的重复入场不再扣券、次数或预留对象键");
+    }
+
+    static void ImmortalCorridor(TownCatalog towns, CharacterCatalog characters, SkillLearningCatalog skills, CharacterGrowthCatalog growth,
+        QuestCatalog quests, DungeonCatalog dungeons, DungeonRoomCatalog rooms)
+    {
+        var definition = dungeons.Get(7154);
+        var (done, position) = Selection(towns, 7154);
+        foreach (var option in towns.DungeonMaps[AreaDungeonWorldMap(towns, 7154)].Options.Where(row => row.DungeonId == 7154 && !row.InProgress && row.QuestId > 0))
+            done.Add(option.QuestId);
+        That(definition.Mazes.Count == 4 && definition.StartFatigue == 8,
+            "不灭回廊保留真实四路线和入场八点疲劳");
+        foreach (var maze in definition.Mazes)
+        {
+            using var f = new QuestSceneTests.Fixture(towns, characters, skills, growth, quests, false, 95,
+                done.ToArray(), position: position, fatigueRemaining: 8);
+            var before = f.Read();
+            That(f.Session.BeginDungeonSelection() is not null, "不灭回廊从克洛诺斯岛正常打开选图");
+            var entered = f.Session.EnterFormalDungeon(7154, 0, 0, dungeons, rooms, draw: count => maze.SourceOrdinal % count);
+            That(entered is not null && entered.Entry.Maze.SourceOrdinal == maze.SourceOrdinal &&
+                entered.Entry.StartMap.Id == 311290 && entered.Entry.StartMap.Path.EndsWith("c01..map", StringComparison.OrdinalIgnoreCase) &&
+                f.Read().Fatigue!.Remaining == 0 && f.Read().DungeonState!.LastAttempt == before.DungeonState!.LastAttempt + 1,
+                "不灭回廊每条路线真实建立实例并只扣八点疲劳：" + f.Session.LastFormalDungeonRejection);
+            That(f.Session.CompleteFormalDungeonLoading() is not null && f.Read().Fatigue!.Remaining == 0 &&
+                f.Session.EnterFormalDungeon(7154, 0, 0, dungeons, rooms) is null &&
+                f.Read().DungeonState!.LastAttempt == before.DungeonState!.LastAttempt + 1,
+                "合法连续点文件名可完成加载，重复入场不再扣费或预留尝试号");
+        }
     }
 
     static void GateRejected(TownCatalog towns, CharacterCatalog characters, SkillLearningCatalog skills, CharacterGrowthCatalog growth,
@@ -367,7 +569,7 @@ internal static class DungeonEntryCostTests
             dungeonId + " 完成 " + questId + " 后不再被选图准入拒绝（实际 " + open.Session.LastFormalDungeonRejection + "）");
     }
 
-    static (HashSet<int> Done, Location Position) Selection(TownCatalog towns, int dungeonId)
+    internal static (HashSet<int> Done, Location Position) Selection(TownCatalog towns, int dungeonId)
     {
         var area = towns.Areas.Values.First(row => row.DungeonWorldMap is { } world && towns.DungeonMaps.TryGetValue(world, out var map) &&
             map.Error is null && map.Options.Any(option => option.DungeonId == dungeonId));

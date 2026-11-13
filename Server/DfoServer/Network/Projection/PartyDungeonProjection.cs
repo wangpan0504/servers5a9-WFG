@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using DfoServer.Game.Dungeons;
 using DfoServer.Game.Party;
 using DfoServer.Game.Session;
@@ -61,11 +62,21 @@ internal static class PartyDungeonProjection
     public static async Task PublishAsync(IEnumerable<PartyDungeonNotice> notices)
     {
         var batch = notices.ToArray();
-        // 同一连接按事实顺序发送，尤其退场时须先迁移主机再释放加载；不同连接仍并行。
-        await Task.WhenAll(batch.GroupBy(n => n.Recipient.Actor.Session).Select(async notices =>
+        static bool IsCompletedWar(PartyDungeonNotice notice) =>
+            notice.Kind == PartyDungeonNoticeKind.EvildomWarUpdated && notice.WarView is { Completed: true };
+        if (batch.Any(IsCompletedWar) && batch.Any(notice => !IsCompletedWar(notice)))
         {
-            foreach (var notice in notices) await PublishOneAsync(notice);
-        }));
+            var preceding = batch.Where(notice => !IsCompletedWar(notice)).ToArray();
+            var completedWar = batch.Where(IsCompletedWar).ToArray();
+            await PublishBatchAsync(preceding);
+            PrepareEvildomWarRewards(completedWar);
+            await PublishBatchAsync(completedWar);
+        }
+        else
+        {
+            PrepareEvildomWarRewards(batch);
+            await PublishBatchAsync(batch);
+        }
         // 全员31发布完成后再计算共享资格，避免先完成者把仍在发送中的队友误判为不能再挑战。
         await Task.WhenAll(batch.Where(n => n.Kind is PartyDungeonNoticeKind.Death or PartyDungeonNoticeKind.Loaded or PartyDungeonNoticeKind.Move &&
                 n.Scene?.Entry.IsCosmo == true && n.Recipient.Actor.Session.FormalDungeonResultFocus() is not null)
@@ -74,6 +85,52 @@ internal static class PartyDungeonProjection
         await Task.WhenAll(batch.Where(n => n.Kind is PartyDungeonNoticeKind.Death or PartyDungeonNoticeKind.RaidBattleSync &&
                 n.Recipient.Actor.Session.RaidCombatKind() == Game.Raids.RaidKind.Fiendwar)
             .GroupBy(n => n.Recipient.Actor.Session).Select(group => PublishOneAsync(group.Last() with { Kind = PartyDungeonNoticeKind.FiendwarTitles })));
+
+        static Task PublishBatchAsync(PartyDungeonNotice[] items) =>
+            // 同一连接按事实顺序发送，尤其退场时须先迁移主机再释放加载；不同连接仍并行。
+            Task.WhenAll(items.GroupBy(n => n.Recipient.Actor.Session).Select(async notices =>
+            {
+                foreach (var notice in notices) await PublishOneAsync(notice);
+            }));
+    }
+
+    static void PrepareEvildomWarRewards(PartyDungeonNotice[] batch)
+    {
+        var completed = batch.Select((notice, index) => (Notice: notice, Index: index))
+            .Where(row => row.Notice.Kind == PartyDungeonNoticeKind.EvildomWarUpdated && row.Notice.WarView is { Completed: true })
+            .GroupBy(row => (row.Notice.WarView!.BattleId, row.Notice.WarView.Revision));
+        foreach (var group in completed)
+        {
+            var source = group.First().Notice;
+            var view = source.WarView!;
+            if (source.Members.Length is < 1 or > 4 || source.Members.Any(member => member.Slot >= 4) ||
+                source.Members.Select(member => member.Slot).Distinct().Count() != source.Members.Length ||
+                source.Members.Select(member => member.Actor.Character.Id).Distinct().Count() != source.Members.Length ||
+                group.Any(row => !row.Notice.Members.SequenceEqual(source.Members)))
+                throw new InvalidOperationException("魔界奖励通知的原成员表不一致");
+            var rewards = ImmutableArray.CreateBuilder<EvildomWarPartyReward>();
+            // 先在发送队列外逐人提交一次，再向所有接收者投影同一个表；不持本人owner扩取队友锁。
+            foreach (var member in source.Members.OrderBy(member => member.Slot))
+            {
+                if (!member.Actor.IsCurrent()) continue;
+                var recipient = group.FirstOrDefault(row => row.Notice.Recipient == member).Notice;
+                if (recipient is null || member.Actor.Session.EvildomWarRewardPreparing is not { } prepare)
+                    throw new InvalidOperationException("魔界奖励缺少原成员的提交入口");
+                EvildomWarRewardReceipt? receipt;
+                try { receipt = prepare(view); }
+                catch (InvalidOperationException) when (!member.Actor.Owner.IsCurrent) { continue; }
+                if (receipt is null) continue;
+                var reward = new EvildomWarPartyReward(member, receipt);
+                if (!reward.IsFrom(view))
+                    throw new InvalidOperationException("魔界奖励不是原完成成员的已提交结果");
+                rewards.Add(reward);
+            }
+            var table = rewards.ToImmutable();
+            foreach (var row in group)
+            {
+                batch[row.Index] = row.Notice with { EvildomWarRewards = table };
+            }
+        }
     }
 
     // 连接清理从命令门禁外进入，先串行队伍，再等待剩余连接；不得拿实例锁等待账号锁。

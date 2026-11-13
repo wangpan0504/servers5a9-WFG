@@ -34,6 +34,7 @@ internal static partial class FiendwarRaidTcpTests
         var dungeonScenes = new HashSet<ushort>();
         var movieCards = new HashSet<ushort>();
         var movieChoices = new HashSet<(ushort Character, byte Kind)>();
+        var teamRewards = new Dictionary<ushort, Dictionary<ushort, byte[]>>();
         var counterRooms = new Dictionary<ushort, byte[]>();
         var previousCounters = new Dictionary<ushort, byte[]>();
         var partyRemovals = new Dictionary<ushort, byte[]>();
@@ -90,7 +91,6 @@ internal static partial class FiendwarRaidTcpTests
                         .Any(row => row.Instance.Key.Category == 0 && row.Instance.Key.Id == 1 && row.Count == 0),
                         "团队真实死亡前由原资源政策提供活动中的每日击杀1，初始进度零");
                 }
-                VerifyConsumable(fixture, peer, false, 10);
                 VerifyConsumable(fixture, peer, true, 20, 1114);
             }
             That(resources.ItemResources.RecoveryConsumables.TryGet(1114, out var ordinary), "普通药使用真实目录声明");
@@ -208,7 +208,7 @@ internal static partial class FiendwarRaidTcpTests
             foreach (var team in new[] { first, second }.Where(team => team.Length != 0))
                 foreach (var peer in team)
                 {
-                    VerifyConsumable(fixture, peer, false, 21, 1114);
+                    VerifyConsumable(fixture, peer, true, 21, 1114);
                     VerifyConsumable(fixture, peer, false, 22, 1114);
                     VerifyBlockedLegacyConsumable(fixture, peer);
                     VerifyConsumable(fixture, peer, true, 11);
@@ -292,17 +292,45 @@ internal static partial class FiendwarRaidTcpTests
             That(symbols[(first[0].Id, 125)] == 1, "三座兵营真实清图锁存Boss入口");
             That(count != 1 || counterRollbackChecked, "单人团队沿真实兵营终房完成一次破招生产者晚SQL回滚和重新入场");
             That(dynamicSpawnRooms > 0, "每种人数的团队真实终房均完成动态召唤生成及零奖励退休");
-            MoveTeam(first, 30);
-            var blackRoom = Clear(first, 30, Enter(first, 30), terminal: false);
-            uint firstElement = symbols[(first[0].Id, 92)];
-            That(firstElement is >= 5 and <= 8, "单侧抵达真实本体即可获得元素，不等对侧上线");
+            int firstWorld = count == 4 ? 31 : 30, secondWorld = firstWorld == 30 ? 31 : 30;
+            uint firstElementSymbol = firstWorld == 30 ? 92u : 93u, secondElementSymbol = firstWorld == 30 ? 93u : 92u;
+            MoveTeam(first, firstWorld);
+            var blackRoom = Clear(first, firstWorld, Enter(first, firstWorld), terminal: false);
+            if (count == 8)
+            {
+                uint elementBeforeDeath = symbols[(first[0].Id, 92)];
+                ClearMap(first, blackRoom[0].Single(row => row is { Kind: 0, Opcode: 29 }).Body, true);
+                WaitReturn(first);
+                That(first.All(peer => locations[peer.Id] == firstWorld), "机制未完成的提前击杀保留原桥，不冒充跨侧完成");
+                That(fixture.Query("SELECT phase0_event IS NULL FROM character_raid_runs WHERE character_id=$p0", first[0].Id) is [[1L]],
+                    "机制尚未完成就击杀单侧本体，只安全退出原房间、不生成最终资格");
+                blackRoom = Clear(first, 30, Enter(first, 30), terminal: false);
+                That(symbols[(first[0].Id, 92)] == elementBeforeDeath,
+                    "提前击杀后仍可重新进入，原未完成元素不重抽、不冒充完成");
+            }
+            uint firstElement = symbols[(first[0].Id, firstElementSymbol)];
+            That(firstElement is >= 5 and <= 8 && symbols[(first[0].Id, 94)] == 1111,
+                "单侧抵达真实本体即可获得元素并保持1111四行星生成状态，不等对侧上线");
             first[0].Send(1554, Build(writer => { writer.Write(1u); writer.Write(99u); }));
             That(!Drain(first[0]).Any(row => row is { Kind: 1, Opcode: 1554 }), "未知元素不授予成果或伪造成功");
-            for (int element = 0; element < 3; element++) BossReport(first, 1, symbols[(first[0].Id, 92)]);
-            That(symbols[(first[0].Id, 92)] == 9, "本侧三个不同真实元素完成后独立开原窗口");
+            for (int element = 0; element < 3; element++) BossReport(first, 1, symbols[(first[0].Id, firstElementSymbol)], element % first.Length);
+            That(symbols[(first[0].Id, firstElementSymbol)] == 9 && symbols[(first[0].Id, 94)] == 1111,
+                "本侧三个不同真实元素完成后独立开原窗口且四行星生成状态保持1111");
+            BossReport(first, 0, 20);
+            BossReport(first, 0, 100, first.Length - 1);
+            That(symbols[(first[0].Id, firstWorld == 30 ? 95u : 96u)] == 20, "自然回血或首帧满血百分比报告不回退已产生伤害");
             BossReport(first, 0, 0);
-            clock.Advance(15); BossReport(first, 2, 0);
+            if (count == 4) { clock.Advance(15); BossReport(first, 2, 0, first.Length - 1); }
+            else
+            {
+                ClearMap(first, blackRoom[0].Single(row => row is { Kind: 0, Opcode: 29 }).Body, true);
+                That(fixture.Query("SELECT phase0_event IS NULL FROM character_raid_runs WHERE character_id=$p0", first[0].Id) is [[1L]],
+                    "黑世界死亡先于1554保存时只记录本侧结果，不生成整团胜利或奖励资格");
+            }
             WaitReturn(first);
+            That(first.All(peer => locations[peer.Id] == secondWorld &&
+                fixture.Query("SELECT town,area FROM characters WHERE id=$p0", peer.Id) is [[57L, long area]] && area == secondWorld &&
+                !dungeonScenes.Contains(peer.Id)), "先黑或先白完成本侧后自动保存到对侧桥，仅退场不自动创建新Run");
             if (count == 1)
             {
                 uint saved = symbols[(first[0].Id, 95)];
@@ -311,14 +339,18 @@ internal static partial class FiendwarRaidTcpTests
                     "全团离线重返保留原黑世界完成状态与实际剩余HP，不重抽元素或回血");
             }
             var white = second.Length == 0 ? first : second;
-            MoveTeam(white, 31);
-            var whiteRoom = Clear(white, 31, Enter(white, 31), terminal: false);
-            That(symbols[(white[0].Id, 93)] is >= 5 and <= 8, "另一侧保留第四个必要元素，接力不重抽已做成果");
-            BossReport(white, 1, symbols[(white[0].Id, 93)]);
-            That(symbols[(white[0].Id, 93)] == 9, "完成第四元素才开启另一侧原窗口");
-            BossReport(white, 0, 0); clock.Advance(15); BossReport(white, 2, 0);
-            That(symbols[(white[0].Id, 95)] == 0 && symbols[(white[0].Id, 96)] == 0,
-                "两侧真实输出结果汇合归零，尚不能用报告替代终图死亡");
+            MoveTeam(white, secondWorld);
+            var whiteRoom = Clear(white, secondWorld, Enter(white, secondWorld), terminal: false);
+            That(symbols[(white[0].Id, secondElementSymbol)] is >= 5 and <= 8, "另一侧保留第四个必要元素，接力不重抽已做成果");
+            BossReport(white, 1, symbols[(white[0].Id, secondElementSymbol)]);
+            That(symbols[(white[0].Id, secondElementSymbol)] == 9, "完成第四元素才开启另一侧原窗口");
+            BossReport(white, 0, 0);
+            if (count == 4)
+            {
+                clock.Advance(15); BossReport(white, 2, 0);
+                That(symbols[(white[0].Id, 95)] == 0 && symbols[(white[0].Id, 96)] == 0,
+                    "两侧真实输出结果汇合归零，尚不能用报告替代终图死亡");
+            }
             That(fixture.Query("SELECT phase0_event IS NULL FROM character_raid_runs WHERE character_id=$p0", white[0].Id) is [[1L]],
                 "纯Boss报告尚未产生胜利奖励资格");
             var bossMap = whiteRoom[0].Single(row => row is { Kind: 0, Opcode: 29 }).Body;
@@ -340,11 +372,13 @@ internal static partial class FiendwarRaidTcpTests
             SupportRequest(peers[0], [0], null);
             foreach (var peer in white)
                 That(fixture.Query("SELECT quest_id,total,applied FROM character_fiendwar_title_facts WHERE character_id=$p0 AND quest_id IN(7003,7008) ORDER BY quest_id", peer.Id)
-                        is var worldFacts && (count == 4 ? worldFacts is [[7003L, 1L, 1L]] : worldFacts is [[7003L, 1L, 1L], [7008L, 1L, 1L]]) &&
-                    fixture.Query("SELECT remaining1 FROM character_title_progress WHERE character_id=$p0 AND quest_id=7003", peer.Id) is [[29L]] &&
+                        is var worldFacts && (count == 4 ? worldFacts is [[7003L, 1L, 1L]] : count == 1
+                            ? worldFacts is [[7003L, 2L, 2L], [7008L, 2L, 2L]] : worldFacts is [[7003L, 1L, 1L], [7008L, 1L, 1L]]) &&
+                    fixture.Query("SELECT remaining1 FROM character_title_progress WHERE character_id=$p0 AND quest_id=7003", peer.Id)
+                        is [[long remaining]] && remaining == (count == 1 ? 28 : 29) &&
                     (count == 4 ? fixture.Query("SELECT count(*) FROM character_title_progress WHERE character_id=$p0 AND quest_id=7008", peer.Id) is [[0L]] :
                         fixture.Query("SELECT remaining1+remaining2+remaining3 FROM character_title_progress WHERE character_id=$p0 AND quest_id=7008", peer.Id) is [[0L]]),
-                    "真实白世界清图只奖励实际参与者，无币称号复验整个本场的共享用币事实");
+                    "双侧实际击杀各记一次清图，无币称号复验各自本场共享用币事实；报告退出不冒充击杀");
             That(peers.All(peer => fixture.Query("SELECT count(*) FROM character_fiendwar_title_facts WHERE character_id=$p0 AND quest_id=7005", peer.Id)
                     is [[long facilityFacts]] && facilityFacts == (count == 4 ? 1 : 0)),
                 "真实未拆设施通关记一次，拆过雷达的场次不记成就");
@@ -374,8 +408,13 @@ internal static partial class FiendwarRaidTcpTests
                     U32(adventure, 19 + 28) == 0 && U32(adventure, 19 + 36) == 0,
                     "1/4/8人正式终局后原生冒险团面板读取本账号真实漩涡累计，不串其他团本");
             }
+            // 最后一个并发退场执行器可能在1403回包后才完成重放；以真实ACK屏障等待通知，保持结果顺序断言。
+            for (var wait = Stopwatch.StartNew(); wait.Elapsed < TimeSpan.FromSeconds(5) && !peers.All(peer => results.Contains(peer.Id) && victories.Contains(peer.Id));)
+            {
+                foreach (var peer in peers) Drain(peer);
+            }
             That(peers.All(peer => results.Contains(peer.Id) && victories.Contains(peer.Id)),
-                "原生601结果与1523胜利到达每个角色，不套用587");
+                $"原生601结果与1523胜利到达每个角色，不套用587（人数{count}，结果缺失[{string.Join(',', peers.Where(peer => !results.Contains(peer.Id)).Select(peer => peer.Id))}]，胜利缺失[{string.Join(',', peers.Where(peer => !victories.Contains(peer.Id)).Select(peer => peer.Id))}]）");
             foreach (var peer in peers)
             {
                 string beforeSkip = fixture.Snapshot("SELECT * FROM character_raid_reward_receipts WHERE character_id=$p0 ORDER BY kind", peer.Id);
@@ -390,11 +429,28 @@ internal static partial class FiendwarRaidTcpTests
                     fixture.Snapshot("SELECT * FROM character_raid_reward_receipts WHERE character_id=$p0 ORDER BY kind", peer.Id),
                     "659零值不解除演出屏障，提前660不提交资产");
             }
+            if (count == 8)
+            {
+                clock.Advance(20);
+                foreach (var peer in peers) Drain(peer);
+                for (var wait = Stopwatch.StartNew(); wait.Elapsed < TimeSpan.FromSeconds(5) && !peers.All(peer => movieCards.Contains(peer.Id) &&
+                    movieChoices.Contains((peer.Id, 1)) && movieChoices.Contains((peer.Id, 0)));)
+                {
+                    foreach (var peer in peers) Drain(peer);
+                }
+                That(peers.All(peer => movieCards.Contains(peer.Id) && movieChoices.Contains((peer.Id, 1)) && movieChoices.Contains((peer.Id, 0))),
+                    "整团电影确认缺失时原演出期限也可开放两类牌面");
+            }
             foreach (var peer in peers)
             {
                 peer.Send(659, [1]);
                 That(Drain(peer).Any(row => row is { Kind: 1, Opcode: 659, Body: [1] }),
                     "每个真实Present成员沿659一确认演出结束");
+                That(movieCards.Contains(peer.Id) && movieChoices.Contains((peer.Id, 1)) && movieChoices.Contains((peer.Id, 0)),
+                    "本人真实电影结束立即收到两类牌面，不等待其余成员或20秒备用期限");
+                if (count == 4 && peer == peers[0])
+                    That(peers.Skip(1).All(other => !movieCards.Contains(other.Id)),
+                        "首名成员开牌不会冒充其他三名成员的电影确认");
             }
             foreach (var peer in peers) Drain(peer);
             That(peers.All(peer => movieCards.Contains(peer.Id) && movieChoices.Contains((peer.Id, 1)) && movieChoices.Contains((peer.Id, 0))),
@@ -410,41 +466,34 @@ internal static partial class FiendwarRaidTcpTests
                         display.Body[0] == kind && display.Body[1] == 1 && U16(display.Body, 2) == peer.Id &&
                         display.Body[4] == 3 && display.Body[5] > 0 && display.Body.Length == 6 + 16 * display.Body[5],
                         "真实产物先提交与展示，再回复660成功，通用16B行属于本人");
+                    if (kind == 0) That(teamRewards[peer.Id][peer.Id].AsSpan().SequenceEqual(display!.Body.AsSpan(6)),
+                        "完整团队页本人的冻结产物与真实660资产回执逐字节一致");
+                    else That(display!.Body[5] == 1 && U32(display.Body, 7) == 10308807 && U16(display.Body, 11) == 150 &&
+                        claimed.Any(row => row is { Kind: 0, Opcode: 563, Body.Length: 10 } && row.Body[0] == 1 &&
+                            U32(row.Body, 2) == 10308807 && U32(row.Body, 6) == 150) &&
+                        claimed.Any(row => row is { Kind: 0, Opcode: 1460 }) && claimed.Any(row => row is { Kind: 0, Opcode: 1461 }),
+                        "第一轮直接显示150不渝并同步账号余额及两级周额度，不显示源礼盒");
                     var receipts = fixture.Snapshot("SELECT * FROM character_raid_reward_receipts WHERE character_id=$p0 ORDER BY kind", peer.Id);
+                    string assets = fixture.Snapshot("SELECT * FROM character_inventory_items WHERE character_id=$p0 ORDER BY item_uid", peer.Id) +
+                        fixture.Snapshot("SELECT * FROM account_material_balances ORDER BY account,item_id");
                     peer.Send(660, [kind, 3]);
                     That(Drain(peer).Any(row => row is { Kind: 1, Opcode: 660, Body: [1] }) &&
-                        receipts == fixture.Snapshot("SELECT * FROM character_raid_reward_receipts WHERE character_id=$p0 ORDER BY kind", peer.Id),
+                        receipts == fixture.Snapshot("SELECT * FROM character_raid_reward_receipts WHERE character_id=$p0 ORDER BY kind", peer.Id) &&
+                        assets == fixture.Snapshot("SELECT * FROM character_inventory_items WHERE character_id=$p0 ORDER BY item_uid", peer.Id) +
+                            fixture.Snapshot("SELECT * FROM account_material_balances ORDER BY account,item_id"),
                         "660重放不增加收据、不重抽已冻结奖励");
                 }
             That(peers.All(peer => fixture.Query("SELECT count(*) FROM character_raid_reward_receipts WHERE character_id=$p0 AND raid_type=2", peer.Id) is [[2L]]),
                 "同框架1/4/8人实际各领取两类末期奖励");
             foreach (var peer in peers)
             {
-                That(fixture.Query("SELECT m.balance FROM account_material_balances m JOIN characters c ON c.account=m.account WHERE c.id=$p0 AND m.item_id=10308807 AND m.balance<>0", peer.Id).Length == 0,
-                    "660领取的是原始不渝礼盒，未兑换不提前记材料或周获得");
-                var box = fixture.Query("SELECT s.slot_index FROM character_inventory_slots s JOIN character_inventory_items i ON i.item_uid=s.item_uid WHERE s.character_id=$p0 AND s.list_type=0 AND json_extract(i.item_core,'$.ItemId')=10306817", peer.Id);
-                That(box.Length == 1, "真实翻牌领取150不渝礼盒，重复660不复制礼盒");
-                short slot = Convert.ToInt16(box[0][0]);
-                peer.Send(160, Build(writer => { writer.Write(slot); writer.Write(1); }));
-                var opened = Drain(peer);
-                var expectedAck = Build(writer =>
-                {
-                    writer.Write((byte)1); writer.Write((byte)0); writer.Write(10306817); writer.Write(slot);
-                    writer.Write(0); writer.Write(0); writer.Write((ushort)1); writer.Write(10308807); writer.Write(150);
-                });
-                That(opened.Count(row => row is { Kind: 1, Opcode: 160 } && row.Body.SequenceEqual(expectedAck)) == 1 &&
-                    opened.Any(row => row is { Kind: 0, Opcode: 563, Body.Length: 10 } && row.Body[0] == 1 &&
-                    U32(row.Body, 2) == 10308807 && U32(row.Body, 6) == 150) &&
-                    opened.Any(row => row is { Kind: 0, Opcode: 1460 }) && opened.Any(row => row is { Kind: 0, Opcode: 1461 }),
-                    "真实160开盒后同步账号余额与两级周额度");
-                string materialState = fixture.Snapshot("SELECT * FROM account_material_balances ORDER BY account,item_id");
-                peer.Send(160, Build(writer => { writer.Write(slot); writer.Write(1); }));
-                That(Drain(peer).Any(row => row is { Kind: 1, Opcode: 160, Body: [0, 19, 0] }) &&
-                    materialState == fixture.Snapshot("SELECT * FROM account_material_balances ORDER BY account,item_id"),
-                    "重复打开已消费礼盒不再计余额或周额度");
+                That(fixture.Query("SELECT m.balance,m.raid_earned FROM account_material_balances m JOIN characters c ON c.account=m.account WHERE c.id=$p0 AND m.item_id=10308807", peer.Id)
+                    is [[150L, 150L]], "660直接到账150不渝及周获得，重复翻牌不重复计入");
+                That(fixture.Query("SELECT count(*) FROM character_inventory_items WHERE character_id=$p0 AND json_extract(item_core,'$.ItemId')=10306817", peer.Id)
+                    is [[0L]], "翻牌不再发需要另开160的150不渝源盒");
             }
             That(peers.All(peer => fixture.Query("SELECT m.balance,m.raid_earned FROM account_material_balances m JOIN characters c ON c.account=m.account WHERE c.id=$p0 AND m.item_id=10308807", peer.Id)
-                is [[150L, 150L]]), "团队原始礼盒实际兑换150不渝，重复660和160均不重复计入");
+                is [[150L, 150L]]), "团队翻牌直接到账150不渝，完整团队和本人结果不重复发放");
             That(guildSnapshot == fixture.Snapshot("SELECT * FROM guild_contribution_events WHERE source=5 ORDER BY character_id"),
                 "通关贡献不依赖660翻牌，领取及重复请求均不再发分");
             Console.WriteLine("PASS fiendwar native encounter roster=" + count);
@@ -751,7 +800,7 @@ internal static partial class FiendwarRaidTcpTests
         void ConfigureBattlePassPeer(TcpPeer peer)
         {
             if (battlePassProbe is null) return;
-            peer.ExpectedOpenEvents = [ServerEventService.NolanVisibilityId, ServerEventService.MileageShopId, 2520];
+            peer.ExpectedOpenEvents = [282, 2449, 414, 181, ServerEventService.NolanVisibilityId, ServerEventService.MileageShopId, 2520];
             peer.ExpectedBattlePassEnd = checked((uint)battlePassProbe.End.ToUnixTimeSeconds());
         }
 
@@ -876,10 +925,14 @@ internal static partial class FiendwarRaidTcpTests
                     That(readingSupport, "移动、进退图、重返及持续战况不重播已写或过期的支援提示");
                 That(frame is not { Kind: 0, Opcode: 587 }, "漩涡只走自己的1523状态合同");
                 if (frame is { Kind: 0, Opcode: 29 }) dungeonScenes.Add(peer.Id);
-                if (frame is { Kind: 0, Opcode: 24, Body: [57, ..] }) dungeonScenes.Remove(peer.Id);
+                if (frame is { Kind: 0, Opcode: 24, Body: [57, byte area, ..] })
+                { dungeonScenes.Remove(peer.Id); locations[peer.Id] = area; }
                 if (frame is { Kind: 0, Opcode: 601, Body.Length: 10 })
                 {
                     That(!dungeonScenes.Contains(peer.Id) && returned.Contains(peer.Id), "真实24返城先于最终601，不在旧副本场景开电影");
+                    That(U32(frame.Body, 2) > 0 && locations[peer.Id] == 2 &&
+                        fixture.Query("SELECT town,area FROM characters WHERE id=$p0", peer.Id) is [[57L, 2L]],
+                        "团队结果使用真实耗时，全部成员已保存回起始候战房");
                     results.Add(peer.Id);
                 }
                 if (frame is { Kind: 0, Opcode: 1523, Body: [3, 0, 0] })
@@ -887,7 +940,17 @@ internal static partial class FiendwarRaidTcpTests
                     That(results.Contains(peer.Id), "最终601先于1523成功演出");
                     victories.Add(peer.Id);
                 }
-                if (frame is { Kind: 0, Opcode: 1523, Body: [4, 0, 0] }) movieCards.Add(peer.Id);
+                if (frame is { Kind: 0, Opcode: 600, Body: [3, > 0, ..] })
+                {
+                    var table = FiendwarPacketTests.ReadTeamResults(frame.Body);
+                    That(table.Keys.Order().SequenceEqual(peers.Select(member => member.Id).Order()), "团队第二页包含全部合格1/4/8名成员，无遗漏或组外owner");
+                    teamRewards[peer.Id] = table;
+                }
+                if (frame is { Kind: 0, Opcode: 1523, Body: [4, 0, 0] })
+                {
+                    That(teamRewards.ContainsKey(peer.Id), "完整团队权益表先于state4装配第二页");
+                    movieCards.Add(peer.Id);
+                }
                 if (frame is { Kind: 0, Opcode: 600, Body: [byte kind, 0] })
                 {
                     That(movieCards.Contains(peer.Id), "1523四先于600原生选择列表");
@@ -908,13 +971,14 @@ internal static partial class FiendwarRaidTcpTests
                 That(returned.Contains(peer.Id), "保存本侧成果后自动正常返回战场"); Drain(peer);
             }
         }
-        void BossReport(TcpPeer[] team, uint operation, uint value)
+        void BossReport(TcpPeer[] team, uint operation, uint value, int reporterIndex = 0)
         {
-            team[0].Send(1554, Build(writer => { writer.Write(operation); writer.Write(value); }));
-            var frames = Drain(team[0]);
+            var reporter = team[reporterIndex];
+            reporter.Send(1554, Build(writer => { writer.Write(operation); writer.Write(value); }));
+            var frames = Drain(reporter);
             That(frames.Any(row => row is { Kind: 0, Opcode: 1530 }), "Boss报告通过正式实例校验后发布真实机制符号");
             That(!frames.Any(row => row.Opcode == 1554), "Boss报告不伪造同号支援通知或未知成功ACK");
-            foreach (var peer in team.Skip(1)) Drain(peer);
+            foreach (var peer in team.Where(peer => peer != reporter)) Drain(peer);
         }
         void SupportRequest(TcpPeer source, byte[] body, byte? accepted)
         {

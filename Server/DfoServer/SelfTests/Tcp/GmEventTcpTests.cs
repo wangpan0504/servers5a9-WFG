@@ -1,4 +1,4 @@
-﻿using System.Net;
+using System.Net;
 using System.Net.Http.Json;
 using System.Net.Sockets;
 using System.Text.Json;
@@ -6,15 +6,39 @@ using static DfoServer.Testing.TestCheck;
 
 namespace DfoServer.Testing;
 
-internal static class GmEventTcpTests
+internal static partial class GmEventTcpTests
 {
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
+        global::DfoServer.ServerEventTests.RunCore();
+        foreach (string path in new[] { "npc/chn_weekdungeon_seriaroom.npc", "npc/chn_weekdungeon_seriaroom_cat.npc" })
+            That(new PvfLib.PvfDocument(resources.Archive.ReadText(path)).Section("open visible event").Trim() == "2514",
+                "旅馆猫咪和巴斯泰托使用PVF活动2514显示门禁");
+        var room = resources.Towns.Areas[(resources.Towns.Room.Town, resources.Towns.Room.Area)].Map(new HashSet<int>());
+        That(room.Npcs.Any(npc => npc.Id == 400001083) && room.Npcs.Any(npc => npc.Id == 400001082),
+            "当前赛丽亚旅馆已放置猫咪和完成任务后的巴斯泰托");
+        var relic = resources.Towns.Areas[((byte)107, (byte)0)];
+        That(relic.Level == 50 && relic.Quests.Contains(8709) && relic.Default.Npcs.Any(npc => npc.Id == 400001081) &&
+            relic.DungeonWorldMap == 114, "异次元遗迹区域、NPC、前置与副本入口资源完整");
+        That(resources.Towns.NpcMoves[400001083].Contains(400001081u) && resources.Towns.NpcMoves[400001082].Contains(400001081u),
+            "猫咪和巴斯泰托均可沿原生关系进入遗迹");
         int port;
         using (var probe = new TcpListener(IPAddress.Loopback, 0))
         { probe.Start(); port = ((IPEndPoint)probe.LocalEndpoint).Port; }
         await using var fixture = new TcpTestFixture(source with { GmWebPort = port },
             Path.Combine(root, "gm-events"), resources: resources, useDefaultActivities: true);
+        var repository = new DfoServer.Persistence.CharacterRepository(fixture.Database);
+        using (var owner = new DfoServer.Game.Accounts.AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
+        {
+            var primary = repository.Create(owner, DfoServer.Game.Characters.CharacterCreation.Prepare("AllEvents", resources.Characters.Get(0),
+                resources.Towns.Room, resources.Towns.InitialReturn, resources.Learning.Get));
+            repository.Create(owner, DfoServer.Game.Characters.CharacterCreation.Prepare("AllEventsAlt", resources.Characters.Get(0),
+                resources.Towns.Room, resources.Towns.InitialReturn, resources.Learning.Get));
+            var grant = DfoServer.Game.Inventory.Services.InventoryRewardGrantService.TryGrantBatch(
+                primary, [new(490013716, 150)], resources.ItemResources.Items, resources.ItemResources.GoldLimits,
+                resources.ItemResources.EpicPieces, DateTimeOffset.UtcNow);
+            DfoServer.Game.Inventory.Services.InventoryService.Commit(repository, owner, primary, grant);
+        }
         await fixture.StartAsync();
         using var http = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{port}"), Timeout = TimeSpan.FromSeconds(10) };
         for (int attempt = 0; ; attempt++)
@@ -34,6 +58,7 @@ internal static class GmEventTcpTests
             .ToDictionary(row => row.GetProperty("id").GetInt32());
         That(definitions.TryGetValue(64, out var gold) && gold.GetProperty("supportsSchedule").GetBoolean() &&
             definitions.TryGetValue(2532, out var nolan) && !nolan.GetProperty("supportsSchedule").GetBoolean() &&
+            nolan.GetProperty("name").GetString() == "阿拉德谋略战" && nolan.GetProperty("defaultState").GetString() == "默认开启" &&
             definitions.TryGetValue(228, out var onlineGift) && onlineGift.GetProperty("name").GetString() == "累积在线得好礼" &&
             onlineGift.GetProperty("supportsControl").GetBoolean() && !onlineGift.GetProperty("supportsSchedule").GetBoolean() &&
             onlineGift.GetProperty("defaultState").GetString() == "默认开启" &&
@@ -47,7 +72,8 @@ internal static class GmEventTcpTests
             !string.IsNullOrWhiteSpace(row.GetProperty("purpose").GetString()) &&
             !string.IsNullOrWhiteSpace(row.GetProperty("conditions").GetString())),
             "当前活动目录提供GM面板所需名称、用途和条件");
-        foreach (var (id, defaultActive) in new[] { (64, false), (2532, true), (2257, true), (228, true), (2370, true), (2208, true) })
+        foreach (var (id, defaultActive) in new[] { (64, true), (266, true), (312, true), (2520, true), (2037, true), (2378, true), (2395, true), (2514, true),
+            (2532, true), (2257, true), (228, true), (2370, true), (2208, true), (10005, true) })
         {
             await State(id, "auto", defaultActive);
             foreach (string op in new[] { "on", "off", "auto" })
@@ -65,6 +91,7 @@ internal static class GmEventTcpTests
             "228即使时间格式和确认合法也明确拒绝schedule");
         That(Data((await Get("/api/events?id=228")).Body).GetRawText() == before,
             "拒绝时间表不改变228开关与revision");
+        VerifyAllDefaultsLogin(fixture);
         await fixture.StopAsync();
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0,
             "GM目录与活动HTTP开关测试后数据库完整");

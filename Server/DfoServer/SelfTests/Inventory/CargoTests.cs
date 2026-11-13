@@ -22,6 +22,7 @@ internal static class CargoTests
     static void VerifyAcquisition(TownCatalog towns, ItemResources resources)
     {
         RunMileagePersonalCargo(towns, resources);
+        VerifyAccountUpgradeTool(towns, resources);
         var now = DateTimeOffset.UtcNow;
         var role = new Character(1, 0, "CargoAcquire", 0, towns.InitialReturn, null)
             { Level = 60, Inventory = new([]) { AccountCargo = new(Capacity: 8) } };
@@ -54,9 +55,16 @@ internal static class CargoTests
         foreach (var row in resources.Cargo.AcquisitionItems)
             That(resources.Items.Get(row.Key).AcquisitionAccountCargo == row.Value, "账号工具绑定同一合法档位目录 " + row.Key);
         foreach (ushort capacity in new ushort[] { 24, 40, 264 })
+        {
+            var sameOrHigher = InventoryRewardGrantService.TryGrantBatch(role with { Inventory = role.Inventory with { CargoCapacity = capacity } },
+                [new(50, 1)], resources.Items, resources.GoldLimits, resources.EpicPieces, now);
+            That(sameOrHigher.Accepted && sameOrHigher.Plan!.After.CargoCapacity == capacity && sameOrHigher.Plan.After.Items.IsEmpty,
+                "已达或超过目标时消费来源并保持当前更高容量，不退成STK " + capacity);
+        }
+        foreach (ushort capacity in new ushort[] { 32, 280 })
             That(!InventoryRewardGrantService.TryGrantBatch(role with { Inventory = role.Inventory with { CargoCapacity = capacity } },
                 [new(50, 1)], resources.Items, resources.GoldLimits, resources.EpicPieces, now).Accepted,
-                "已达或超过目标时拒绝，不退成STK " + capacity);
+                "表外非法当前容量高于目标时仍拒绝，不退成STK " + capacity);
         foreach (ushort capacity in new ushort[] { 0, 1, 16, 240 })
             That(!InventoryRewardGrantService.TryGrantBatch(role with { Inventory = role.Inventory with { AccountCargo = new(Capacity: capacity) } },
                 [new(2681921, 1)], resources.Items, resources.GoldLimits, resources.EpicPieces, now).Accepted,
@@ -92,6 +100,88 @@ internal static class CargoTests
             "主商品24格与附赠40格连续生效，最终合并不覆盖附赠扩容");
     }
 
+    static void VerifyAccountUpgradeTool(TownCatalog towns, ItemResources resources)
+    {
+        var template = resources.Items.Get(490705134);
+        That(template.AdvancesAccountCargo && !template.AdvancesPersonalCargo && !template.HasAcquisitionEffect &&
+            resources.Items.StackableAction(template.Id)?.ClientType == 149, "账号逐档券按无参数149识别，不套个人或获取时即时服务");
+        var clock = new ConsumableUseSessionTests.FakeClock();
+        var now = clock.GetUtcNow();
+        var core = InventoryRewardGrantService.Create(template, utcNow: now);
+        var source = new InventoryItem(9129, new(InventoryListType.Main, 65), core);
+        var role = new Character(1, 0, "AccountStep", 0, towns.Room, towns.InitialReturn)
+        {
+            Level = 1, Inventory = new([source]) { AccountCargo = new(Capacity: 1, Gold: 123), Gold = 456,
+                AccountWallet = InventorySnapshot.Empty.AccountWallet.Set(CurrencyKind.Cera, 789) }
+        };
+        var cargo = new InventoryCargoService(resources.Items, resources.Cargo, resources.GoldLimits, clock);
+        var granted = InventoryRewardGrantService.TryGrantBatch(role with { Inventory = InventorySnapshot.Empty },
+            [new(template.Id, 1)], resources.Items, resources.GoldLimits, resources.EpicPieces, now);
+        That(granted.Accepted && granted.Plan!.After.AccountCargo.Capacity == 0 && granted.Plan.After.Items is [var retained] &&
+            retained.Core.ItemId == template.Id, "未开通账号也可领取战令工具实物，不在领取时开通或扩容");
+        foreach (var pair in resources.Cargo.AccountTiers.Zip(resources.Cargo.AccountTiers.Skip(1)))
+        {
+            var holder = role with { Inventory = role.Inventory with { AccountCargo = role.Inventory.AccountCargo with { Capacity = pair.First.Capacity } } };
+            var result = cargo.AccountUpgradeTool(holder, 65);
+            That(result.Accepted && result.Plan!.After.AccountCargo.Capacity == pair.Second.Capacity && result.Plan.After.Items.IsEmpty &&
+                result.Plan.After.AccountCargo.Gold == 123 && result.Plan.After.CargoCapacity == holder.Inventory.CargoCapacity &&
+                result.Plan.After.Gold == 456 && result.Plan.After.AccountWallet.Same(holder.Inventory.AccountWallet),
+                "一张券仅升账号下一合法档，不扣任意档费用或改变其他资产 " + pair.First.Capacity);
+        }
+        foreach (ushort capacity in new ushort[] { 0, 7, 240 })
+            That(!cargo.AccountUpgradeTool(role with { Inventory = role.Inventory with { AccountCargo = new(Capacity: capacity) } }, 65).Accepted,
+                "未开通、表外容量及满档拒绝并保留源 " + capacity);
+        foreach (var invalid in new[] { source with { Core = core with { EquipmentLockId = 1 } },
+            source with { Core = core with { ExpireTime = checked((int)now.ToUnixTimeSeconds()) } },
+            source with { Core = core with { Kind = GameWorld.Items.ItemKind.Material } },
+            source with { Position = new(InventoryListType.PersonalCargo, 0) } })
+        {
+            var holder = role with { Inventory = role.Inventory with { Items = [invalid] } };
+            That(!cargo.AccountUpgradeTool(holder, 65).Accepted && holder.Inventory.Items.Single() == invalid,
+                "安全锁、到期、错误类型及其他容器不能消费");
+        }
+        That(!cargo.AccountUpgradeTool(role with { Level = 0 }, 65).Accepted && !cargo.AccountUpgradeTool(role, 66).Accepted,
+            "最低等级和实际请求槽不能绕过");
+        var expiring = source with { Core = core with { ExpireTime = checked((int)now.ToUnixTimeSeconds() + 60) } };
+        var pending = cargo.AccountUpgradeTool(role with { Inventory = role.Inventory with { Items = [expiring] } }, 65);
+        That(pending.Accepted && pending.Plan!.CharacterPrecondition!.Matches(role, expiring.ExpireTime - 1) &&
+            !pending.Plan.CharacterPrecondition.Matches(role, expiring.ExpireTime), "有限期限在提交前再次复验，不能等待到期后仍扣券扩容");
+        string root = Path.Combine(Path.GetTempPath(), "s5a9-account-tool-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var repo = new CharacterRepository(Path.Combine(root, "game.db"));
+            var owners = new AccountOwners();
+            foreach (int channelType in new[] { 4, 20, 24, 0 })
+            {
+                using var owner = owners.Acquire("account-tool-" + channelType, () => { });
+                if (channelType == 24)
+                    repo.Create(owner, new("AcctQual", towns.Room, towns.InitialReturn) { Level = 85 });
+                var created = repo.Create(owner, new("AcctTool" + channelType, towns.Room, towns.InitialReturn)
+                {
+                    Level = channelType == 24 ? (byte)85 : (byte)1, AcceptedStoryLevel = 1,
+                    PvpPrivateCreation = channelType == 24 ? new(85, 30, now.ToUnixTimeSeconds()) : null,
+                    Inventory = new([source with { Uid = 0 }])
+                });
+                created = InventoryService.Commit(repo, owner, created, new(true, 0, new(created.Inventory,
+                    created.Inventory with { AccountCargo = created.Inventory.AccountCargo with { Capacity = 1 } }, "account_tool_fixture")));
+                var session = new GameSession(repo, towns, owner, items: resources.Items, timeProvider: clock,
+                    entry: channelType == 0 ? null : new(new(2, 101), channelType, "[pvp]"));
+                session.Select(created.Slot); session.MarkReady();
+                int plans = 0;
+                InventoryResult Plan(Character character) { plans++; return cargo.AccountUpgradeTool(character, 65); }
+                string before = JsonSerializer.Serialize(repo.List(owner));
+                var used = session.PlanAndCommitInventory(Plan, 0, usedItem: source.Position);
+                That(channelType == 0 ? used.Accepted && plans == 1 && used.Plan!.After.AccountCargo.Capacity == 8 &&
+                    used.Plan.UsedItems.Any(row => row.ItemId == template.Id && row.Count == 1) :
+                    !used.Accepted && plans == 0 && JsonSerializer.Serialize(repo.List(owner)) == before,
+                    "149使用源接入公共资格，普通/竞技决斗及专用角色拒绝且村庄房间记录实际使用 " + channelType);
+                session.End();
+            }
+        }
+        finally { TestFiles.DeleteDirectory(root, true); }
+    }
+
     public static void RunMileagePersonalCargo(TownCatalog towns, ItemResources resources)
     {
         var now = DateTimeOffset.UtcNow;
@@ -99,8 +189,9 @@ internal static class CargoTests
         That(leaf.Kind == GameWorld.Items.ItemKind.Consumable && leaf.StackableType == "[etc] 0" &&
             leaf.PersonalCargoUpgradeTarget == 120 && leaf.HasAcquisitionEffect && leaf.IsPremiumService,
             "积分金库券终叶保持原类型并识别具名120格服务");
-        That(new[] { 490705277, 490705285 }.All(id => resources.Items.Get(id).PersonalCargoUpgradeTarget == 0 &&
-            !resources.Items.Get(id).HasAcquisitionEffect), "两层原包装不提前识别为扩容服务");
+        That(new[] { 490705277, 490705285, 490705125, 490705126, 490704517, 2660042, 490001422, 490013840 }
+            .All(id => resources.Items.Get(id).PersonalCargoUpgradeTarget == 0 &&
+                !resources.Items.Get(id).HasAcquisitionEffect), "外层扩展券与升级工具包装不提前识别为扩容服务");
         var source = new Character(1, 0, "MileCargo", 0, towns.Room, towns.InitialReturn)
         {
             Level = 95,
@@ -131,10 +222,28 @@ internal static class CargoTests
         {
             var holder = source with { Inventory = source.Inventory with { CargoCapacity = capacity } };
             holder = Apply(holder, items.Grant(holder, [new(490705285, 1)]));
-            string before = JsonSerializer.Serialize(holder);
-            var rejected = boosters.Open(holder, new(Slot(holder, 490705285), 1), out _, now);
-            That(!rejected.Accepted && rejected.Plan is null && JsonSerializer.Serialize(holder) == before,
-                "已达或超过120格时整包拒绝并保留285 " + capacity);
+            var consumed = Apply(holder, boosters.Open(holder, new(Slot(holder, 490705285), 1), out _, now));
+            That(consumed.Inventory.CargoCapacity == capacity && consumed.Inventory.Items.IsEmpty &&
+                consumed.Inventory.Gold == source.Inventory.Gold && consumed.Inventory.AccountWallet.Same(source.Inventory.AccountWallet),
+                "已达或超过120格时开启285正常消费扩展券并保持原容量，不留STK " + capacity);
+        }
+        foreach (var (ticketId, targetCapacity, capacities) in new (int TicketId, ushort Target, ushort[] Capacities)[]
+        {
+            (490705125, 40, [8, 24, 40, 72, 264]),
+            (490705126, 72, [8, 40, 72, 120, 264]),
+            (490001422, 40, [8, 40, 72])
+        })
+        {
+            foreach (ushort capacity in capacities)
+            {
+                var holder = source with { Inventory = source.Inventory with { CargoCapacity = capacity } };
+                holder = Apply(holder, items.Grant(holder, [new(ticketId, 1)]));
+                var opened = Apply(holder, boosters.Open(holder, new(Slot(holder, ticketId), 1), out _, now));
+                That(opened.Inventory.CargoCapacity == Math.Max(capacity, targetCapacity) && opened.Inventory.Items.IsEmpty &&
+                    opened.Inventory.Gold == source.Inventory.Gold && opened.Inventory.AccountWallet.Same(source.Inventory.AccountWallet) &&
+                    opened.Inventory.AccountCargo == source.Inventory.AccountCargo,
+                    $"金库扩展券{ticketId}在容量{capacity}下开启后保持max({capacity},{targetCapacity})并消费扩展券");
+            }
         }
         var core = InventoryRewardGrantService.Create(leaf, utcNow: now);
         var frozen = InventoryRewardGrantService.TryGrantCore(source, core, leaf, resources.EpicPieces, now);
@@ -158,7 +267,9 @@ internal static class CargoTests
 
     public static void RunCore()
     {
+        VerifyAccountCommon45Persistence();
         VerifySortRules();
+        VerifyAutomaticTakeout();
         var template = new DfoServer.GameWorld.Items.ItemTemplate(50, DfoServer.GameWorld.Items.ItemKind.Consumable,
             0, 10, 0, 100, 0, 0, 0, "[free]", 1, 0, "仓库资格测试") { MaximumLevel = 20, PersonalCargoUpgradeTarget = 24 };
         var catalog = new DfoServer.GameWorld.Items.ItemCatalog(null!, new Dictionary<int, string>(), new Dictionary<int, string>(), 0);
@@ -307,7 +418,9 @@ internal static class CargoTests
             "个人仓库别名不放开未知类别或主背包范围");
         That(InventorySortService.Plan(InventorySnapshot.Empty, sortRequest.Kind, 0, catalog, 2, sortRequest.List) is
             { Accepted: true, Plan.After.Items.Length: 0 }, "空个人仓库整理成功且不生成物品");
-        foreach (var (level, job, allowed) in new (byte, byte, bool)[] { (9, 0, false), (10, 0, true), (20, 0, true), (21, 0, false), (10, 1, false) })
+        That(!InventorySortService.Plan(InventorySnapshot.Empty, 0, 0, catalog, 2, InventoryListType.AccountCargo).Accepted,
+            "未开通零容量账号仓库拒绝整理");
+        foreach (var (level, job, allowed) in new (byte, byte, bool)[] { (9, 0, false), (10, 0, true), (20, 0, true), (21, 0, false), (10, 1, true), (10, 255, false) })
         {
             var result = service.PersonalUpgrade(role with { Level = level, Job = job }, 65);
             That(result.Accepted == allowed && role.Inventory.Find(source.Position) == source &&
@@ -318,6 +431,64 @@ internal static class CargoTests
         }
         catalog.PrefillTemplates(new Dictionary<int, DfoServer.GameWorld.Items.ItemTemplate> { [50] = template with { UseForbidden = true } });
         That(!service.PersonalUpgrade(role, 65).Accepted, "仓库工具禁止使用标记不可绕过");
+    }
+
+    static void VerifyAutomaticTakeout()
+    {
+        var template = new GameWorld.Items.ItemTemplate(201, GameWorld.Items.ItemKind.Material, 0, 0, 0, 100, 0, 0, 0,
+            "[free]", 1, 0, "自动取出材料");
+        var catalog = new GameWorld.Items.ItemCatalog(null!, new Dictionary<int, string>(), new Dictionary<int, string>(), 0);
+        catalog.PrefillTemplates(new Dictionary<int, GameWorld.Items.ItemTemplate>
+            { [201] = template, [202] = template with { Id = 202 }, [203] = template with
+                { Id = 203, Kind = GameWorld.Items.ItemKind.Equipment, EquipmentSlot = 12, StackLimit = 1 } });
+        foreach (var list in new[] { InventoryListType.PersonalCargo, InventoryListType.AccountCargo })
+        {
+            var source = new InventoryItem(1, new(list, 1), new(201, template.Kind, 6) { SortLockFlag = 1 });
+            var target = new InventoryItem(2, new(InventoryListType.Main, 121), source.Core with { Value = 4 });
+            var role = new Character(1, 0, "CargoAuto", 0, new(0, 0, 0, 0), null)
+                { Level = 60, Inventory = new([source, target]) { AccountCargo = new(Capacity: 8) } };
+            var request = new InventoryMoveRequest(source.Position, 1, 2, target.Position, 0, 0, -1, 0, 0);
+            foreach (int echo in new[] { 0, template.Id })
+            foreach (byte sortLock in new byte[] { 0, 1 })
+            {
+                var actualTarget = target with { Core = target.Core with { SortLockFlag = sortLock } };
+                var holder = role with { Inventory = role.Inventory with { Items = [source, actualTarget] } };
+                var result = InventoryMoveService.Plan(holder, request with { DestinationItemId = echo }, catalog, 0);
+                That(result.Accepted && result.Plan!.After.Find(source.Position) == source with { Core = source.Core with { Value = 4 } } &&
+                    result.Plan.After.Find(target.Position) == actualTarget with { Core = actualTarget.Core with { Value = 6 } },
+                    "两仓自动取出兼容0及真实模板回显，完整合堆保原UID、目标排序锁和源余量 " + list);
+            }
+            That(!InventoryMoveService.Plan(role, request with { DestinationItemId = 202 }, catalog, 0).Accepted &&
+                !InventoryMoveService.Plan(role with { Inventory = role.Inventory with
+                    { Items = [source, target with { Core = new(202, template.Kind, 4) }] } }, request, catalog, 0).Accepted,
+                "自动取出零回显不放宽未知非零编号或不同模板 " + list);
+            foreach (var blockedCore in new[] { target.Core with { Value = 100 }, target.Core with { Attr = 1 } })
+            {
+                var blocked = target with { Core = blockedCore };
+                var holder = role with { Inventory = role.Inventory with { Items = [source, blocked] } };
+                var moved = InventoryMoveService.Plan(holder, request, catalog, 0);
+                That(moved.Accepted && moved.Plan!.After.Find(target.Position) == blocked &&
+                    moved.Plan.After.Items.Single(item => item.Position.List == InventoryListType.Main && item.Position != target.Position)
+                        is { Core.ItemId: 201, Core.Value: 2 } && moved.Plan.After.Find(source.Position) is { Core.Value: 4 },
+                    "满堆或属性不兼容仍改投合法空格，不改写目标完整核心 " + list);
+                var full = holder.Inventory with { Items = holder.Inventory.Items.AddRange(Enumerable.Range(ItemSlotBoundService.QuickSlotStart,
+                    ItemSlotBoundService.Range(template.Kind, holder.Inventory).End - ItemSlotBoundService.QuickSlotStart + 1)
+                    .Where(index => index != target.Position.Index && ItemSlotBoundService.Allows(holder.Inventory,
+                        new(InventoryListType.Main, (short)index), template.Kind))
+                    .Select(index => new InventoryItem(100 + index, new(InventoryListType.Main, (short)index), new(202, template.Kind, 1)))) };
+                That(!InventoryMoveService.Plan(holder with { Inventory = full }, request, catalog, 0).Accepted &&
+                    full.Find(source.Position) == source && full.Find(target.Position) == blocked,
+                    "没有兼容堆和合法空格时整笔拒绝，源目标均保持 " + list);
+            }
+            That(!InventoryMoveService.Plan(role with { Inventory = role.Inventory with
+                { Items = [source with { Core = source.Core with { ExpireTime = 1 } }, target] } }, request, catalog, 2).Accepted,
+                "自动取出回显兼容不绕过源期限 " + list);
+            var equipment = source with { Core = new(203, GameWorld.Items.ItemKind.Equipment, 0) };
+            That(!InventoryMoveService.Plan(role with { Inventory = role.Inventory with
+                { Items = [equipment, target with { Position = new(InventoryListType.Main, 9), Core = equipment.Core }] } },
+                request with { Destination = new(InventoryListType.Main, 9) }, catalog, 0).Accepted,
+                "非堆叠装备不取得仓库自动合堆的零目标兼容 " + list);
+        }
     }
 
     static void VerifySortRules()
@@ -620,6 +791,93 @@ internal static class CargoTests
         }
         finally { TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"PASS {Count - checks} cargo assertions");
+    }
+
+    // 只验证正式仓储合同；发奖路由与716真实资源由对应资源测试验证。
+    static void VerifyAccountCommon45Persistence()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "account-common45-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        string path = Path.Combine(root, "game.db");
+        try
+        {
+            var repo = new CharacterRepository(path);
+            var owners = new AccountOwners();
+            using var owner = owners.Acquire("common45-account", () => { });
+            var room = new Location(1, 1, 100, 100);
+            var core = new ItemCore(490013716, GameWorld.Items.ItemKind.Material, 7) { Extension97 = 1234, Attr = 32 };
+            var first = repo.Create(owner, new("CommonFirst", room, room)
+            {
+                Inventory = InventorySnapshot.Empty with { Items = [new(0, new(InventoryListType.Main, 145), core)] }
+            });
+            var sibling = repo.Create(owner, new("CommonSecond", room, room));
+            var oldMain = first.Inventory.Find(new(InventoryListType.Main, 145))!;
+            That(Query("SELECT count(*) FROM account_cargo") is 0L, "首次45提交前未预建账号仓库行");
+            var sharedSlot = new InventorySlot(InventoryListType.AccountCommon, 0);
+            first = repo.CommitInventory(owner, first, new(first.Inventory,
+                first.Inventory with { Items = first.Inventory.Items.Add(new(0, sharedSlot, core)) }, "common45_first"));
+            var shared = first.Inventory.Find(sharedSlot)!;
+            That(shared.Uid > 0 && shared.Core == core && first.Inventory.AccountCargo.Revision == 1 &&
+                Query("SELECT inventory_items_revision FROM account_cargo") is long itemsRevision && itemsRevision > 0 &&
+                Query($"SELECT count(*) FROM character_inventory_items WHERE item_uid={shared.Uid} AND character_id IS NULL") is 1L &&
+                Query($"SELECT count(*) FROM character_inventory_slots WHERE item_uid={shared.Uid} AND character_id IS NULL AND list_type=45") is 1L,
+                "首个45物品同事务创建账号行，保完整核心并更新共享CAS与库存标记");
+            That(first.Inventory.Find(oldMain.Position) == oldMain, "新45提交不搬迁或合并旧Main实例");
+            sibling = repo.LoadCharacter(owner, sibling.Slot);
+            That(sibling.Inventory.Find(sharedSlot) == shared && sibling.Inventory.AccountCargo == first.Inventory.AccountCargo,
+                "同账号另一角色加载相同45实例UID、完整核心及共享revision");
+            var stale = sibling;
+            var changed = shared with { Core = core with { Value = 6 } };
+            first = repo.CommitInventory(owner, first, new(first.Inventory,
+                first.Inventory with { Items = first.Inventory.Items.Replace(shared, changed) }, "common45_consume"));
+            string stable = Snapshot();
+            DfoServer.Testing.TestCheck.Reject<InvalidOperationException>(() => repo.CommitInventory(owner, stale,
+                new(stale.Inventory, stale.Inventory with { Items = stale.Inventory.Items.Replace(shared, shared with { Core = core with { Value = 5 } }) }, "common45_stale")),
+                "另一角色旧共享版本不能覆盖45已提交的数量");
+            That(Snapshot() == stable, "45旧版本拒绝不改变资产、角色或任何审计");
+            first = repo.CommitInventory(owner, first, new(first.Inventory, first.Inventory with
+            {
+                AccountCargo = first.Inventory.AccountCargo with { Capacity = 8 },
+                Items = first.Inventory.Items.Add(new(0, new(InventoryListType.AccountCargo, 0), new(3175, GameWorld.Items.ItemKind.Material, 3)))
+            }, "common45_cargo12"));
+            That(first.Inventory.Find(sharedSlot) == changed && first.Inventory.Find(new(InventoryListType.AccountCargo, 0)) is not null,
+                "12和45的同号槽在同账号持久化后同时存在");
+            Sql("CREATE TRIGGER fail_common45 BEFORE INSERT ON cargo_audit_log BEGIN SELECT RAISE(FAIL,'common45 late failure'); END");
+            string before = Snapshot();
+            var failing = first.Inventory with
+            {
+                Gold = first.Inventory.Gold + 1,
+                Items = first.Inventory.Items.Replace(changed, changed with { Core = changed.Core with { Value = 4 } })
+                    .Add(new(0, new(InventoryListType.AccountCommon, 1), core))
+            };
+            DfoServer.Testing.TestCheck.Reject<SqliteException>(() => repo.CommitInventory(owner, first,
+                new(first.Inventory, failing, "common45_rollback")), "45末段仓库审计失败整笔拒绝");
+            That(Snapshot() == before, "45末段失败回滚两角色、共享数量、新UID、自增、金币、库存标记及全部审计");
+            Sql("DROP TRIGGER fail_common45");
+            var reopened = new CharacterRepository(path);
+            That(JsonSerializer.Serialize(reopened.List(owner)) == JsonSerializer.Serialize(repo.List(owner)) &&
+                reopened.LoadCharacter(owner, sibling.Slot).Inventory.Find(sharedSlot) == changed &&
+                reopened.LoadCharacter(owner, first.Slot).Inventory.Find(oldMain.Position) == oldMain,
+                "仓储重开恢复共享45、12及旧Main原实例，不依赖内存快照");
+
+            object? Query(string sql)
+            {
+                using var db = new SqliteConnection("Data Source=" + path + ";Pooling=False;Foreign Keys=True");
+                db.Open();
+                using var command = db.CreateCommand();
+                command.CommandText = sql;
+                return command.ExecuteScalar();
+            }
+            void Sql(string sql) => Query(sql);
+            string Snapshot() => JsonSerializer.Serialize(repo.List(owner)) + ":" +
+                Query("SELECT group_concat(item_uid||':'||COALESCE(character_id,0)||':'||item_core,'|') FROM (SELECT * FROM character_inventory_items ORDER BY item_uid)") + ":" +
+                Query("SELECT group_concat(account||':'||revision||':'||inventory_items_revision,'|') FROM account_cargo") + ":" +
+                Query("SELECT group_concat(id||':'||revision||':'||inventory_items_revision,'|') FROM (SELECT * FROM characters ORDER BY id)") + ":" +
+                Query("SELECT count(*) FROM inventory_audit_log") + ":" + Query("SELECT count(*) FROM currency_audit_log") + ":" +
+                Query("SELECT count(*) FROM cargo_audit_log") + ":" +
+                Query("SELECT group_concat(name||':'||seq,'|') FROM (SELECT * FROM sqlite_sequence ORDER BY name)");
+        }
+        finally { TestFiles.DeleteDirectory(root, true); }
     }
 
     static void VerifyAccountPurchases(Character source, ItemResources resources)

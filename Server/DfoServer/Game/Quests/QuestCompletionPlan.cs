@@ -66,7 +66,7 @@ internal sealed partial class QuestCompletionPlan
         ProfessionGrowType = profession; RewardLearning = rewardLearning; TargetEquipmentSlotFlags = equipmentSlots; TpAmount = tpAmount;
         GrantedExpertJob = expertJob;
         // mode3 解锁提示只对已逆向确认的 [hell challenge] 成立；inferno/cosmo/6081 为假设性放行，仍走普通 mode0（Refs #256）。
-        HellChallenge = quest.RewardType == "[hell challenge]" && QuestCharacterReward.TryHellChallenge(quest);
+        HellChallenge = quest.RewardType == "[hell challenge]" && QuestCharacterReward.SupportedChallengeReward(quest);
         ClosedChildren = closedChildren;
         CompletedChild = completedChild;
         TerminalClear = terminalClear;
@@ -171,7 +171,7 @@ internal sealed partial class QuestCompletionPlan
     public uint StageExperience => StagePlan?.BonusExperience ?? 0;
     public uint TotalRequestedExperience => checked(ExperienceReward.Amount + StageExperience);
     public uint ActualExperience => checked((uint)(TargetLearning.Experience - Expected.Learning.Experience));
-    Character ProjectedCharacter => Expected with { Revision = checked(Expected.Revision + 1),
+    internal Character ProjectedCharacter => Expected with { Revision = checked(Expected.Revision + 1),
         Inventory = Inventory.After, Level = TargetLevel, GrowType = TargetGrowType, Learning = TargetLearning,
         ExpertJobType = TargetExpertJob,
         EquipmentSlotFlags = TargetEquipmentSlotFlags, CompletedQuests = CompletedAfter.ToArray(),
@@ -241,7 +241,7 @@ internal sealed partial class QuestCompletionPlan
         EpicPieceCatalog pieces, CharacterGrowthCatalog growthCatalog, DateTimeOffset now, QuestClearReceipt? clear = null, ushort multiplier = 1,
         GrowthContractBenefits? growthContract = null, QuestStageGraph? stageGraph = null, QuestStageState? stageState = null, ExperienceBonusService? experienceBonuses = null, bool premiumPcRoom = false,
         ExpertJobScriptCatalog? expertJobs = null, int? pvpGrade = null, QuestClearReceipt? terminalClear = null,
-        bool strongway2019Active = false, QuestTicketSource? coupon = null)
+        bool strongway2019Active = false, QuestTicketSource? coupon = null, bool epicRoad2019Active = false)
     {
         try
         {
@@ -256,10 +256,10 @@ internal sealed partial class QuestCompletionPlan
             // 地区每日上限只约束分配；同日原接取不因后续升级失去领奖资格，其余资格与目标仍逐项复验。
             if (!DfoServer.Game.Pvp.PvpTrainingExposure.Allows(expected,quest) || active is null || active.AcceptanceId == Guid.Empty || active.Slot >= 30 ||
                 QuestEligibility.Completed(expected).Contains(quest.Id) || expected.CompletedQuests.Distinct().Count() != expected.CompletedQuests.Length ||
-                QuestEligibility.InspectResource(quest, strongway2019Active).Entry is not (QuestResourceEntry.Ordinary or QuestResourceEntry.Creature) && !QuestRelationProgress.DialogueChild(quest, quests) &&
+                QuestEligibility.InspectResource(quest, strongway2019Active, epicRoad2019Active).Entry is not (QuestResourceEntry.Ordinary or QuestResourceEntry.Creature) && !QuestRelationProgress.DialogueChild(quest, quests) &&
                     !QuestRelationProgress.ThresholdParent(quest,quests) && !QuestHiddenEntry.Direct(quest,quests) && !QuestAutoDailyPlan.Supports(quest) ||
                 coupon is null && completedParent is null && !QuestEligibility.Evaluate(expected with { ActiveMainQuests = expected.ActiveMainQuests.Where(row => row != active).ToArray() }, quest, quests,
-                    allowAboveMaximum: QuestAutoDailyPlan.Hunt(quest), strongway2019Active: strongway2019Active).Eligible)
+                    allowAboveMaximum: QuestAutoDailyPlan.Hunt(quest), strongway2019Active: strongway2019Active, epicRoad2019Active: epicRoad2019Active).Eligible)
                 throw new InvalidDataException("任务接取身份、完成位或当前资格不符");
             if (completedParent is not null)
             {
@@ -304,7 +304,7 @@ internal sealed partial class QuestCompletionPlan
             byte? profession = quest.RewardType is "[grow type]" or "[awakening type]"
                 ? QuestProfessionReward.Target(expected, quest, growthCatalog.Learning ?? throw new NotSupportedException("职业变化技能资源未装配")) : null;
             _ = QuestCharacterReward.TryTp(quest,out ushort tpAmount);
-            bool characterReward = QuestCharacterReward.TryScalar(quest,out _) || tpAmount != 0 || QuestCharacterReward.TryHellChallenge(quest);
+            bool characterReward = QuestCharacterReward.TryScalar(quest,out _) || tpAmount != 0 || QuestCharacterReward.SupportedChallengeReward(quest);
             bool creatureReward = QuestCreatureReward.Evolution(quest);
             byte? expertJob = QuestExpertJobReward.Type(quest);
             bool dungeonClear = QuestDungeonClearProgress.Supports(quest);

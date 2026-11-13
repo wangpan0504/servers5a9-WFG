@@ -10,6 +10,12 @@ internal sealed record ConsumableUseResult(ConsumableUseOutcome Outcome, string 
     public long? SourceUid { get; init; }
     public bool PreserveSource { get; init; }
     public bool NativeNoConsumption { get; init; }
+    public System.Collections.Immutable.ImmutableArray<ConsumableStateUpdate> EffectUpdates { get; init; } = [];
+    public int? TreasureHunterBonus { get; init; }
+    public bool? TreasureHunterFromExj { get; init; }
+    public int? DungeonEpicBuffId { get; init; }
+    public int? BossDropPercent { get; init; }
+    public System.Collections.Immutable.ImmutableArray<int> VariousBuffIds { get; init; } = [];
     public int TownGiftItem { get; init; }
     public DfoServer.Game.Characters.ExperienceConsumablePlan? Experience { get; init; }
     public DfoServer.Game.Characters.PermanentGrowthPlan? PermanentGrowth { get; init; }

@@ -12,15 +12,20 @@ internal sealed record DungeonExperienceReward(string RuleId, string ResourceSou
     public uint PotionExperience { get; init; }
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public ExperienceBonuses? Bonuses { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+    public System.Collections.Immutable.ImmutableArray<int> AppliedVariousBuffs { get; init; }
 }
 
 // 存储返回实际提交后的角色；Duplicate表示账本精确重放，不是新的击杀或新奖励。
 // GainedExperience是角色经验到账，ProficiencyGained是同一笔经验记入熟练度的额度；两者之和是本次有效经验。
 internal sealed record DungeonGrowthCommit(Character Character, bool Duplicate, uint GainedExperience = 0, uint ProficiencyGained = 0)
 {
+    public DfoServer.Game.Adventure.AdventureProgressionCommit? Adventure { get; init; }
     public ExperienceBonuses? CommittedBonuses { get; init; }
     public DungeonDirectPickupCommit DirectPickup { get; init; } = DungeonDirectPickupCommit.Empty;
     public System.Collections.Immutable.ImmutableArray<DfoServer.Game.Inventory.Services.EquipmentGrowthChange> EquipmentChanges { get; init; } = [];
+    public System.Collections.Immutable.ImmutableArray<DfoServer.Game.Inventory.Models.InventorySlot> SpecialClearRewardSlots { get; init; } = [];
+    public bool SpecialClearRewardMailOverflow { get; init; }
 }
 
 internal static class DungeonKillExperiencePolicy

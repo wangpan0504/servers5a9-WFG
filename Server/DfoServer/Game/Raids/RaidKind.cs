@@ -2,7 +2,7 @@ using DfoServer.Game.Accounts;
 
 namespace DfoServer.Game.Raids;
 
-// 类型编号来自 raid.lst；普雷当前只接入单人引导，不扩大普通队伍容量。
+// 类型编号来自 raid.lst；普通普雷的全团操作复用同一固定组锁序。
 internal enum RaidKind : byte { Anton = 0, Luke = 1, Fiendwar = 2, Prey = 3 }
 
 internal static class RaidOwnerGroup
@@ -11,7 +11,7 @@ internal static class RaidOwnerGroup
     {
         RaidKind.Anton => AccountOwners.Lease.ExecuteRaid(members, action),
         RaidKind.Luke or RaidKind.Fiendwar => AccountOwners.Lease.ExecuteRaidGroup(members, 8, action),
-        RaidKind.Prey when members.Count == 1 => AccountOwners.Lease.ExecuteGroup(members, action),
+        RaidKind.Prey when members.Count is >= 1 and <= 12 => AccountOwners.Lease.ExecuteRaid(members, action),
         _ => throw new ArgumentOutOfRangeException(nameof(kind))
     };
 }

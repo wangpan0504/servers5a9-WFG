@@ -18,7 +18,7 @@ internal sealed class AntonResourceRewards(RaidScript script, ItemCatalog items,
     // Runtime装配时预热；开战持owner锁时只访问本策略不可变奖池，不再解析PVF。
     readonly RaidRewardContainers containers = new(script, items, boosters);
 
-    internal ImmutableArray<RaidPhaseRewardPolicy> Create(bool pcroom, Func<int, int>? draw = null, ushort character = 0)
+    internal ImmutableArray<RaidPhaseRewardPolicy> Create(bool pcroom, Func<int, int>? draw = null, ushort character = 0, decimal epicMultiplier = 1)
     {
         if (script.Phases.Length != 2 || !script.Issues.IsEmpty) throw new InvalidDataException("安徒恩奖励缺少两阶段声明");
         var result = ImmutableArray.CreateBuilder<RaidPhaseRewardPolicy>(2);
@@ -40,10 +40,11 @@ internal sealed class AntonResourceRewards(RaidScript script, ItemCatalog items,
             if (squad.Length is < 1 or > 32 || squad.Any(row => row.RawA != -1 || row.RawB <= 0 || row.RawD is not (0 or 1)))
                 throw new InvalidDataException("安徒恩分队奖励声明无效");
             foreach (var row in squad) RequireItem(row.ItemId);
+            var adjusted = containers.Weights(squad, row => row.ItemId, row => row.RawB, epicMultiplier);
             int weight = squad.Aggregate(0, (sum, row) => checked(sum + row.RawB));
             int selected = (draw ?? RandomNumberGenerator.GetInt32)(weight);
             if (selected < 0 || selected >= weight) throw new InvalidDataException("安徒恩奖励随机值越界");
-            var winner = squad.First(row => (selected -= row.RawB) < 0);
+            var winner = squad.Where((row, index) => (selected -= adjusted[index]) < 0).First();
             // LIVE-VERIFY：95按类别/牌位/物品ID显示；code=0普通项、flag=0不点亮特殊效果。
             // 初始展示本成员Card0冻结产物，实际选位与在线到期领取由原Battle处理，不重抽。
             RaidRewardOffer Offer(byte kind, ImmutableArray<InventoryReward> grants) => new(kind, 0, grants,

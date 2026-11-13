@@ -7,12 +7,16 @@ namespace DfoServer;
 
 internal static partial class GmWebServerTests
 {
-    public static Task RunClientPagesAsync() => ClientPagesAsync(new FakeData(
-        Path.Combine(Path.GetTempPath(), "gm-client-web-" + Guid.NewGuid().ToString("N") + ".jsonl")));
+    public static async Task RunClientPagesAsync()
+    {
+        await RunManagementBoundaryAsync();
+        await ClientPagesAsync(new FakeData(
+            Path.Combine(Path.GetTempPath(), "gm-client-web-" + Guid.NewGuid().ToString("N") + ".jsonl")));
+    }
 
     static async Task ClientPagesAsync(FakeData data)
     {
-        That(new ServerOptions().RechargeWebPort == 80, "客户端网页默认使用HTTP80");
+        That(new ServerOptions().RechargeWebPort == 23104, "客户端网页默认使用HTTP23104");
         int clientPort = FreeWebPort();
         using (var stop = new CancellationTokenSource())
         {

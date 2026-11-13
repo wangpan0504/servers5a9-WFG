@@ -184,7 +184,8 @@ internal sealed class DimensionRewardPolicy(DimensionDungeonCatalog dimension, D
         if (equip == 0 || normal.TotalWeight == 0 && set.TotalWeight == 0) return null;
         return new(equip, null, 1, 1, ProbabilityDenominator: 100,
             RarityPools: [new(DungeonDropRatePlan.RarityDenominator, normal,
-                set.TotalWeight > 0 && rate > 0 ? set : null, set.TotalWeight > 0 ? rate * 10 : 0)]);
+                set.TotalWeight > 0 && rate > 0 ? set : null, set.TotalWeight > 0 ? rate * 10 : 0)],
+            Category: DungeonDropCategory.Equipment);
     }
 
 }

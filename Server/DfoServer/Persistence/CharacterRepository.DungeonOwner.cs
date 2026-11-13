@@ -68,6 +68,38 @@ internal sealed partial class CharacterRepository : IPartyDungeonStore
         if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("熟练度状态已变化");
     }
 
+    public const uint GrowthCapsuleFullExperience = 10_000_000;
+
+    public Character ClaimGrowthCapsule(AccountOwners.Lease owner, Character expected, uint requiredExperience = GrowthCapsuleFullExperience) => owner.Execute(() =>
+    {
+        var state = expected.DungeonState ?? throw new InvalidOperationException("成长胶囊缺少角色附属状态");
+        if (state.GrowthCapsuleExperience < requiredExperience)
+            throw new InvalidOperationException("成长胶囊经验未满");
+        using var db = database.Open();
+        using var write = db.BeginWrite("CharacterRepository.ClaimGrowthCapsule");
+        using var tx = write.Transaction;
+        var current = Require(db, tx, owner.Account, expected.Name);
+        if (current.Id != expected.Id || current.Revision != expected.Revision || current.DungeonState != state)
+            throw new InvalidOperationException("成长胶囊角色状态已变化");
+        using var command = db.CreateCommand();
+        command.Transaction = tx;
+        command.Parameters.AddWithValue("$id", expected.Id);
+        command.Parameters.AddWithValue("$account", owner.Account);
+        command.Parameters.AddWithValue("$revision", expected.Revision);
+        command.Parameters.AddWithValue("$oldCapsule", state.GrowthCapsuleExperience);
+        command.Parameters.AddWithValue("$newCapsule", state.GrowthCapsuleExperience - requiredExperience);
+        command.CommandText = "UPDATE characters SET revision=revision+1 WHERE id=$id AND account=$account AND revision=$revision";
+        if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("成长胶囊revision冲突");
+        command.CommandText = """
+            UPDATE character_dungeon_state SET capsule_experience=$newCapsule
+            WHERE character_id=$id AND account=$account AND capsule_experience=$oldCapsule
+            """;
+        if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("成长胶囊经验已变化");
+        var committed = Require(db, tx, owner.Account, expected.Name);
+        tx.Commit();
+        return committed;
+    });
+
     public Character ReserveDungeonAttempt(AccountOwners.Lease owner, Character expected, uint nextObjectKey,
         WeeklyDungeonEntry? weekly = null) => ReserveDungeonEntry(owner, expected, nextObjectKey, weekly).Character;
 
@@ -104,9 +136,16 @@ internal sealed partial class CharacterRepository : IPartyDungeonStore
         AccountOwners.Lease owner, Character expected, uint nextObjectKey, DungeonEntryCharge charge, out DungeonTransientFatigue? cachedFatigue,
         DungeonIncountUsage? partyCounted = null)
     {
-        if (charge.RequiredEvent is { } required &&
-            !required.Matches(ServerEventRepository.Read(db, tx, required.Schedule.EventId)))
+        var requiredEvent = charge.RequiredEvent;
+        bool epicRoad = charge.DungeonId is 400000097 or 400000098;
+        if (epicRoad && requiredEvent?.Schedule.EventId != Game.Events.ServerEventService.EpicRoadId)
+            throw new DungeonEventAdmissionRejectedException();
+        // 所有活动复用同一次事务内复验，仍由各自入口处理拒绝。
+        if (requiredEvent is not null && !requiredEvent.Matches(ServerEventRepository.Read(db, tx, requiredEvent.Schedule.EventId)))
+        {
+            if (epicRoad) throw new DungeonEventAdmissionRejectedException();
             throw new DfoServer.Game.Inventory.Models.InventoryEventRejectedException();
+        }
         var state = ReservationState(expected, nextObjectKey);
         var identity = charge.Identity;
         if (identity.CharacterId != expected.Id || identity.InstanceId == Guid.Empty || identity.Epoch <= 0 ||
@@ -115,6 +154,11 @@ internal sealed partial class CharacterRepository : IPartyDungeonStore
         AdmitOrdinaryLuke(db, tx, owner, expected, charge);
         AdmitPreyNormal(db, tx, owner, expected, charge);
         AdmitAntonNormal(db, tx, owner, expected, charge);
+        if (charge.SingleBinding is { } single)
+        {
+            if (!single.Group.Dungeons.Contains(charge.DungeonId)) throw new InvalidDataException("单人绑定副本与原入场不符");
+            BindSingleDungeonInTransaction(db, tx, owner, expected, single);
+        }
         AdmitDazzlementTower(db, tx, owner, expected, charge);
         AdmitGuildDungeon(db, tx, expected.Id, charge);
         CharacterFatigueState? fatigueBefore = null, fatigueAfter = null;
@@ -162,10 +206,15 @@ internal sealed partial class CharacterRepository : IPartyDungeonStore
             counted = CommitDungeonIncountInTransaction(db, tx, owner, expected,
                 incount.Dungeon, incount.Period, incount.Row, null, incount.Account, incount.Increment) ??
                 throw new InvalidOperationException("入场次数在提交前已用尽");
-        long revision = charge.InventoryPayment is { } items ? CommitInventoryInTransaction(db, tx, owner, expected, items).Revision : expected.Revision;
+        var payment = charge.InventoryPayment;
+        var energy = DfoServer.Game.Inventory.Services.QuickSlotEquipmentEnergy.Plan(expected, payment?.After ?? expected.Inventory,
+            charge.QuickSlotEnergySource, fatigueBefore is not null && fatigueAfter is not null ? fatigueBefore.Remaining - fatigueAfter.Remaining : 0);
+        if (energy is not null) payment = payment is null ? energy : payment.WithAfter(energy.After);
+        long revision = payment is { } items ? CommitInventoryInTransaction(db, tx, owner, expected, items).Revision : expected.Revision;
         ReserveInTransaction(db, tx, owner, expected, revision, state, nextObjectKey, fatigueBefore, charge.Weekly);
         CommitTagEvildomAdmission(db, tx, owner, expected, charge, checked(revision + 1));
         CommitImperialArenaAdmission(db, tx, owner, expected, charge, checked(revision + 1));
+        CommitMockBattleAdmission(db, tx, owner, expected, charge);
         CommitHopeAdmission(db, tx, owner, expected, charge, checked(revision + 1));
         CommitGriefEntry(db, tx, owner, expected, charge, checked(revision + 1));
         WriteSpecialEntry(db, tx, owner, expected, charge, checked(revision + 1));
@@ -179,6 +228,7 @@ internal sealed partial class CharacterRepository : IPartyDungeonStore
             command.Parameters.AddWithValue("$remaining", fatigueAfter.Remaining);
             command.CommandText = "UPDATE character_fatigue SET used=$used,remaining=$remaining WHERE character_id=$id AND account=$account";
             if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("入场疲劳缺少原疲劳owner");
+            WriteFatigueBattery(db, tx, owner.Account, expected.Id, fatigueAfter);
             ApplyBattlePassDungeonActivity(db,tx,owner.Account,DfoServer.Game.BattlePass.BattlePassDungeonActivity.PrepareFatigue(
                 identity,"entry",charge.MapId,fatigueBefore,fatigueAfter,charge.BattlePassMissionClock));
         }

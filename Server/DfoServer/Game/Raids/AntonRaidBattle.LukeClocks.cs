@@ -68,7 +68,7 @@ internal sealed partial class AntonRaidBattle
     {
         if (!lukeClockActive || lukeClockLease is not { IsStopped: false } lease) return;
         // 失败能力在首个终态快照密封；即使最后成员离开，原邮件事务仍须完成重试。
-        if (PendingFiendwarFailure() is not null)
+        if (PendingRaidFailureRefund() is not null)
         { lease.Schedule(lease.RetryRemaining ?? TimeSpan.Zero); return; }
         if (members.Count == 0 && AntonRewardWaitRemainingLocked() is null && LukeRewardRemainingLocked() is null &&
             LukeRejoinRemainingLocked() is null || current.State == AntonRaidBattleState.Completed)
@@ -78,7 +78,11 @@ internal sealed partial class AntonRaidBattle
         // 正常请求可能先恢复原候选；旧退避不能继续压住下一phase的新SET。
         lease.SetRetry(null);
         if (LukeRewardRemainingLocked() is { } lukeReward)
-        { lease.Schedule(lukeReward > TimeSpan.Zero ? lukeReward : TimeSpan.FromSeconds(1)); return; }
+        {
+            lease.Schedule(FiendwarMovieRemainingLocked() is { } movie && movie < lukeReward ? movie :
+                lukeReward > TimeSpan.Zero ? lukeReward : TimeSpan.FromSeconds(1));
+            return;
+        }
         if (AntonRewardWaitRemainingLocked() is { } rewardWait)
         { lease.Schedule(AntonMovieRemainingLocked() is { } movie && movie < rewardWait ? movie : rewardWait); return; }
         if (AntonWaitRemainingLocked() is { } wait)
@@ -89,6 +93,7 @@ internal sealed partial class AntonRaidBattle
         { lease.Schedule(Timeout.InfiniteTimeSpan); return; }
         TimeSpan? earliest = Kind == RaidKind.Fiendwar ? FiendwarClockRemainingLocked() : LukePhaseRemainingLocked();
         if (LukeRejoinRemainingLocked() is { } rejoin && (earliest is null || rejoin < earliest)) earliest = rejoin;
+        if (PreyDungeonRemainingLocked() is { } prey && (earliest is null || prey < earliest)) earliest = prey;
         foreach (var timer in current.Timers)
         {
             if (!current.TimerAnchors.TryGetValue(timer.Key, out long anchor)) continue;
@@ -125,6 +130,8 @@ internal sealed partial class AntonRaidBattle
             }
             if (Kind == RaidKind.Anton && current.State == AntonRaidBattleState.Intermission) return ExpireAntonWaitLocked();
             if (Kind == RaidKind.Luke && current.State == AntonRaidBattleState.Intermission) return false;
+            if (Kind == RaidKind.Fiendwar && current.State == AntonRaidBattleState.Reward)
+                return ExpireFiendwarMovieLocked();
             if (TerminalRequested(current)) return false;
             if (Kind == RaidKind.Fiendwar) return TickFiendwarLocked();
             // 本实例最多30个(kind,DGN)键；只处理当前已到期代，不在一次回调内追逐新建零秒timer。
@@ -159,6 +166,7 @@ internal sealed partial class AntonRaidBattle
                 ExpireDueAntonClockLocked();
                 return !ReferenceEquals(before, current);
             }
+            ExpireDuePreyDungeonsLocked();
             var due = current.Timers.Where(row => current.TimerAnchors.TryGetValue(row.Key, out long anchor) &&
                 lukeClock.GetElapsedTime(anchor) >= TimeSpan.FromSeconds(row.Value))
                 .Select(row => (Timer: row.Key, Generation: current.TimerGenerations.GetValueOrDefault(row.Key))).ToArray();

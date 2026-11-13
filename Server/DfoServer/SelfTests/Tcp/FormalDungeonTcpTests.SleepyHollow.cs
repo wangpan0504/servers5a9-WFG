@@ -16,6 +16,10 @@ internal static partial class FormalDungeonTcpTests
     public static async Task RunSleepyHollowAsync(ServerOptions source, string root, TcpTestResources resources)
     {
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "sleepy-hollow-socket"), resources: resources);
+        Directory.CreateDirectory(fixture.Options.DataDirectory);
+        // 仅隔离夹具放大材料概率，确定性覆盖碳材料的真实Runtime死亡/拾取链，不用随机未命中掩盖未装配。
+        File.WriteAllText(Path.Combine(fixture.Options.DataDirectory, "drop-control.json"),
+            "{\"Enabled\":true,\"Rules\":[{\"Scope\":\"All\",\"DungeonIds\":[],\"Multipliers\":{\"Materials\":100}}]}");
         await fixture.StartAsync();
         var area = resources.Towns.Areas.Values.First(row => row.DungeonWorldMap is { } world &&
             resources.Towns.DungeonMaps[world].Options.Any(option => option.DungeonId == 7322));
@@ -45,7 +49,7 @@ internal static partial class FormalDungeonTcpTests
         That(U32(information, 0) == 7322 && information[4] == 0, "断头谷真实16入场保留固定难度0");
         var maze = SelfTestCatalogs.Dungeons(resources.Archive).Get(7322).Mazes.Single(row => row.SourceOrdinal == information[7]);
         var route = QuestStoryRouteTests.Path(maze.StaticTopology, new(map[0], map[1]), new(information[8], information[9]));
-        int junk = 0, seeds = 0, bosses = 0;
+        int junk = 0, seeds = 0, bosses = 0, carbon = 0;
         for (int room = 0; room < route.Length; room++)
         {
             if (room > 0)
@@ -59,17 +63,21 @@ internal static partial class FormalDungeonTcpTests
             {
                 ushort key = U16(map, offset + 6);
                 var report = Death(key, peer.Id, map[offset + 12]);
+                var adventureBefore = AdventureProgressSnapshot(fixture, peer);
                 peer.Send(39, report);
                 var death = peer.Expect(0, 38).Body;
+                ExpectAdventureProgressIfChanged(fixture, resources, peer, adventureBefore);
                 That(U16(death, 0) == key, "真实39报告后的38掉落通知绑定实际怪物key");
                 bool boss = map[offset + 13] == 3;
-                int dropJunk = 0, dropSeeds = 0;
+                int dropJunk = 0, dropSeeds = 0, dropCarbon = 0;
                 for (int index = 0; index < U16(death, 2); index++)
                 {
                     int at = 4 + index * 131;
                     if (U32(death, at + 6) == SleepyHollowMaterialDropPolicy.UsefulJunkId) dropJunk += checked((int)U32(death, at + 10));
                     if (U32(death, at + 6) == SleepyHollowMaterialDropPolicy.BirthSeedId) dropSeeds += checked((int)U32(death, at + 10));
+                    if (U32(death, at + 6) == CarbonCrystalDropPolicy.ItemId) dropCarbon += checked((int)U32(death, at + 10));
                 }
+                That(dropCarbon == (boss ? 1 : 0), "放大材料倍率后真实领主恰掉1碳结晶体，普通怪仍不掉");
                 That(boss ? dropJunk == 9 && dropSeeds is >= 10 and <= 14 : dropJunk == 0 && dropSeeds == 0,
                     "真实socket仅Boss掉9杂物和10至14芽，普通怪不补材料");
                 if (boss)
@@ -79,7 +87,7 @@ internal static partial class FormalDungeonTcpTests
                     peer.Expect(0, 115, [1, 1, (byte)key, (byte)(key >> 8)]);
                     peer.Expect(0, 31, []);
                 }
-                junk += dropJunk; seeds += dropSeeds;
+                junk += dropJunk; seeds += dropSeeds; carbon += dropCarbon;
                 PickupResourceDrops(fixture, peer, death, 0, resources);
                 string saved = fixture.Snapshot();
                 peer.Send(39, report); peer.Barrier();
@@ -90,6 +98,12 @@ internal static partial class FormalDungeonTcpTests
         That(bosses == 1 && junk == 9 && seeds is >= 10 and <= 14 &&
             Amount(SleepyHollowMaterialDropPolicy.UsefulJunkId) == junk && Amount(SleepyHollowMaterialDropPolicy.BirthSeedId) == seeds,
             "真实16/39/38/43链路完成一次Boss奖励并精确入库");
-        Console.WriteLine($"PASS 断头谷socket实际路线{maze.SourceOrdinal}：杂物{junk}，芽{seeds}，死亡/拾取重放不增资产");
+        That(carbon == 1 && Amount(CarbonCrystalDropPolicy.ItemId) == 1,
+            "碳结晶体沿真实16/39/38/43链路生成地面堆、拾取并持久化，重复死亡不多发");
+        peer.Dispose();
+        using var reconnect = Open(fixture);
+        reconnect.Select(character.Slot, prepared: true, resumeTown: true, room: false);
+        That(Amount(CarbonCrystalDropPolicy.ItemId) == 1, "碳材料拾取后断线重登仍只有1个");
+        Console.WriteLine($"PASS 断头谷socket实际路线{maze.SourceOrdinal}：杂物{junk}，芽{seeds}，碳{carbon}；隔离材料倍率100；死亡/拾取重放及重登不增资产");
     }
 }

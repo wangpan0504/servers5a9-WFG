@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Characters;
@@ -8,6 +9,7 @@ using DfoServer.Infrastructure;
 using DfoServer.Network.Builders.Inventory;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Parsers.Inventory;
+using static DfoServer.Testing.TestCheck;
 
 namespace DfoServer.Testing.Inventory;
 
@@ -23,6 +25,18 @@ internal static class MagicBoxTests
                 throw new InvalidOperationException("FAIL magic-box: " + name);
         }
 
+        var potRequest = MagicBoxRequests.Single([3, 94, 0, 150, 0]);
+        Check(potRequest == new MagicBoxOpenRequest(3, new(InventoryListType.Main, 94), 0,
+            new(InventoryListType.Main, 150), 0, 1), "魔罐原生类型3保留两个Main绝对槽位");
+        foreach (byte[] invalid in new byte[][] { [3, 94, 0], [2, 94, 0, 150, 0], [5, 94, 0, 150, 0] })
+        {
+            bool malformedRejected = false;
+            try { MagicBoxRequests.Single(invalid); }
+            catch (InvalidDataException) { malformedRejected = true; }
+            Check(malformedRejected, "魔罐短包及未确认用途类型不放行");
+        }
+        Check(MagicBoxRequests.Single([0, 94, 0]).RawListType == 0 &&
+            MagicBoxRequests.Single([4, 94, 0]).RawListType == 4, "既有0/4单开短包保持兼容");
         var request = MagicBoxRequests.Expand(Convert.FromHexString("00450048B39800790047B398006400"));
         Check(request == new MagicBoxOpenRequest(0, new InventorySlot(InventoryListType.Main, 69), 0x0098B348,
             new InventorySlot(InventoryListType.Main, 121), 0x0098B347, 100),
@@ -38,7 +52,7 @@ internal static class MagicBoxTests
 [/stackable type]
 [RANDOMBOX]
 [int data]
-2600014 2 0 2600014 18000 2 0 2600015 5000 1 0
+2600014 2 0 2600014 18000 2 1 2600015 5000 1 0
 [/int data]
 [int data]
 2682272 1 0 2682272 50000 1 0
@@ -49,9 +63,11 @@ internal static class MagicBoxTests
 [/RANDOMBOX]
 ");
         Check(definition.Available && definition.MaterialItemId == 10007367 && definition.MaterialCount == 1 &&
-            definition.Pools.Length == 2 && definition.Pools[0].Rewards[0] == new MagicBoxReward(2600014, 18000, 2) &&
-            definition.Pools[0].Rewards[1] == new MagicBoxReward(2600015, 5000, 1),
-            "random box parser reads independent reward pools and material");
+            definition.Pools.Length == 2 && definition.Pools[0].Rewards[0] == new MagicBoxReward(2600014, 18000, 2, true) &&
+            definition.Pools[0].Rewards[1] == new MagicBoxReward(2600015, 5000, 1, false) &&
+            MagicBoxPackets.Broadcast("123", 2682272, 2600014).SequenceEqual(
+                new byte[] { 18, 3, (byte)'1', (byte)'2', (byte)'3', 0xA0, 0xED, 0x28, 0x00, 0x4E, 0xAC, 0x27, 0x00 }),
+            "random box parser reads independent reward pools, broadcast flag and NOTI 86 subType 18 packet");
         var samsung = MagicBoxCatalog.Parse(@"
 [stackable type]
 `[random ss upgradable legacy]` 1
@@ -138,6 +154,39 @@ internal static class MagicBoxTests
         var random = new FirstRandom();
         var service = new InventoryMagicBoxService(resources.Items, resources.MagicBoxes, resources.GoldLimits, resources.EpicPieces,
             random, contracts: resources.Contracts);
+        var potService = new InventoryMagicBoxService(resources.Items, resources.MagicBoxes, resources.GoldLimits, resources.EpicPieces,
+            new FirstRandom(), contracts: resources.Contracts);
+        var pot = new Character(1, 0, "MagicPot", 0, towns.Room, towns.InitialReturn)
+        {
+            Level = 95,
+            Inventory = new([new(1, potRequest.BoxSlot, new(2681819, ItemKind.Consumable, 2)),
+                new(2, potRequest.MaterialSlot, new(2681820, ItemKind.Material, 1))])
+        };
+        var potOpened = potService.Open(pot, potRequest, out var potReceipt);
+        Check(potOpened.Accepted && potReceipt is { RawListType: 3, BoxSlot: 94, MaterialSlot: 150, OpenCount: 1 } &&
+            potOpened.Plan!.After.Find(potRequest.BoxSlot) is { Core.Count: 1 } &&
+            potOpened.Plan.After.Find(potRequest.MaterialSlot) is null && potReceipt.Rewards.Sum(row => row.Count) == 1,
+            "魔罐原生类型3从Main消耗一罐一圣水并按真实PVF奖池发奖");
+        foreach (var invalid in new[] { potRequest with { BoxSlot = potRequest.MaterialSlot },
+            potRequest with { MaterialSlot = new(InventoryListType.Main, 149) } })
+            Check(potService.Open(pot, invalid, out var rejectedReceipt) is { Accepted: false, Plan: null } && rejectedReceipt is null,
+                "魔罐错误源槽或材料槽不生成扣费及奖励计划");
+        Check(potService.Open(pot with { Inventory = potOpened.Plan!.After }, potRequest, out _) is { Accepted: false, Plan: null } &&
+            pot.Inventory.Find(potRequest.BoxSlot) is { Core.Count: 2 } && pot.Inventory.Find(potRequest.MaterialSlot) is { Core.Count: 1 },
+            "圣水耗尽拒绝再次开罐，规划不修改原快照");
+        var fullPot = pot with
+        {
+            Inventory = new([.. Enumerable.Range(65, 32).Select(slot => new InventoryItem(slot, new(InventoryListType.Main, (short)slot),
+                    new(2681819, ItemKind.Consumable, 3)))
+                .Concat(Enumerable.Range(121, 32).Select(slot => new InventoryItem(slot, new(InventoryListType.Main, (short)slot),
+                    new(2681820, ItemKind.Material, 3))))], Expansion: 0)
+        };
+        var overflowPot = potService.Open(fullPot, potRequest, out var overflowReceipt);
+        Check(overflowPot.Accepted && overflowPot.Plan!.OverflowItems is [{ Core.Count: 1 }] &&
+            overflowPot.Plan.After.Find(potRequest.BoxSlot) is { Core.Count: 2 } &&
+            overflowPot.Plan.After.Find(potRequest.MaterialSlot) is { Core.Count: 2 } &&
+            overflowReceipt is { Rewards.Count: 1 } && overflowReceipt.Rewards[0].Slot == -1,
+            "魔罐满包沿现有原子溢出邮件合同，不伪装空间不足或丢失奖励");
         var character = new Character(1, 0, "MagicBox", 0, towns.Room, towns.InitialReturn)
         {
             Inventory = new([new(0, new(InventoryListType.Main, 70), new(2682272, ItemKind.Consumable, 10))])
@@ -244,6 +293,7 @@ internal static class MagicBoxTests
             };
             int cases = 0;
             int datedRewards = 0;
+            int broadcastCandidates = 0;
             var failures = new List<string>();
             for (int pool = 0; pool < seriaDefinition.Pools.Length; pool++)
             {
@@ -251,6 +301,7 @@ internal static class MagicBoxTests
                 foreach (var row in seriaDefinition.Pools[pool].Rewards)
                 {
                     if (row.Weight <= 0) continue;
+                    if (row.Broadcast) broadcastCandidates++;
                     var settings = new GameDebugSettings();
                     var forced = new PoolRandom(seriaDefinition.Pools.Length, pool, offset);
                     var targeted = new InventoryMagicBoxService(resources.Items, resources.MagicBoxes, resources.GoldLimits,
@@ -263,8 +314,9 @@ internal static class MagicBoxTests
                         else
                             Check(result.Plan!.After.Find(noMaterial.BoxSlot) is { Core.Count: 989 } &&
                                 actual.OpenCount == 10 && actual.SeriaLuckAfter == 1 && forced.Calls == 30 &&
-                                actual.Rewards.Any(reward => reward.ItemId == row.ItemId && reward.Count >= row.Count * 11),
-                                $"每个正权重候选十连完整交付且包含第九次双倍：pool={pool} item={row.ItemId} count={row.Count}");
+                                actual.Rewards.Any(reward => reward.ItemId == row.ItemId && reward.Count >= row.Count * 11) &&
+                                (pool != 0 || actual.BroadcastRewards.Contains(row.ItemId) == row.Broadcast),
+                                $"每个正权重候选十连完整交付且包含第九次双倍与极品广播标记：pool={pool} item={row.ItemId} count={row.Count}");
                         if (resources.Items.Get(row.ItemId).Expiration is { Days: 0, AbsoluteTime: > 0 } expiry &&
                             expiry.AbsoluteTime < DateTimeOffset.UtcNow.ToUnixTimeSeconds())
                         {
@@ -301,6 +353,75 @@ internal static class MagicBoxTests
             foreach (string failure in failures) Console.WriteLine("Magic-box candidate failure: " + failure);
             Check(failures.Count == 0, "真实赛丽亚全部正权重候选均有完整十连交付能力");
         }
+    }
+
+    public static void RunRewardRowCore()
+    {
+        var unrestricted = BoosterCatalog.ParseUsePlaces("[stackable type]\n`[random upgradable legacy]` 1\n");
+        var townOnly = BoosterCatalog.ParseUsePlaces("[action usable place]\n`[village]`\n");
+        That(unrestricted.Allows(new(StackableUsePlace.Dungeon)) && unrestricted.Allows(new(StackableUsePlace.Village)) &&
+            townOnly.Allows(new(StackableUsePlace.Village)) && !townOnly.Allows(new(StackableUsePlace.Dungeon)),
+            "随机盒未声明地点时允许副本，显式城镇限制不能在副本放行");
+        const int boxId = 912091;
+        const int rewardId = 912092;
+        const int limit = 10;
+        var now = new DateTimeOffset(2026, 11, 11, 0, 0, 0, TimeSpan.Zero);
+        var catalog = new ItemCatalog(null!, new Dictionary<int, string>(), new Dictionary<int, string>(), 0);
+        var boxTemplate = RowTemplate(boxId, 99);
+        var rewardTemplate = RowTemplate(rewardId, limit);
+        catalog.PrefillTemplates(new Dictionary<int, ItemTemplate> { [boxId] = boxTemplate, [rewardId] = rewardTemplate });
+        var boxes = MagicBoxCatalog.ForTests(boxId, new MagicBoxDefinition(
+            [new MagicBoxPool([new MagicBoxReward(rewardId, 1, 1)])], 0, 0));
+        var limits = new GoldLimitCatalog("[gold limit from level]\n0 1000000\n[/gold limit from level]");
+        var pieces = new EpicPieceCatalog("[piece list]\n50000 50001\n[/piece list]");
+        var service = new InventoryMagicBoxService(catalog, boxes, limits, pieces, new FirstRandom());
+        var reward = InventoryRewardGrantService.Create(rewardTemplate, 1, now);
+        var full = new InventoryItem(11, new(InventoryListType.Main, 65), reward with { Value = limit });
+        var later = new InventoryItem(12, new(InventoryListType.Main, 66), reward with { Value = limit - 1 });
+        var box = new InventoryItem(10, new(InventoryListType.Main, 94), new(boxId, ItemKind.Consumable, 2));
+        var request = new MagicBoxOpenRequest(0, box.Position, boxId, new(InventoryListType.Main, -1), 0, 1);
+        var character = new Character(1, 0, "MagicBoxRow", 0, new(1, 0, 10, 10), null)
+        {
+            Inventory = new([box, full, later], Expansion: 0)
+        };
+        var opened = service.Open(character, request, out var receipt, now);
+        var row = receipt?.Rewards.Single();
+        That(opened.Accepted && opened.Plan!.OverflowItems.IsEmpty && row is { ItemId: rewardId, Count: 1, Slot: 66, Durability: 0 } &&
+            opened.Plan.After.Find(full.Position) == full &&
+            opened.Plan.After.Find(later.Position) is { Uid: 12, Core.Count: limit } &&
+            opened.Plan.After.Items.Length == 3 && opened.Plan.After.Find(box.Position) is { Core.Count: 1 },
+            "首堆已满、后堆有空位时，结果行槽号是实际增加的后堆，数量是本次获得量");
+        var ack = MagicBoxPackets.OpenedSingle(receipt!);
+        That(ack.Length == 9 + ItemListProtocolWriter.EntrySize && ack[0] == 1 && BitConverter.ToInt16(ack, 7) == 1 &&
+            BitConverter.ToInt16(ack, 9) == 66 && BitConverter.ToInt32(ack, 11) == rewardId && BitConverter.ToInt32(ack, 15) == 1,
+            "成功 ACK 的槽号和数量与实际落点一致，不写未变化的首堆");
+
+        boxes = MagicBoxCatalog.ForTests(boxId, new MagicBoxDefinition(
+            [new MagicBoxPool([new MagicBoxReward(rewardId, 1, 3)])], 0, 0));
+        service = new InventoryMagicBoxService(catalog, boxes, limits, pieces, new FirstRandom());
+        var split = service.Open(character, request, out var splitReceipt, now);
+        var splitRow = splitReceipt?.Rewards.Single();
+        var created = split.Plan?.After.Items.Single(item => item.Position.Index == 67);
+        That(split.Accepted && split.Plan!.OverflowItems.IsEmpty && splitRow is { Slot: 66, Count: 3 } &&
+            split.Plan.After.Find(full.Position) == full &&
+            split.Plan.After.Find(later.Position) is { Uid: 12, Core.Count: limit } &&
+            created is { Core.ItemId: rewardId, Core.Count: 2 },
+            "奖励拆进多堆时，一行仍指向槽号最小的实际变化槽，数量保持本次获得总量");
+
+        var page = Enumerable.Range(65, 32).Where(slot => slot != 94)
+            .Select((slot, index) => new InventoryItem(index + 100, new(InventoryListType.Main, (short)slot), reward with { Value = limit }))
+            .Prepend(box).ToImmutableArray();
+        var mailed = service.Open(character with { Inventory = new(page, Expansion: 0) }, request, out var mailReceipt, now);
+        var hidden = MagicBoxPackets.OpenedSingle(mailReceipt!);
+        That(mailed.Accepted && mailed.Plan!.OverflowItems is [{ Core.ItemId: rewardId, Core.Count: 3 }] &&
+            mailReceipt!.Rewards.Single() is { Slot: -1, Count: 3 } &&
+            BitConverter.ToInt16(hidden, 7) == 0 && hidden.Length == 9 &&
+            page.Where(item => item.Core.ItemId == rewardId).All(item => mailed.Plan.After.Find(item.Position) == item),
+            "已有同编号满堆且页满、奖励全部进邮件时，结果行保持 -1，不指向未变化的首堆");
+        Console.WriteLine("PASS magic-box reward row tracks the changed slot");
+
+        static ItemTemplate RowTemplate(int id, int stackLimit) =>
+            new(id, ItemKind.Consumable, 0, 1, 0, stackLimit, 1, 0, 1, "[free]", 0, 0, "结果行槽位模板");
     }
 
     sealed class PoolRandom(int pools, int selectedPool, long offset, Action? firstDraw = null) : Random

@@ -59,11 +59,12 @@ internal static class QuestCoverage
         .Where(field => !KnownFields.Contains(field.Name) && !QuestTargetSchema.IsTargetField(quest, field) &&
             !(field.Name is "episode town use" or "npc visivility not revert" && QuestEpisodeEntry.Supports(quest)) &&
             !(field.Name == "npc dialog" && QuestHiddenEntry.NpcDialogueShape(quest)) &&
+            !(field.Name == "show quest on event" && QuestEpicRoad2019Entry.Supports(quest)) &&
             !(field.Name is "stand by area" or "hidden set" && QuestStandbyEntry.Supports(quest)) &&
             !(field.Name == "cleared quest" && QuestHiddenEntry.ClearedNpcDialogueShape(quest)) &&
             !(field.Name == "pvp private expose" && DfoServer.Game.Pvp.PvpTrainingExposure.TryRead(quest,out _)) &&
             !(field.Name == "sub reward" && DfoServer.Game.Pvp.PvpTrainingProgress.Manual(quest)) &&
-            !(field.Name == "synchronization account quest" && QuestAccountPolicy.PaidSynchronization(quest)) &&
+            !(field.Name == "synchronization account quest" && QuestAccountPolicy.ExplicitSynchronization(quest)) &&
             !(field.Name == "appear map" && QuestMarriageProgress.Supports(quest) && field is
                 { Children.Length: 0, Values: [{ Type: 0, Value: -1 }, { Type: 0, Value: -1 }, { Type: 0, Value: -1 }, { Type: 0, Value: -1 }] }) &&
             !(QuestMailPlan.IsField(field.Name) && (QuestMailPlan.CompletionDeclaration(quest) || QuestEligibilityMailPlan.Declaration(quest))) &&
@@ -124,7 +125,8 @@ internal static class QuestCoverage
         definition.Fields.Where(field => field.Name == "attribute").ToArray() is
             [{ Children.Length: 0, Values: [{ Type: 6, Text: "not check auto clear" }] }];
 
-    static bool SupportedAttribute(string? value) => value is "not give exp quest" or "slot expansion" or "magic stone";
+    // 原生属性25只控制副本交付对话；进度、清图凭据及原接取的领奖校验保持不变。
+    static bool SupportedAttribute(string? value) => value is "not give exp quest" or "slot expansion" or "magic stone" or "complete quest in dungeon";
 
     // 觉醒成就（如5154）省略 [reward type]，奖励数组是 0 0，金币只来自 [gold multiple]。
     internal static bool GoldOnlyReward(StoryQuest quest) =>
@@ -290,7 +292,7 @@ internal static class QuestCoverage
                     reasons.Add("部分回答缺少已核验的专用旅程跳过入口，普通回答分支可用");
                 bool profession = QuestProfessionReward.SupportedDeclaration(quest);
                 bool characterReward = QuestCharacterReward.TryScalar(quest,out _) || QuestCharacterReward.TryTp(quest,out _) ||
-                    QuestCharacterReward.TryHellChallenge(quest);
+                    QuestCharacterReward.SupportedChallengeReward(quest);
                 bool creatureReward = QuestCreatureReward.Evolution(quest);
                 bool expertJob = QuestExpertJobReward.Type(quest) is not null;
                 bool goldOnly = GoldOnlyReward(quest);

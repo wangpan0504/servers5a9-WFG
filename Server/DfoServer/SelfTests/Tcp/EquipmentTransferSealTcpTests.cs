@@ -53,6 +53,7 @@ internal static class EquipmentTransferSealTcpTests
         var owners = new AccountOwners();
         ushort senderId, receiverId, npcId;
         InventoryItem target, avatarItem;
+        long npcWeaponUid;
         var area = resources.Towns.Areas.First(row => row.Value.Map(new HashSet<int>()).Npcs.Any(npc => resources.Towns.EquipmentTransportNpcs.Contains(npc.Id)));
         var bounds = area.Value.Map(new HashSet<int>()).Bounds.First().Bounds;
         var npcPosition = new Location(area.Key.Item1,area.Key.Item2,checked((ushort)(bounds.X+1)),checked((ushort)(bounds.Y+1)));
@@ -76,6 +77,7 @@ internal static class EquipmentTransferSealTcpTests
             var npcRole = repository.Create(owner,new("SoulTransfer",npcPosition,resources.Towns.InitialReturn)
                 { Level=95,AcceptedStoryLevel=1,Skills=resources.Characters.Get(0).Skills,Inventory=new([new(0,Bag(9),original),new(0,Bag(10),original)]) });
             npcId=npcRole.Id;
+            npcWeaponUid = npcRole.Inventory.Find(Bag(9))!.Uid;
             var costs = catalog.Rules[7].NpcCosts(equipment,assets.EpicPieces)!.Value;
             var soulCost = assets.EquipmentReseals.SoulCost(equipment,0)!;
             var grant = InventoryRewardGrantService.TryGrantBatch(npcRole,
@@ -107,16 +109,16 @@ internal static class EquipmentTransferSealTcpTests
                 "557 mode0完整装备入账号金库，第四字段返回真实仓库槽");
             int wax=assets.EquipmentReseals.WaxCost(equipment,0);
             peer.Send(81,Seal(10,equipment.Id,83)); peer.Expect(0,14); peer.Expect(1,81,Build(writer=>{writer.Write((byte)1);writer.Write((short)83);writer.Write(200-wax);writer.Write((ushort)1);})); peer.Barrier();
-            That(ReadSlot(senderId,0,10)==original with { SealFlag=1,Attr=49 },"普通蜜蜡扣实际费用、增加一次封装且保留其他核心");
+            That(ReadSlot(senderId,0,10)==original with { SealFlag=1,Attr=49,Rune=0 },"普通蜜蜡扣实际费用、增加一次封装并清除特效，保留打造");
             unchanged=State();peer.Send(81,Seal(10,equipment.Id,83));peer.Expect(1,81,[0,19,0]);peer.Barrier();
             That(State()==unchanged,"重复封装拒绝且不重复扣费");
             peer.Send(81,Seal(11,equipment.Id,84));peer.Expect(0,14);peer.Expect(1,81,[1,84,0,1,0,0,0,1,0]);peer.Barrier();
-            That(ReadSlot(senderId,0,11)==original with { SealFlag=1,Attr=7*32+17 },"一次性蜜蜡越过满次数而不增加次数");
+            That(ReadSlot(senderId,0,11)==original with { SealFlag=1,Attr=7*32+17,Rune=0 },"一次性蜜蜡越过满次数而不增加次数，清除特效");
             unchanged=State();peer.Send(81,Seal(12,equipment.Id,88));
             if(recoveredWax)
             {
                 peer.Expect(0,14);peer.Expect(1,81,[1,88,0,1,0,0,0,1,0]);peer.Barrier();
-                That(ReadSlot(senderId,0,12)==original with { SealFlag=1,Attr=7*32+17 },"补标记的一口黄金蜜蜡实际封装且不增加次数");
+                That(ReadSlot(senderId,0,12)==original with { SealFlag=1,Attr=7*32+17,Rune=0 },"补标记的一口黄金蜜蜡实际封装且不增加次数，清除特效");
             }
             else
             {
@@ -147,9 +149,10 @@ internal static class EquipmentTransferSealTcpTests
         {
             peer.Select(2,resumeTown:true,room:false);peer.Barrier();
             peer.Send(81,Seal(10,equipment.Id,0,1));peer.Expect(0,14);peer.Expect(1,81,[1,0,0,0,0,0,0,1,0]);peer.Barrier();
-            That(ReadSlot(npcId,0,10)==original with { SealFlag=1,Attr=49 },"歌兰蒂斯灵魂封装接通真实81无材料槽请求");
+            That(ReadSlot(npcId,0,10)==original with { SealFlag=1,Attr=49,Rune=0 },"歌兰蒂斯灵魂封装接通真实81无材料槽请求，清除特效");
             peer.Send(557,Transport(0,9,2,1));peer.Expect(1,557,[1,0,0,9,0,0,0,0,0,2]);peer.Barrier(CheckDelta);
-            That(ReadSlot(npcId,0,9) is null && Convert.ToInt64(fixture.Query("SELECT COUNT(*) FROM mailbox_messages WHERE recipient_id=$p0",receiverId).Single()[0])==(medalEnabled?4:3),
+            That(ReadSlot(npcId,0,9) is null && Read(npcWeaponUid) == original with { Rune = 0 } &&
+                Convert.ToInt64(fixture.Query("SELECT COUNT(*) FROM mailbox_messages WHERE recipient_id=$p0",receiverId).Single()[0])==(medalEnabled?4:3),
                 "歌兰蒂斯557 mode2实际扣灵魂与结晶并托管装备，源0不冒充道具");
         }
         using(var peer=Open(fixture))

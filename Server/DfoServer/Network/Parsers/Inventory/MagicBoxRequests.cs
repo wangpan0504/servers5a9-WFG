@@ -7,7 +7,8 @@ internal static class MagicBoxRequests
 {
     public static MagicBoxOpenRequest Single(ReadOnlySpan<byte> body)
     {
-        if (body.Length is not (3 or 5) || !ValidList(body[0]))
+        // 类型3是魔罐用途，两个槽位仍属于Main；原生确认入口固定发送5B，并非库存容器3。
+        if (body.Length is not (3 or 5) || !(ValidList(body[0]) || body[0] == 3 && body.Length == 5))
             throw new InvalidDataException("单次开箱请求长度或容器无效");
         short material = body.Length == 5 ? BinaryPrimitives.ReadInt16LittleEndian(body[3..]) : (short)-1;
         return new(body[0], MainSlot(body[1..]), 0, new(InventoryListType.Main, material), 0, 1);

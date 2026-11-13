@@ -27,6 +27,8 @@ internal sealed class SettingsProjection(ClientSettingsService settings, DfoServ
     public async Task InitializeAsync(GameConnectionContext context, ClientSettingsReceipt receipt)
     {
         bool CanSend() => context.Session.CanPublishClientSettings(receipt);
+        await context.Notify(NotiPacketType.NPC_BOOKMARK_INFO, SettingsPackets.NpcBookmarks(receipt.Settings.NpcBookmarks),
+            "npc_bookmarks_initialize", CanSend);
         if (context.ChatEmoticons is { } chat)
         {
             // 1384只安装最近列表；随后的411重建UI，填充第9至26格。
@@ -40,8 +42,9 @@ internal sealed class SettingsProjection(ClientSettingsService settings, DfoServ
                 receipt.Settings.QuickChat0, receipt.Settings.QuickChat1), "account_settings_initialize", CanSend);
         if (!receipt.Settings.CharacterOptions.IsDefault)
             await context.Notify(NotiPacketType.CHARACTER_OPTION, SettingsPackets.CharacterOptions(receipt.Settings.CharacterOptions), "character_settings_initialize", CanSend);
-        if (!receipt.Settings.Hotkeys.IsDefault)
-            await context.Notify(NotiPacketType.HOTKEY_OPTION, SettingsPackets.Hotkeys(receipt.HotkeyProfile, receipt.Settings.Hotkeys), "account_hotkeys_initialize", CanSend);
+        await context.Notify(NotiPacketType.HOTKEY_OPTION, receipt.Settings.Hotkeys.IsDefault
+            ? SettingsPackets.HotkeysInitialization(receipt.HotkeyProfile)
+            : SettingsPackets.Hotkeys(receipt.HotkeyProfile, receipt.Settings.Hotkeys), "character_hotkeys_initialize", CanSend);
         if (!receipt.Settings.GameOptions.IsDefault)
             await context.Notify(NotiPacketType.CHARAC_INVISIBLE_FALGS, SettingsPackets.Visibility(receipt.CharacterId, receipt.VisibilityFlags), "character_visibility_initialize", CanSend);
     }

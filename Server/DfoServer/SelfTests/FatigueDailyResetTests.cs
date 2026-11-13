@@ -11,6 +11,7 @@ internal static class FatigueDailyResetTests
 {
     public static void RunCore()
     {
+        FatigueBatteryTests.RunCore();
         int before = Count;
         var zone = TimeZoneInfo.CreateCustomTimeZone("fatigue-test", TimeSpan.FromHours(8), "test", "test");
         var now = DateTimeOffset.Parse("2030-05-01T21:59:59Z");

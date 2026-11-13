@@ -33,8 +33,6 @@ internal sealed partial class CharacterRepository
             throw new InvalidOperationException("仓库角色所有权变化");
         if (plan.AccountCargoChanged)
         {
-            command.CommandText = "INSERT INTO account_cargo(account) VALUES($account) ON CONFLICT DO NOTHING";
-            command.ExecuteNonQuery();
             command.Parameters.AddWithValue("$revision", before.AccountCargo.Revision);
             command.Parameters.AddWithValue("$capacity", after.AccountCargo.Capacity);
             command.Parameters.AddWithValue("$gold", after.AccountCargo.Gold);

@@ -12,7 +12,8 @@ internal enum ChatKind : byte
     Guild,
     Whisper,
     ServerMegaphone,
-    ChannelMegaphone
+    ChannelMegaphone,
+    OfficialMegaphone
 }
 
 /// <summary>
@@ -110,11 +111,12 @@ internal sealed record ChatRecipient(string Account, ushort CharacterId, long? G
 
 /// <summary>
 /// 喇叭文本：<c>NOTI 0x0076</c> 的发言人（<c>str1</c>）与正文（<c>str2</c>）。
-/// CP936 编码、三条串必须非空与 29/511/16 字节上限由 Network 侧 <c>MegaphonePackets</c> 负责，
+/// 发言人/正文的CP936截断与冒险团目标的完整校验由Network侧 <c>MegaphonePackets</c> 负责，
 /// 领域层只给出未编码的字符串。
 /// </summary>
 internal sealed record MegaphoneText(string Speaker, string Text)
 {
+    public string AdventureName { get; init; } = "";
     public ChannelIdentity Channel { get; init; }
     public ushort Actor { get; init; }
 }

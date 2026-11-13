@@ -27,7 +27,7 @@ internal sealed partial class StackableActionHandler(QuestCatalog quests,ItemCat
     AvatarPresetHandler? avatarPresets=null,GuildEconomyHandler? guildEconomy=null,
     GuildExperienceHandler? guildExperience=null, InventoryNpcFavorService? npcFavor=null, MarriageHandler? marriage=null,
     DimensionEntryTicketService? dimensionTickets=null, DungeonIncountTicketHandler? incountTickets=null,
-    GuildDungeonScrollHandler? guildDungeonScroll=null) : IGameCommandModule
+    GuildDungeonScrollHandler? guildDungeonScroll=null, Inventory.CargoHandler? cargo=null) : IGameCommandModule
 {
     const uint CreatureSkinAction = 224;
     const uint PeriodExtensionAction = 69;
@@ -73,7 +73,7 @@ internal sealed partial class StackableActionHandler(QuestCatalog quests,ItemCat
         }
         if (request.Action == FatigueConsumableDefinition.Action)
             return fatigueConsumables is not null ? await fatigueConsumables.UseAsync(context, request) : CommandResult.Unhandled;
-        if (request.Action == DfoServer.Game.Dungeons.DungeonIncountTicketService.Action)
+        if (DfoServer.Game.Dungeons.DungeonIncountTicketService.Handles(request.Action))
             return incountTickets is not null ? await incountTickets.UseAsync(context, request) : CommandResult.Unhandled;
         if (request.Action is 90 or 92 or 93)
             return marriage is not null ? await marriage.UseItemActionAsync(context, request) : CommandResult.Unhandled;
@@ -85,6 +85,10 @@ internal sealed partial class StackableActionHandler(QuestCatalog quests,ItemCat
             return await UseNpcFavorAsync(context, request);
         if (request.Action == 72)
             return await UseMileageAsync(context, request);
+        if (request.Action == ActionConsumableDefinition.RidingAction)
+            return await UseRidingAsync(context, request);
+        if (request.Action == 149)
+            return cargo is not null ? await cargo.UseAccountUpgradeToolAsync(context, request) : CommandResult.Unhandled;
         if (request.Action == 151)
             return creatures is not null ? await creatures.UseEffectAsync(context, request) : CommandResult.Unhandled;
         if (request.Action == PeriodExtensionAction)
@@ -215,6 +219,37 @@ internal sealed partial class StackableActionHandler(QuestCatalog quests,ItemCat
         return CommandResult.Handled;
     }
 
+    async Task<CommandResult> UseRidingAsync(GameConnectionContext context, StackableActionUseRequest request)
+    {
+        var before = context.Owner.Execute(() => (context.Session.Selected, context.Session.SelectionEpoch, context.Session.Phase));
+        bool valid = request.List == (byte)InventoryListType.Main && request.Slot <= short.MaxValue && request.Reserved == 0 &&
+            request.FirstArgument == 0 && request.SecondArgument == 0 && inventoryProjection is not null;
+        var source = new InventorySlot(InventoryListType.Main, unchecked((short)request.Slot));
+        InventoryResult result;
+        try
+        {
+            result = !valid || context.Activity?.BlocksTownActions == true ? InventoryResult.Reject(19) :
+                context.Session.UseRidingConsumable(source, items);
+        }
+        catch (Exception error) when (error is DbException or InvalidDataException or KeyNotFoundException)
+        {
+            log.Write("riding_consumable_commit_failed", new { Connection = context.Id, request.Slot, Error = error.Message });
+            result = InventoryResult.Reject(19);
+        }
+        bool Guard() => result.Receipt is { } receipt ? context.Session.CanPublishInventory(receipt) : context.Owner.Execute(() =>
+            ReferenceEquals(context.Session.Selected, before.Selected) && context.Session.SelectionEpoch == before.SelectionEpoch &&
+            context.Session.Phase == before.Phase);
+        log.Write("riding_consumable_use", new { Connection = context.Id, request.Slot, result.Accepted, result.Error,
+            Revision = result.Receipt?.Character.Revision });
+        await context.Reply(CmdPacketType.USE_STACKABLE_ACTION,
+            result.Accepted ? StackableActionPackets.Used(request) : StackableActionPackets.Rejected(request),
+            result.Accepted ? "riding_consumable_used" : "riding_consumable_rejected", Guard);
+        // 028C0AE0->028BEC5E在ACK515成功后挂接CAppendageRiding并由028C0C02扣一件源；不再重复下发源槽NOTI14。
+        if (result.Accepted && inventoryProjection is not null)
+            await inventoryProjection.RefreshAsync(context, result, new HashSet<InventorySlot> { source }, refreshEquipment: false);
+        return CommandResult.Handled;
+    }
+
     async Task<CommandResult> ExtendPeriodAsync(GameConnectionContext context, StackableActionUseRequest request,
         ActionConsumableDefinition? definition)
     {
@@ -341,7 +376,7 @@ internal sealed partial class StackableActionHandler(QuestCatalog quests,ItemCat
         {
             await context.Notify(NotiPacketType.USERINFO,
                 TownPackets.Actor(receipt.Character, context.Session.ReadPvpGrade(receipt.Character), context.Channel, adventureName: context.Session.ReadAdventureName(),
-                    premiumPcRoom: context.Session.PremiumPcRoom),
+                    premiumPcRoom: context.Session.PremiumPcRoom, returningAdventurerType: context.Session.ReturningAdventurerType, marriage: context.MarriageAppearance),
                 "quest_ticket_profession_actor",Guard);
             await (levelProjection ?? throw new InvalidOperationException("觉醒券发布缺少角色投影"))
                 .PlayerAsync(context,receipt.Character,"quest_ticket_profession_player",Guard);

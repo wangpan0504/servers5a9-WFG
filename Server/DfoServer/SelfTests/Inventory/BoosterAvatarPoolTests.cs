@@ -88,6 +88,92 @@ internal static class BoosterAvatarPoolTests
         BuyAndOpenSea(towns, resources, now);
         OpenWild(towns, resources, now);
         DrawDistribution(towns, resources, now);
+        MixedAvatarRows(towns, resources, now);
+    }
+
+    static void MixedAvatarRows(TownCatalog towns, ItemResources resources, DateTimeOffset now)
+    {
+        const int avatarId = 43102;
+        const string pools = "[avatar]\n1 43102 1000 1 0\n[/avatar]\n" +
+            "[special avatar]\n1 43102 1000 1 45 4\n[/special avatar]";
+        var boosters = Isolated(resources, 64, pools);
+        var service = Service(resources, boosters, new ScriptedRandom([]));
+        int periodDeadline = new ItemExpiration(Days: 45).Resolve(now);
+        var template = resources.Items.Get(avatarId);
+        int templateDeadline = template.Expiration.Resolve(now, true);
+        foreach (int count in new[] { 1, 2 })
+        {
+            var role = Role(towns, resources.Items.Get(64), count, now);
+            var opened = service.Open(role, new(65, count), out var receipt, now);
+            var awarded = opened.Plan?.After.Items.Where(item => item.Core.ItemId == avatarId).ToArray() ?? [];
+            That(opened.Accepted && receipt?.Rewards.Single().Count == 2 * count && awarded.Length == 2 * count &&
+                awarded.Count(item => item.Core.Durability == 0 && item.Avatar?.ExpireTime == templateDeadline) == count &&
+                awarded.Count(item => item.Core.Durability == 4 && item.Avatar?.ExpireTime == periodDeadline) == count &&
+                opened.Plan!.After.Find(new(InventoryListType.Main, 65)) is null,
+                "普通与显式装扮池的同ID奖励全部到账并分别保留属性、期限，开盒数量 " + count +
+                    "，实际实例 " + awarded.Length);
+        }
+        var tight = Role(towns, resources.Items.Get(64), 1, now);
+        var range = ItemSlotBoundService.Range(ItemKind.Avatar, tight.Inventory);
+        var prototype = InventoryRewardGrantService.Create(template, utcNow: now, shopExpiration: true);
+        var occupied = Enumerable.Range(range.Start, range.End - range.Start)
+            .Select(index => InventoryRewardGrantService.CreateItem(template,
+                new(InventoryListType.Avatar, checked((short)index)), prototype with { Value = index + 2 }) with { Uid = index + 2 });
+        tight = tight with { Inventory = tight.Inventory with { Items = tight.Inventory.Items.AddRange(occupied) } };
+        tight.Inventory.Validate();
+        var rejected = service.Open(tight, new(65, 1), out var failedReceipt, now);
+        That(!rejected.Accepted && rejected.Error == 4 && rejected.Plan is null && failedReceipt is null &&
+            tight.Inventory.Find(new(InventoryListType.Main, 65))?.Core.Count == 1,
+            "同ID装扮奖励仍需两个槽，只有一个空槽时整笔拒绝且保留源礼盒");
+BatchAvatarCapacity(towns, resources, now);
+    }
+
+    static void BatchAvatarCapacity(TownCatalog towns, ItemResources resources, DateTimeOffset now)
+    {
+        var role = Role(towns, resources.Items.Get(52), 10000, now);
+        long small = RejectedAllocation(100), large = RejectedAllocation(10000);
+        Console.WriteLine($"Avatar batch rejected allocations: small={small}, large={large}");
+        That(large <= small + 512 * 1024,
+            "不可能容纳的装扮批量不按请求数量展开实例，分配量 " + small + "/" + large);
+
+        var boosters = Isolated(resources, 64, "[special avatar]\n2 43102 1000 1 0 4\n[/special avatar]");
+        var service = Service(resources, boosters, new ScriptedRandom([]));
+        var template = resources.Items.Get(43102);
+        var prototype = InventoryRewardGrantService.Create(template, utcNow: now, shopExpiration: true);
+        foreach (ushort expansion in new ushort[] { 0, 105 })
+            foreach (int free in new[] { 1, 2 })
+            {
+                var sample = Role(towns, resources.Items.Get(64), 1, now);
+                sample = sample with { Inventory = sample.Inventory with { AvatarExpansion = expansion } };
+                var range = ItemSlotBoundService.Range(ItemKind.Avatar, sample.Inventory);
+                int occupied = range.End - range.Start + 1 - free;
+                var items = Enumerable.Range(range.Start, occupied).Select(index =>
+                    InventoryRewardGrantService.CreateItem(template, new(InventoryListType.Avatar, checked((short)index)),
+                        prototype with { Value = index + 2 }) with { Uid = index + 2 });
+                sample = sample with { Inventory = sample.Inventory with { Items = sample.Inventory.Items.AddRange(items) } };
+                sample.Inventory.Validate();
+                var opened = service.Open(sample, new(65, 1), out var receipt, now);
+                That(free == 2
+                    ? opened.Accepted && receipt?.Rewards.Single().Count == 2 &&
+                        opened.Plan!.After.Items.Count(item => item.Position.List == InventoryListType.Avatar) == occupied + 2 &&
+                        opened.Plan.After.Find(new(InventoryListType.Main, 65)) is null
+                    : !opened.Accepted && opened.Error == 4 && opened.Plan is null && receipt is null &&
+                        sample.Inventory.Find(new(InventoryListType.Main, 65))?.Core.Count == 1,
+                    "显式装扮按实际扩展页容量整笔发放或拒绝，扩展 " + expansion + "，空槽 " + free);
+            }
+
+        long RejectedAllocation(int count)
+        {
+            var service = Service(resources, resources.Boosters, new Random(123));
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            var result = service.Open(role, new(65, count), out var receipt, now);
+            long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+            That(!result.Accepted && result.Error == 4 && result.Plan is null && receipt is null &&
+                role.Inventory.Find(new(InventoryListType.Main, 65))?.Core.Count == 10000,
+                "大批量装扮容量不足整笔拒绝且保留源，数量 " + count);
+            return allocated;
+        }
+
     }
 
     static void OpenAura(TownCatalog towns, ItemResources resources, DateTimeOffset now)

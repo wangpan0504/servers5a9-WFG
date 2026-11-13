@@ -31,13 +31,13 @@ internal static partial class DevelopmentGm
         InventoryCashShopService? cashShop = null, GameDebugSettings? debugSettings = null,
         Game.Events.ServerEventService? events = null, DevelopmentCatalog? catalog = null,
         Func<int, ChatProbeConnection?>? findConnection = null, ServerLog? log = null, GmNoticeSender? noticeSender = null,
-        Action? refreshFatigue = null)
+        Action<string>? refreshFatigue = null)
     {
         try
         {
             return Execute(repository, owners, find, DevelopmentRequest.Parse(line, defaultAccount), mailbox, items, progress, cashShop, debugSettings, events, catalog, findConnection, log, noticeSender, refreshFatigue);
         }
-        catch (Exception ex) when (ex is InvalidDataException or InvalidOperationException or SqliteException)
+        catch (Exception ex) when (ex is InvalidDataException or InvalidOperationException or SqliteException or IOException or UnauthorizedAccessException)
         {
             return "ERR " + ex.Message.Replace('\n', ' ').Replace('\r', ' ');
         }
@@ -48,11 +48,14 @@ internal static partial class DevelopmentGm
         InventoryCashShopService? cashShop = null, GameDebugSettings? debugSettings = null,
         Game.Events.ServerEventService? events = null, DevelopmentCatalog? catalog = null,
         Func<int, ChatProbeConnection?>? findConnection = null, ServerLog? log = null, GmNoticeSender? noticeSender = null,
-        Action? refreshFatigue = null)
+        Action<string>? refreshFatigue = null)
     {
         try
         {
             request.Validate();
+            if (request.Action == DevelopmentAction.Adventure) return Adventure(repository, owners, find, request);
+            if (request.Action is DevelopmentAction.LuckyProfession or DevelopmentAction.ReturningAdventurer)
+                return SetAdventurerBenefit(repository, owners, find, request, debugSettings);
             if (request.Action == DevelopmentAction.DirectMarriage)
                 return DirectMarriage(repository, owners, find, request, catalog);
             if (request.Action is DevelopmentAction.GuildCreateInfo or DevelopmentAction.GuildCreate)
@@ -103,6 +106,23 @@ internal static partial class DevelopmentGm
                 return ExecuteEquipmentSlots(repository, owners, find(request.Account), request);
             if (request.Action == DevelopmentAction.Appearance)
                 return DescribeAppearance(repository, owners, find(request.Account), request);
+            if (request.Action == DevelopmentAction.FatigueBatteryFill)
+            {
+                var session = find(request.Account);
+                var result = session is not null ? session.FillFatigueBatteries()
+                    : WithLease(owners, request.Account, lease => repository.FillFatigueBatteries(lease));
+                refreshFatigue?.Invoke(request.Account);
+                return Ok(new { account = request.Account, characters = result.Characters.Length, changed = result.Changed,
+                    message = "已填满该账号全部角色的疲劳蓄电池，之后正常消耗。" });
+            }
+            if (request.Action == DevelopmentAction.DungeonLimitReset)
+            {
+                var session = find(request.Account);
+                var result = session is not null ? session.ResetDungeonLimits()
+                    : WithLease(owners, request.Account, repository.ResetDungeonLimits);
+                return "OK " + JsonSerializer.Serialize(result) +
+                    " 已刷新当前账号全部角色的副本入场与奖励次数，历史回执、已发资产及购买的追加次数保留。在线角色回到选角后刷新显示。";
+            }
             if (request.Action == DevelopmentAction.WeeklyEntryReset)
             {
                 var session = find(request.Account);
@@ -120,7 +140,7 @@ internal static partial class DevelopmentGm
                     ? session.ResetRewardLimits()
                     : WithLease(owners, request.Account, repository.ResetRewardLimits);
                 return "OK " + JsonSerializer.Serialize(reset) +
-                    " 已恢复当前周期奖励额度；四类团本入场额度单独刷新，历史奖励回执、通关事实、待领奖资格及已发邮件保留。";
+                    " 已恢复当前周期奖励额度（含改版魔兽日/周领奖次数）；入场额度单独刷新，历史奖励回执、通关事实、待领奖资格及已发邮件保留。";
             }
             if (request.Action == DevelopmentAction.CharacterScoreNotice)
                 return SendCharacterScoreNotice(request, noticeSender, catalog?.Resources, log);
@@ -169,10 +189,10 @@ internal static partial class DevelopmentGm
                 if (debugSettings is null) throw new InvalidOperationException("无限疲劳调试开关仅支持在线服务");
                 if (request.Primary >= 0)
                 {
-                    debugSettings.InfiniteFatigue = request.Primary == 1;
-                    refreshFatigue?.Invoke();
+                    debugSettings.SetInfiniteFatigue(request.Account, request.Primary == 1);
+                    refreshFatigue?.Invoke(request.Account);
                 }
-                return "OK " + JsonSerializer.Serialize(new { infiniteFatigue = debugSettings.InfiniteFatigue });
+                return "OK " + JsonSerializer.Serialize(new { infiniteFatigue = debugSettings.InfiniteFatigueFor(request.Account) });
             }
             if (request.Action == DevelopmentAction.PcRoom)
             {

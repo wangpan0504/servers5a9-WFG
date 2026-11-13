@@ -26,6 +26,22 @@ internal static class CreatureRequests
             Text(body[7..], 255));
     }
 
+    public static InventorySlot EvolutionOrBookSlot(ReadOnlySpan<byte> body, InventoryListType defaultList = InventoryListType.Pet) =>
+        body.Length switch
+        {
+            2 => new(defaultList, BinaryPrimitives.ReadInt16LittleEndian(body)),
+            3 => new((InventoryListType)body[2], BinaryPrimitives.ReadInt16LittleEndian(body)),
+            >= 6 => new((InventoryListType)body[2], BinaryPrimitives.ReadInt16LittleEndian(body)),
+            _ => throw new InvalidDataException("宠物道具槽位请求长度无效")
+        };
+
+    // 02686369：CMD 555 (CREATURE_FILLPOINT) 写入 4B 点数 (points > 0)。
+    public static int FillPoint(ReadOnlySpan<byte> body)
+    {
+        if (body.Length != 4) throw new InvalidDataException("宠物充能点数请求必须为4字节");
+        return BinaryPrimitives.ReadInt32LittleEndian(body);
+    }
+
     static string Text(ReadOnlySpan<byte> body, int limit)
     {
         if (body.Length < 4) throw new InvalidDataException("宠物文本缺少长度");

@@ -82,10 +82,10 @@ internal static class ChannelAreaLanding
     // 城镇里的街区不能写成共享房间的返回地区，否则普通频道的 1379 与出门城镇会变成战舰（#740 回归）。
     internal const byte AntonTown = 19;
 
-    // 四团WAITING ROOM分别为19/2、32/4、57/2、59/2；57的后续区域是同团战场。
+    // 四团WAITING ROOM分别为19/2、32/4、57/2、59/2；57后续区域和普雷鸟背59/3至5属于原攻坚实例。
     // 卢克普通街区32/3不在此列。实例地区重登必须先回频道入口，再由原团重返恢复。
     internal static bool IsRaidInstanceArea(Location position) => position is
-        { Town: 19, Area: 2 } or { Town: 32, Area: 4 } or { Town: 57, Area: >= 2 } or { Town: 59, Area: 2 };
+        { Town: 19, Area: 2 } or { Town: 32, Area: 4 } or { Town: 57, Area: >= 2 } or { Town: 59, Area: >= 2 and <= 5 };
 
     // 普通区域频道类型：channel.txt 的 21 个普通区域入口。选角出生共享房间，房间出口只认角色记住的返回地区（#740）；
     // 频道分组只决定特殊区域与团队频道的落点。与 Docs/模块/城镇.md 第 4 条“普通房间出口必须匹配持久返回地区”一致。
@@ -99,6 +99,9 @@ internal static class ChannelAreaLanding
     // 只对共享房间 towns.Room 生效（区域房间仍走自身门），频道无已证落点或条件不足时返回 null，按存档返回地区出门。
     internal static Location? RoomExit(TownCatalog towns, ChannelEntry? channel, Location position, int level, IReadOnlySet<int> completed)
     {
+        if (BeastChannel.IsEntry(channel) && towns.IsRoom(position, completed) &&
+            (position.Town == BeastChannel.Town || position.Town == towns.Room.Town && position.Area == towns.Room.Area))
+            return DecideArea(towns, BeastChannel.Town, 1, level, completed).Spot;
         if (channel is null || RoomExitUsesRememberedDistrict(channel) || LandsInChannelTown(channel) ||
             position.Town != towns.Room.Town || position.Area != towns.Room.Area)
             return null;
@@ -114,12 +117,12 @@ internal static class ChannelAreaLanding
     // 已知旧频道类型时直接按01EB5AF0已证的团队页、魔界大战、再战魔界与强者之路谓词比较。
     internal static bool SameSnapshotPredicates(int previousType, int nextType) =>
         previousType != SpecialAreaType && nextType != SpecialAreaType &&
-        (previousType == FiendwarType) == (nextType == FiendwarType) && SnapshotPredicates(previousType) == SnapshotPredicates(nextType);
+        SnapshotPredicates(previousType) == SnapshotPredicates(nextType);
 
     // ARAD 01EB5AF0 逐项比较新旧频道的类型谓词（读频道脚本类型 +8，不读 ACK LOGIN 写入的 +0x1010）。除vt+0x14的PVP位外，还区分以下谓词：
     // vt+0x28（01EB5720 → 028FA400，type ∈ {0x17,0x19,0x20,0x2D,0x32,0x3E,0x3F}，即团队页签类型）、vt+0x30（type==0x28）、vt+0x4C（type==0x36）、vt+0x38（type==0x35）及vt+0x48（type==0x37）。
     // 谓词都一致时客户端记录换频道快照并按快照留在原城镇；任一项不同则不记快照，ACK4 按服务端城镇入城。
-    // 普通(22)与团队类型互换不记快照；配套客户端额外隔离0x2D边界，其他团队类型之间仍执行原生谓词。
+    // 普通(22)与团队类型互换不记快照；配套客户端额外隔离四团本类型，跨团不能复用旧城镇。
     // 魔界大战 0x36 与其余任何类型互换都不记快照。
     static readonly int[] RaidTabTypes = [0x17, 0x19, 0x20, FiendwarType, PreyRaidType, 0x3E, 0x3F];
 
@@ -133,10 +136,11 @@ internal static class ChannelAreaLanding
     // 01EB5BCD..5C0B另比较vt+38，01EB5780正是type53；跨入/离开再战不能复用旧城镇快照。
     // 01EB8C02将真实虚表绑定为054946AC；01EB5790比较type39帝国竞技场，对应vt+0x34；再战53为+0x38、魔界大战54为+0x4C。
     // 01EB5800比较type55强者之路，对应vt+0x48；01EB5DE9..5E1B双向比较此位，跨入或离开55不保留快照。
-    // 五陵和漩涡类型位由配套客户端补丁比较；其余各项仍对应原生谓词，同类型五陵频道保留原生快照行为。
+    // 五陵和四团本类型由配套客户端补丁比较；其余各项仍对应原生谓词，同类型保留原生快照行为。
     // 01EB5840/vt+0x78独立比较0x40，普通魔界大战的vt+0x4C不能替代它。
-    static (bool RaidTab, bool Evildom, bool TagEvildom, bool ImperialArena, bool DplPve, bool XianVillage, bool Pvp, bool EvildomChallenge) SnapshotPredicates(int type) =>
-        (RaidTabTypes.Contains(type), type == EvildomWarType, type == 53, type == 39, type == DplPveType, type == XianVillageType, IsPvpType(type), type == EvildomWarChallengeType);
+    static (bool RaidTab, bool Evildom, bool TagEvildom, bool ImperialArena, bool DplPve, bool XianVillage, bool Pvp, bool EvildomChallenge, bool Beast, int RaidType) SnapshotPredicates(int type) =>
+        (RaidTabTypes.Contains(type), type == EvildomWarType, type == 53, type == 39, type == DplPveType, type == XianVillageType, IsPvpType(type), type == EvildomWarChallengeType, type == BeastChannel.Type,
+            type is AntonRaidType or 0x20 or FiendwarType or PreyRaidType ? type : 0);
 
     public static Location? Place(TownCatalog towns, ChannelEntry channel, int level, IReadOnlySet<int> completed) =>
         Decide(towns, channel, level, completed).Spot;
@@ -200,6 +204,9 @@ internal static class ChannelAreaLanding
     // 不换城，反过来服务端改落点而客户端按快照留在原城，会让客户端随后按原城请求移动被 route-not-in-pvf/room-return-mismatch 拒绝。
     internal static bool ClientKeepsTownSnapshot(TownCatalog? towns, ChannelEntry? channel, Location position)
     {
+        if (position.Town == BeastChannel.Town || BeastChannel.IsEntry(channel))
+            // 与客户端type40清快照规则配套，每次选角/换频道均重新进入共享房间。
+            return false;
         if (IsRaidInstanceArea(position)) return false;
         if (channel is null)
             return position.Town != EvildomWarChallengeTown;
@@ -222,6 +229,7 @@ internal static class ChannelAreaLanding
     // 这类落点不覆盖原返回地区，离开频道后仍按原地区回到普通城镇。
     internal static bool IsChannelBoundTown(TownCatalog towns, byte town)
     {
+        if (town == BeastChannel.Town) return true;
         var own = towns.Areas.Values.Where(area => area.Town == town).ToArray();
         static IEnumerable<Link> Links(TownArea area) => area.Phases.Prepend(area.Default).SelectMany(map => map.Links);
         return own.Length > 0 && own.All(area => Links(area).All(link => link.Town == town)) &&
@@ -259,7 +267,8 @@ internal static class ChannelAreaLanding
         if (type == DplPveType)
             return (DplPveTown, 1);
         var name = GroupName(group);
-        if (type == 40 || name.Equals("beast", StringComparison.OrdinalIgnoreCase)) return null;
+        if (BeastChannel.IsEntry(type, group)) return (BeastChannel.Town, 1);
+        if (type == BeastChannel.Type || name.Equals("beast", StringComparison.OrdinalIgnoreCase)) return null;
         if (type == 23)
             return (19, 0);
         if (IsPvpType(type))

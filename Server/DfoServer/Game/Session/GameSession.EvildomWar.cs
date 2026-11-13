@@ -25,12 +25,32 @@ internal sealed record EvildomWarAdmission(EvildomWarCatalog Catalog, PartySnaps
 }
 
 internal sealed record EvildomWarRewardReceipt(EvildomWarAdmission Admission, long Generation, EvildomWarRewardCommit Commit);
+internal sealed record EvildomWarPartyReward(PartyMember Member, EvildomWarRewardReceipt Receipt)
+{
+    // 来源是原完成成员与已提交事实；队员随后离线不撤销该事实，接收者另验当前owner。
+    // 成员Epoch校验选角代次；回城会推进Run代次，来源始终核对冻结的完整通关事实。
+    internal bool IsFrom(EvildomWarView view) => Member.Slot < 4 &&
+        Member.Actor.Character.Id == Receipt.Admission.CharacterId && Member.Actor.Epoch == Receipt.Admission.Epoch &&
+        Member.Actor.Owner.Generation == Receipt.Generation &&
+        Receipt.Admission.Party.Members.Any(member => member.Slot == Member.Slot &&
+            member.Actor.Character.Id == Receipt.Admission.CharacterId && member.Actor.Epoch == Member.Actor.Epoch &&
+            ReferenceEquals(member.Actor.Owner, Member.Actor.Owner) && ReferenceEquals(member.Actor.Session, Member.Actor.Session)) &&
+        Receipt.Commit.Plan.Run.ClearFact is { } actual &&
+        Receipt.Commit.Plan.Completion.Facts.Any(fact => fact.Identity == actual.Identity &&
+            fact.Identity.CharacterId == Receipt.Admission.CharacterId && fact.DungeonId == actual.DungeonId &&
+            fact.ConfirmedDeathEvents.SequenceEqual(actual.ConfirmedDeathEvents)) &&
+        Receipt.Commit.Plan.Completion.BattleId == view.BattleId &&
+        ReferenceEquals(Receipt.Admission.Battle.Completion, Receipt.Commit.Plan.Completion) &&
+        ReferenceEquals(Receipt.Admission.RewardCommit, Receipt.Commit) &&
+        Receipt.Admission.Battle.View is { } current && current.BattleId == view.BattleId && current.Revision == view.Revision;
+}
 internal sealed record EvildomWarHiddenRewardReceipt(EvildomWarAdmission Admission, long Generation, EvildomWarHiddenRewardCommit Commit);
 
 internal sealed partial class GameSession
 {
     EvildomWarAdmission? evildomWar;
     internal Action<Exception>? EvildomWarCleanupFailed { get; set; }
+    internal Func<EvildomWarView, EvildomWarRewardReceipt?>? EvildomWarRewardPreparing { get; set; }
 
     internal bool TryBindEvildomWarGuide(IEvildomWarGuideStore store) => owner.Execute(() =>
         Ready && ChannelEntry?.Type == 54 && Selected is { Level: >= 95, Position.Town: 67 } character &&
@@ -61,7 +81,7 @@ internal sealed partial class GameSession
             return "incount-resource-unavailable";
         if (!DungeonIncountPolicy.CanEnter(row, repository.LoadDungeonIncount(owner, character.Id, row.CountKey, IncountPeriod(row.CountKey))))
             return "incount-exhausted";
-        if (debugSettings?.InfiniteFatigue != true && FatigueForClient(character).Remaining < catalog.NeedFatigue)
+        if (!InfiniteFatigue && FatigueForClient(character).Remaining < catalog.NeedFatigue)
             return "fatigue-required";
         return null;
     }
@@ -132,7 +152,7 @@ internal sealed partial class GameSession
         return refund.Seats;
     });
 
-    internal ImmutableArray<uint> RecoverEvildomWarRewards(IEvildomWarRewardStore store, EvildomWarRewardPolicy? policy = null)
+    internal ImmutableArray<uint> RecoverEvildomWarRewards(IEvildomWarRewardStore store, EvildomWarRewardPolicy? policy = null, bool recoverHidden = true)
     {
         var capture = owner.Execute(() => Ready && Selected is { } character
             ? (Character: character, Epoch: SelectionEpoch) : default);
@@ -140,23 +160,27 @@ internal sealed partial class GameSession
         var hiddenMails = ImmutableArray.CreateBuilder<uint>();
         if (policy is not null)
         {
-            foreach (var laboratory in store.LoadUnrewardedEvildomWarHiddenCompletions(owner, selected.Id))
-            {
-                var reward = policy.PrepareHidden(laboratory.Mode);
-                var snapshot = new EvildomWarRewardSnapshot(laboratory, reward, policy.Materialize(reward, laboratory.Created))
-                    { Rule = EvildomWarRewardPolicy.HiddenRule };
-                owner.Execute(() =>
+            if (recoverHidden)
+                foreach (var laboratory in store.LoadUnrewardedEvildomWarHiddenCompletions(owner, selected.Id))
                 {
-                    if (!Ready || !ReferenceEquals(Selected, selected) || SelectionEpoch != capture.Epoch)
-                        throw new InvalidOperationException("魔界实验室领奖恢复的角色上下文已变化");
-                    var delivered = store.CommitEvildomWarHiddenReward(owner, selected.Id, snapshot);
-                    if (!delivered.Duplicate) hiddenMails.AddRange(delivered.MailIds);
-                    return true;
-                });
-            }
+                    var reward = policy.PrepareHidden(laboratory.Mode);
+                    var snapshot = new EvildomWarRewardSnapshot(laboratory, reward, policy.Materialize(reward, laboratory.Created))
+                        { Rule = EvildomWarRewardPolicy.HiddenRule };
+                    owner.Execute(() =>
+                    {
+                        if (!Ready || !ReferenceEquals(Selected, selected) || SelectionEpoch != capture.Epoch)
+                            throw new InvalidOperationException("魔界实验室领奖恢复的角色上下文已变化");
+                        var delivered = store.CommitEvildomWarHiddenReward(owner, selected.Id, snapshot);
+                        if (!delivered.Duplicate) hiddenMails.AddRange(delivered.MailIds);
+                        return true;
+                    });
+                }
+            var hiddenBattles = recoverHidden ? ImmutableHashSet<Guid>.Empty
+                : store.LoadUnrewardedEvildomWarHiddenCompletions(owner, selected.Id).Select(row => row.BattleId).ToImmutableHashSet();
             foreach (var completed in store.LoadUnrewardedEvildomWarCompletions(owner, selected.Id))
             {
-                var choice = policy.Prepare(completed.Mode, selected, System.Security.Cryptography.RandomNumberGenerator.GetInt32);
+                var choice = policy.Prepare(completed.Mode, selected, System.Security.Cryptography.RandomNumberGenerator.GetInt32,
+                    hiddenBattles.Contains(completed.BattleId));
                 var snapshot = new EvildomWarRewardSnapshot(completed, choice, policy.Materialize(choice, completed.Created));
                 owner.Execute(() =>
                 {
@@ -208,24 +232,43 @@ internal sealed partial class GameSession
         CurrentEvildomWar(character) is { } war && war.Battle.View is { } current &&
         current.BattleId == view.BattleId && current.Revision == view.Revision);
 
-    internal EvildomWarRewardReceipt? CommitEvildomWarReward(EvildomWarRewardPolicy policy, IEvildomWarRewardStore store)
+    internal EvildomWarRewardReceipt? CommitEvildomWarReward(EvildomWarRewardPolicy policy, IEvildomWarRewardStore store,
+        EvildomWarView? expectedView = null)
     {
+        // 已提交事实不依赖仍停留原王座Run；队友先返回等待区后重同步也复用原回执。
+        var committed = owner.Execute(() => Ready && Selected is { } selected && CurrentEvildomWar(selected) is { RewardCommit: { } receipt } saved &&
+            MatchesView(saved) ? new EvildomWarRewardReceipt(saved, owner.Generation, receipt) : null);
+        if (committed is not null) return committed;
         var capture = owner.Execute(() => Ready && Selected is { } character && CurrentEvildomWar(character) is { Charged: true } war &&
-            war.Battle.Completion is { } completed && formalDungeon is { } dungeon && ReferenceEquals(dungeon.EvildomWarEntry, war)
+            war.Battle.Completion is { } completed && MatchesView(war) &&
+            formalDungeon is { } dungeon && ReferenceEquals(dungeon.EvildomWarEntry, war)
             ? (War: war, Completion: completed, Dungeon: dungeon, Character: character, Generation: owner.Generation) : default);
         if (capture.War is not { } current) return null;
         if (current.RewardCommit is null)
         {
-            var candidate = current.RewardSelection ?? policy.Prepare(current.Mode, capture.Character, capture.Dungeon.Draw);
+            bool includeHidden = current.Battle.HiddenCompletion is { } hidden &&
+                hidden.Facts.Any(fact => fact.Identity.CharacterId == capture.Character.Id) &&
+                current.HiddenRewardCommit is null;
+            var candidate = current.RewardSelection ?? policy.Prepare(current.Mode, capture.Character, capture.Dungeon.Draw, includeHidden);
             var selection = owner.Execute(() => Current() ? current.RewardSelection ??= candidate : null);
             if (selection is null) return null;
-            var planned = current.RewardPlan ?? new(capture.Completion, capture.Dungeon.Run, selection,
-                policy.Materialize(selection, capture.Completion.Created));
+            var planned = current.RewardPlan;
+            if (planned is null || !ReferenceEquals(planned.ExpectedCharacter, capture.Character))
+            {
+                var items = planned?.Items ?? policy.Materialize(selection, capture.Completion.Created);
+                planned = new(capture.Completion, capture.Dungeon.Run, selection, items)
+                {
+                    ExpectedCharacter = capture.Character,
+                    Inventory = policy.PlanGrant(capture.Character, items, capture.Completion.Created)
+                };
+            }
             return owner.Execute(() =>
             {
                 if (!Current()) return null;
-                current.RewardPlan ??= planned;
+                current.RewardPlan = planned;
                 current.RewardCommit ??= store.CommitEvildomWarReward(owner, current.RewardPlan);
+                if (current.RewardCommit.Character is { } updated)
+                    Selected = updated;
                 return new EvildomWarRewardReceipt(current, owner.Generation, current.RewardCommit);
             });
         }
@@ -233,7 +276,9 @@ internal sealed partial class GameSession
 
         bool Current() => Ready && owner.Generation == capture.Generation && SelectionEpoch == current.Epoch &&
             ReferenceEquals(Selected, capture.Character) && ReferenceEquals(evildomWar, current) &&
-            ReferenceEquals(formalDungeon, capture.Dungeon) && ReferenceEquals(current.Battle.Completion, capture.Completion);
+            ReferenceEquals(formalDungeon, capture.Dungeon) && ReferenceEquals(current.Battle.Completion, capture.Completion) && MatchesView(current);
+        bool MatchesView(EvildomWarAdmission war) => expectedView is null ||
+            war.Battle.View is { } view && view.BattleId == expectedView.BattleId && view.Revision == expectedView.Revision;
     }
 
     internal bool CanPublishEvildomWarReward(EvildomWarRewardReceipt receipt)

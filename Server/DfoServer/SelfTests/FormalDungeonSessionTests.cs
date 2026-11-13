@@ -139,7 +139,7 @@ internal static partial class FormalDungeonSessionTests
 
         void InfiniteFatigueProgress()
         {
-            var settings = new DfoServer.Game.Settings.GameDebugSettings();
+            var settings = new DfoServer.Game.Settings.GameDebugSettings(initialFatigueAccounts: ["formal-session"]);
             using var f = new Fixture("FatigueStat", towns, characters, learning, quests, debugSettings: settings);
             f.Sql("DELETE FROM character_active_main_quests; UPDATE character_fatigue SET used=maximum,remaining=0");
             f.SelectEntry();
@@ -157,7 +157,7 @@ internal static partial class FormalDungeonSessionTests
             var fullDisplay = f.Session.CaptureFatigueDisplay()!;
             Check(fullDisplay.State.Remaining == 156 && f.Session.CanPublishFatigueDisplay(fullDisplay),
                 "在线疲劳刷新捕获当前选角的完整显示快照");
-            settings.InfiniteFatigue = false;
+            settings.SetInfiniteFatigue("formal-session", false);
             var realDisplay = f.Session.CaptureFatigueDisplay()!;
             Check(!f.Session.CanPublishFatigueDisplay(fullDisplay) && realDisplay.State.Remaining == 0 &&
                 f.Session.CanPublishFatigueDisplay(realDisplay) && Same(stored, f.Read()),
@@ -168,7 +168,7 @@ internal static partial class FormalDungeonSessionTests
                 f.Session.EnterFormalDungeon(3, 0, 0, catalog, rooms) is null,
                 "关闭无限模式保留当局计数，恢复真实显示与零余额准入限制");
             Check(!f.Session.CanPublishFatigueDisplay(realDisplay), "转场后原副本疲劳显示收据失效");
-            settings.InfiniteFatigue = true;
+            settings.SetInfiniteFatigue("formal-session", true);
             Check(f.Session.EnterFormalDungeon(3, 0, 0, catalog, rooms) is { Snapshot.ConsumedFatigue: 0 } &&
                 f.Session.CompleteFormalDungeonLoading() is { Snapshot.ConsumedFatigue: 1 },
                 "重新入场使用新实例计数，不继承上局应耗疲劳");
@@ -1062,7 +1062,7 @@ internal static partial class FormalDungeonSessionTests
         {
             // 500次连续入场只验证对象key单调与跨局复用，房间疲劳不是本用例对象；按调试开关恒满疲劳隔离。
             using var f = new Fixture("KeyReuse", towns, characters, learning, quests,
-                debugSettings: new DfoServer.Game.Settings.GameDebugSettings { InfiniteFatigue = true });
+                debugSettings: new DfoServer.Game.Settings.GameDebugSettings(initialFatigueAccounts: ["formal-session"]));
             var drops = global::DfoServer.Testing.SelfTestCatalogs.MonsterDrops(pvf);
             var plan = new DungeonDropGenerationPlan("key-reuse-fixture", [new(10000, null, 15, 15, new(1, 1, 0))]);
             FormalDungeonReceipt? previous = null;

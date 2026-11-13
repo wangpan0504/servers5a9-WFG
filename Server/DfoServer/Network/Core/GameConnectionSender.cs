@@ -36,6 +36,7 @@ internal sealed class GameConnectionSender : IAsyncDisposable
     ushort sequence;
     long epoch;
     long pendingBytes;
+    int dungeonSceneWritten;
     bool closed;
     public GameConnectionSender(AccountOwners.Lease owner, Stream stream, CancellationTokenSource connection, ushort sequence, Action<byte, ushort, ushort, ReadOnlyMemory<byte>, string> sent, Action<byte[]>? capture = null, Action<string, Exception?>? failed = null)
     {
@@ -51,6 +52,8 @@ internal sealed class GameConnectionSender : IAsyncDisposable
     }
 
     public long Epoch => Volatile.Read(ref epoch);
+    // 仅记录本连接实际写出的原生场景；不代表Session业务状态或副本准入。
+    internal bool DungeonSceneWritten => Volatile.Read(ref dungeonSceneWritten) != 0;
     internal bool IsPublicationQueued => queuedPublication.Value is not null;
     public long PendingBytes { get { lock (queueGate) return pendingBytes; } }
 
@@ -270,7 +273,14 @@ internal sealed class GameConnectionSender : IAsyncDisposable
         timeout.CancelAfter(TimeSpan.FromSeconds(5));
         await stream.WriteAsync(frame, timeout.Token);
         capture?.Invoke(frame);
-        owner.Execute(() => true);
+        owner.Execute(() =>
+        {
+            if (kind == 0 && opcode == (ushort)NotiPacketType.DUNGEON_INFO)
+                Volatile.Write(ref dungeonSceneWritten, 1);
+            else if (kind == 0 && opcode == (ushort)NotiPacketType.AREA_USERS)
+                Volatile.Write(ref dungeonSceneWritten, 0);
+            return true;
+        });
         sent(kind, opcode, protectedFrame ? sentSequence : (ushort)(sequence - 1), body, action);
     }
 

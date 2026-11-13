@@ -588,13 +588,12 @@ internal static class AvatarPackageTcpTests
                 writer.Write((byte)1); writer.Write((byte)from.List); writer.Write(from.Index); writer.Write(1);
                 writer.Write((byte)to.List); writer.Write(to.Index);
             }));
-            var cleared = peer.Expect(0, 1681).Body;
-            That(cleared.Length == 168 && cleared[0] == 1 && U16(cleared, 1) == 1 &&
-                U16(cleared, 3) == weapon.Position.Index && U32(cleared, 5) == uint.MaxValue,
-                "普通武器穿卸只清对应包裹格，完整165B装扮条目不截断");
+            short bagSlot = from.List == InventoryListType.Avatar ? from.Index : to.Index;
+            var avatarList = InventoryDeltaTestChecks.Read(peer, 1, bagSlot,
+                to.List == InventoryListType.Avatar ? weaponId : 0);
             if (to.List == InventoryListType.Avatar)
-                Bytes(AvatarRow(peer.Expect(0, 1681).Body, weaponId), bagRow,
-                    "普通武器卸下回填原165B核心、五孔、颜色与永久期限");
+                Bytes(AvatarRow(avatarList, weaponId), bagRow,
+                    "普通武器卸下的局部回填保留原165B核心、五孔、颜色与永久期限");
             That(peer.Expect(0, 0x063F).Body[0] == 0, "普通武器穿卸同步原1号橱窗内容");
             var actor = peer.Expect(0, 2).Body;
             int actorAt = 134 + NameWidth("ObservedBox");

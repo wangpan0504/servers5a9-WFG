@@ -64,13 +64,15 @@ internal static class InventoryDeleteService
     }
 
     // 单实例规则供批量工作集复用；此处不创建快照，也不改变传入实例。
-    public static bool TryDelete(InventoryItem? item, int value, int count, out InventoryItem? remaining, bool includeAccountCargo = false)
+    public static bool TryDelete(InventoryItem? item, int value, int count, out InventoryItem? remaining, bool includeAccountCargo = false,
+        bool includeAccountCommon = false)
     {
         remaining = null;
         // 不同丢弃入口在 value 字段分别发送核心数量或物品 ID；槽位与
         // 当前快照才是实例身份。时装则发送递减的剩余秒数。
         if (item is null || ItemSlotBoundService.IsEquippedRune(item.Position) ||
-            !(Allows(item.Position.List) || includeAccountCargo && item.Position.List == InventoryListType.AccountCargo) || value < 0 ||
+            !(Allows(item.Position.List) || includeAccountCargo && item.Position.List == InventoryListType.AccountCargo ||
+                includeAccountCommon && item.Position.List == InventoryListType.AccountCommon) || value < 0 ||
             item.Avatar is null && value != item.Core.Value && value != item.Core.ItemId ||
             item.Core.EquipmentLockId != 0)
             return false;

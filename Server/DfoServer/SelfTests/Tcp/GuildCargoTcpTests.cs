@@ -187,13 +187,15 @@ internal static class GuildCargoTcpTests
                         writer.Write(checked((byte)ids.Length));
                         foreach (ushort id in ids) { writer.Write(id); writer.Write((byte)5); }
                     }));
+                peer.Expect(0, 1737, [0,0,0,0]);
                 if (fixture.ExpectedChatEmoticons(peer.Id) is { } expectedChatEmoticons)
                 {
                     peer.Expect(0, 1384, fixture.ExpectedRecentEmoticons(peer.Id));
                     peer.Expect(0, 411, expectedChatEmoticons);
                 }
-                // 表情之后是角色设置回放：本夹具未保存账号设置与键位，服务端只补发非默认的390，173/454不出现（同9f6b45e4）。
+                // 本夹具为普通职业且未保存主区与键位；390之后按bank0初始化原生默认，不补写存档。
                 peer.Expect(0, 390);
+                peer.Expect(0, 454, [0, 4, 0, 0, 0, 78, 79, 78, 69]);
                 peer.Expect(0, 21);
                 peer.Expect(0, 356);
                 peer.Expect(0, 703);

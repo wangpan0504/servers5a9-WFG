@@ -48,15 +48,15 @@ internal sealed partial class CharacterRepository : ICharacterCopyStore
         command.CommandText = $"INSERT INTO characters({string.Join(',', columns)}) SELECT {string.Join(',', columns.Select(column => overrides.GetValueOrDefault(column, column)))} FROM characters WHERE id=$source AND account=$account RETURNING id";
         ushort id = checked((ushort)(long)(command.ExecuteScalar() ?? throw new InvalidOperationException("未创建新角色")));
 
-        // 账号仓库仍使用原共享实例；仅为本角色实际持有的物品分配全新 UID。
-        var privateItems = source.Inventory.Items.Where(item => item.Position.List != InventoryListType.AccountCargo).ToArray();
+        // 账号共享容器仍使用原实例；仅为本角色实际持有的物品分配全新 UID。
+        var privateItems = source.Inventory.Items.Where(item => item.Position.List is not (InventoryListType.AccountCargo or InventoryListType.AccountCommon)).ToArray();
         var before = ReadInventory(db, id, tx);
         var allocating = source.Inventory with
         {
             Items = privateItems.Select(item => item with
             {
                 Uid = 0, Core = item.Avatar is not null || item.Creature is not null ? item.Core with { Value = 0 } : item.Core
-            }).Concat(before.Items.Where(item => item.Position.List == InventoryListType.AccountCargo)).ToImmutableArray(),
+            }).Concat(before.Items.Where(item => item.Position.List is InventoryListType.AccountCargo or InventoryListType.AccountCommon)).ToImmutableArray(),
             AvatarPresets = AvatarPresetState.Empty,
             AccountWallet = before.AccountWallet, AccountCargo = before.AccountCargo,
             AccountSkins = before.AccountSkins, EpicPieces = before.EpicPieces,
@@ -79,7 +79,7 @@ internal sealed partial class CharacterRepository : ICharacterCopyStore
         var final = allocated with
         {
             AvatarPresets = presets,
-            Items = allocated.Items.Select(item => item.Position.List == InventoryListType.AccountCargo || item.Avatar is null ? item : item with
+            Items = allocated.Items.Select(item => item.Position.List is InventoryListType.AccountCargo or InventoryListType.AccountCommon || item.Avatar is null ? item : item with
             {
                 Avatar = item.Avatar with { ClearAvatarSourceUid = Remap(item.Avatar.ClearAvatarSourceUid) }
             }).ToImmutableArray()
@@ -96,7 +96,7 @@ internal sealed partial class CharacterRepository : ICharacterCopyStore
         var copied = Require(db, tx, owner.Account, request.NewName);
         copied.Inventory.Validate();
         if (copied.Id != id || copied.Slot != slot || copied.Guild is not null || copied.Marriage is not null ||
-            copied.Inventory.Items.Where(item => item.Position.List != InventoryListType.AccountCargo).Any(item => !uidMap.ContainsValue(item.Uid)))
+            copied.Inventory.Items.Where(item => item.Position.List is not (InventoryListType.AccountCargo or InventoryListType.AccountCommon)).Any(item => !uidMap.ContainsValue(item.Uid)))
             throw new InvalidDataException("复制后的角色身份或物品引用未通过验证，已取消本次复制");
         tx.Commit();
         return copied;

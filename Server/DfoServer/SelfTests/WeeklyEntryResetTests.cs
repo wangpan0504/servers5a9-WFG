@@ -15,7 +15,7 @@ namespace DfoServer;
 // 账号刷新地下城入场次数：覆盖角色日/周次数、账号次数（日键与任意周起点）、冒险团面板、历史退役记录、强袭、
 // 魔界塔当日入场、悲叹塔账号额度与角色当日通关锁、祭坛/绝望当日入场回执、卢克团本周通关、再战魔界周次数。
 // 旧周期行、其他账号、次元裂缝的每日奖励进度、普通卢克的当日楼层顺序保持原样。
-public static class WeeklyEntryResetTests
+public static partial class WeeklyEntryResetTests
 {
     public static void RunCore()
     {
@@ -95,6 +95,19 @@ public static class WeeklyEntryResetTests
               ('receiver',{tag.Day - 1},{tag.Week},0,0,9608,'cccccccccccccccccccccccccccccccc',1,2,0,1,0);
             """);
 
+        for (int weekday = 0; weekday < 7; weekday++)
+        {
+            int week = DungeonIncountPolicy.Period(now, weekday).Week;
+            int oldWeek = DungeonIncountPolicy.Period(now.AddDays(-7), weekday).Week;
+            int dungeon = weekday == 1 ? 8523 : 20000 + weekday;
+            f.Execute($"""
+                INSERT INTO character_dungeon_incount(character_id,account,dungeon,day,daily_used,week,weekly_used) VALUES
+                  ({otherId},'other',{dungeon},{period.Day},0,{week},3),
+                  ({otherId},'other',{21000 + weekday},20180215,2,{oldWeek},4),
+                  ({receiverId},'receiver',{dungeon},{period.Day},0,{week},5);
+                """);
+        }
+
         string answer = DevelopmentGm.Answer("account other weekly-entry-reset", "sender", f.Repository, f.Owners, _ => null);
         That(answer.StartsWith("OK ", StringComparison.Ordinal), "入场次数刷新命令成功: " + answer);
         using var document = JsonDocument.Parse(answer[3..answer.IndexOf(" 已恢复", StringComparison.Ordinal)]);
@@ -103,7 +116,7 @@ public static class WeeklyEntryResetTests
             cleared.GetProperty("Week").GetInt32() == panelWeek &&
             cleared.GetProperty("PanelRows").GetInt32() == 1 &&
             cleared.GetProperty("CharacterDailyRows").GetInt32() == 1 &&
-            cleared.GetProperty("CharacterWeeklyRows").GetInt32() == 1 &&
+            cleared.GetProperty("CharacterWeeklyRows").GetInt32() == 8 &&
             cleared.GetProperty("AccountRows").GetInt32() == 3 &&
             cleared.GetProperty("AssaultRows").GetInt32() == 1,
             "结果按存储分类只统计本账号当前周期的行");
@@ -118,6 +131,14 @@ public static class WeeklyEntryResetTests
             f.Query($"SELECT weekly_used FROM character_dungeon_incount WHERE account='other' AND dungeon=11007") is 7L &&
             f.Query($"SELECT weekly_used FROM character_dungeon_incount WHERE account='receiver' AND dungeon=11006") is 8L,
             "角色日/周次数清零，旧周和其他账号不动");
+        for (int weekday = 0; weekday < 7; weekday++)
+        {
+            int dungeon = weekday == 1 ? 8523 : 20000 + weekday;
+            That(Scalar($"SELECT weekly_used FROM character_dungeon_incount WHERE account='other' AND dungeon={dungeon}") == 0 &&
+                Scalar($"SELECT weekly_used FROM character_dungeon_incount WHERE account='other' AND dungeon={21000 + weekday}") == 4 &&
+                Scalar($"SELECT weekly_used FROM character_dungeon_incount WHERE account='receiver' AND dungeon={dungeon}") == 5,
+                $"星期{weekday}重置的角色周次数恢复，旧周和其他账号保留");
+        }
         That(f.Query($"SELECT used FROM account_dungeon_incount WHERE account='other' AND dungeon=400000016") is 0L &&
             f.Query($"SELECT used FROM account_dungeon_incount WHERE account='other' AND dungeon=5340") is 0L &&
             f.Query($"SELECT used FROM account_dungeon_incount WHERE account='other' AND dungeon=400000017") is 0L &&
@@ -187,10 +208,12 @@ public static class WeeklyEntryResetTests
             f.Query($"SELECT used FROM account_dungeon_incount WHERE account='other' AND dungeon=400000018") is 3L,
             "再刷一次仍然成功，旧周期行还在");
         RunRewardLimitCore();
+        RunClearRewardReset();
         RunRewardLimitImperialDays(false);
         RunRewardLimitImperialDays(true);
         RunRewardLimitMultipleDays();
         RunRewardLimitUnclaimedChallenges();
+        GmAccountLimitsTests.RunCore();
         RaidQuotaEpochTests.RunCore();
         RaidQuotaSessionTests.RunCore();
         Console.WriteLine($"PASS {Count - before} 地下城入场次数刷新核心断言");
@@ -208,6 +231,7 @@ public static class WeeklyEntryResetTests
         var tag = TagEvildomPeriod.At(DateTimeOffset.UtcNow);
         int griefDay = QuestCycle.Day(DateTimeOffset.UtcNow);
         long id = f.Other.Id;
+        SeedClearReward(f, f.Other.Id, "other", 291100320, 21, DateTimeOffset.UtcNow);
         f.Execute($"""
             INSERT INTO account_strongway2019_rewards(account,instance_id,character_id,task_attempt,run_epoch,dungeon_id,bucket,day,week,created_at,reward_json,fact_json,mail_id)
               VALUES('other','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',{id},1,1,5359,0,{strongway.Day},{strongway.Week},1,json_object(),json_object(),1);
@@ -263,7 +287,8 @@ public static class WeeklyEntryResetTests
             result.GetProperty("SpecialEntryRows").GetInt32() == 1 &&
             result.GetProperty("DespairRows").GetInt32() == 1 &&
             result.GetProperty("RaidRows").GetInt32() == 1 &&
-            result.GetProperty("RaidReceiptRows").GetInt32() == 1,
+            result.GetProperty("RaidReceiptRows").GetInt32() == 1 &&
+            result.GetProperty("ClearRewardRows").GetInt32() == 1,
             "奖励刷新按玩法返回当前周期迁移行数");
         That(f.Query($"SELECT count(*) FROM account_strongway2019_rewards WHERE account='other'") is 1L &&
             f.Query($"SELECT count(*) FROM character_strongway2019_completions WHERE account='other'") is 1L &&

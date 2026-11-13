@@ -22,7 +22,14 @@ internal static partial class FormalDungeonTcpTests
         await fixture.StartAsync();
         That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort,"infinite-fatigue off",out _),"普通副本回归关闭无限疲劳");
         MooncreekDungeonTcpTests.Verify(fixture,resources);
-        VerifyBossRushEntry(fixture,resources);
+        That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort,"support-companions wangfugui,guangbing",out _),
+            "灵魂之冢回归先开启两类支援兵，避免默认关闭掩盖遗漏");
+        try { VerifyBossRushEntry(fixture,resources); }
+        finally
+        {
+            That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort,"support-companions off",out _),
+                "灵魂之冢回归结束恢复支援兵关闭");
+        }
         var dungeons = SelfTestCatalogs.Dungeons(resources.Archive);
         var growth = SelfTestCatalogs.Growth(resources.Archive,resources.Learning);
         int sequence = 0;
@@ -427,6 +434,20 @@ internal static partial class FormalDungeonTcpTests
                         peer.ReadCardMembershipState(packet);
                         continue;
                     }
+                    if (packet is { Kind:0,Opcode:1349 })
+                    {
+                        AssertAdventureProgress(fixture, resources, peer, packet);
+                        packets.Add(packet);
+                        continue;
+                    }
+                    if (packet is { Kind:1,Opcode:1002 })
+                    {
+                        That(packet.Body.Length == 13 && packet.Body[0] == 1 && U64(packet.Body,1) == 1 &&
+                            U32(packet.Body,9) == Convert.ToInt64(fixture.Query(
+                                "SELECT rental_points FROM account_wallets WHERE account=$p0",account).Single()[0]),
+                            "结算幸运星获得/上限应答对应实际账号余额");
+                        continue;
+                    }
                     if (packet is { Kind:0,Opcode:988 })
                     {
                         That(packet.Body.Length == 8 && U32(packet.Body,4) == 0 &&
@@ -503,16 +524,31 @@ internal static partial class FormalDungeonTcpTests
         BinaryPrimitives.WriteUInt32LittleEndian(request.AsSpan(16),0);
         peer.Send(16,request);
         peer.Expect(0,28);
-        peer.Expect(0,29);
+        var startMap = peer.Expect(0,29).Body;
+        That(startMap.Length == 23 && startMap[18] == 0,
+            "灵魂之冢即使开启王富贵和光兵，起点真实29仍无额外AI演员");
         byte[] info = peer.Expect(0,1488).Body;
         byte[] data = peer.Expect(0,1487).Body;
-        That(info.Length == 4 + 9 * bosses.Length && BinaryPrimitives.ReadInt32LittleEndian(info) == bosses.Length &&
-            BinaryPrimitives.ReadInt32LittleEndian(info.AsSpan(4)) == bosses[0] && info.AsSpan(8,5).ToArray().All(value => value == 0),
-            "1488 按专表 24 条下发怪物编号，后 5 字节保持零");
+        That(info.Length == 4 + 9 * 25 && BinaryPrimitives.ReadInt32LittleEndian(info) == 25 &&
+            info.AsSpan(4 + 12 * 9, 9).ToArray().All(value => value == 0),
+            "1488 包含25格并保留空起点，避免后半名单坐标错位");
         That(data.Length == 9 && data[0] == 0 && BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(1)) == 0 &&
             BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(5)) is >= 100000 and <= 120000,
             "1487 入场 rank/score 为 0，剩余毫秒取自 120 秒时限");
-        Load(peer);
+        // 屏障证明入场未提前发1486，不能用29已发送冒充客户端地图已安装。
+        peer.Barrier();
+        peer.Send(37,new byte[8]);
+        peer.Expect(1,37,[1]);
+        peer.Expect(0,30,new byte[5]);
+        byte[] timeout = peer.Expect(0,1486).Body;
+        That(timeout.Length == 8 && U32(timeout,0) is >= 100 and <= 120 && U32(timeout,4) == 1 &&
+            U32(timeout,0) * 1000 <= U32(data,5) + 999,
+            "1486在首次真实加载完成后启动，仍取同实例权威剩余秒数，不补回加载耗时");
+        peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),1]);
+        peer.ExpectOptionalFatigue();
+        peer.Barrier();
+        peer.Send(37,new byte[8]);
+        peer.Barrier();
         int score = 0;
         var seen = new HashSet<int>();
         foreach (var point in new[] { (X:1,Y:2), (X:0,Y:2) })
@@ -527,8 +563,13 @@ internal static partial class FormalDungeonTcpTests
                 bosses.Contains(checked((int)U32(battleMap, 27))),
                 $"337战斗房必须生成专表内可计分怪物，实际模板={U32(battleMap, 27)}");
             int id = checked((int)U32(battleMap,27));
+            int gridOffset = 4 + (point.Y * 5 + point.X) * 9;
+            That(U32(info,gridOffset) == id && info[gridOffset+4] <= 2 &&
+                catalog.BossRush.SoulPoints[info[gridOffset+4]] == catalog.BossRush.SoulFor(bosses.IndexOf(id)),
+                "真实生成怪物与原生按房间坐标查表的ID和灵魂类别一致");
             That(seen.Add(id),"不同战斗房不重复分配同一计分怪");
             Load(peer);
+            // 普通Load严格期待30后直接3；过房不得再次插入1486重启原生计时。
             QuestLifecycleTcpTests.DrainNotifications(peer);
             var report = Death(U16(battleMap,25),peer.Id,battleMap[31]);
             peer.Send(39,report);

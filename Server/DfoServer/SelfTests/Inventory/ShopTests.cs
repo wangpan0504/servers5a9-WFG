@@ -104,6 +104,7 @@ internal static class ShopTests
                 That(ItemShopPrice.Parse(new("[value]\n" + value), true, 200).GetSellGold(1, 1) == 0, "zero sale does not invent a one-gold minimum " + value);
             That(ItemShopPrice.Parse(new("[value]\n2147483647"), true, int.MaxValue).GetSellGold(1, 1) == int.MaxValue,
                 "large equipment price cannot wrap into a cheap sale");
+            VerifyMedalPurchases(current, itemResources, shop, items);
             var bought = shop.Buy(current, new(3175, 10, 2, 1), out var receipt);
             var ack = ShopPackets.Bought(bought, receipt);
             That(ack.Length == 141 && ack[0] == 1 && I32(ack, 1) == 999900 && I32(ack, 19) == 3175 && I32(ack, 23) == 10 && ack[140] == 0,
@@ -178,13 +179,23 @@ internal static class ShopTests
             That(current.Inventory.Find(Bag(3)) is { Uid: var savedUid, Core.Value: 12 } && savedUid == uid, "quickbar sale retains unsold instance");
             var locked = current.Inventory.Find(Bag(3))!;
             var lockedCharacter = current with { Inventory = current.Inventory with { Items = current.Inventory.Items.Replace(locked, locked with { Core = locked.Core with { EquipmentLockId = 2 } }) } };
-            That(shop.Sell(lockedCharacter, sell) is { Accepted: false, Error: 0xd6 }, "safety locked source rejected");
+            That(shop.Sell(lockedCharacter, sell) is { Accepted: false, Error: 0xd6, RejectReason: null }, "safety locked source rejected without a gold-cap reason");
             var sorted = current with { Inventory = current.Inventory with { Items = current.Inventory.Items.Replace(locked, locked with { Core = locked.Core with { SortLockFlag = 1 } }) } };
             That(shop.Sell(sorted, sell).Accepted, "sorting lock does not invent sell restriction");
             foreach (int count in new[] { -1, 0, 99 })
                 That(shop.Sell(current, sell with { Count = count }) is { Accepted: true, MoveCount: 12 }, "whole stack sale convention " + count);
             That(shop.Sell(current, sell with { Position = new(InventoryListType.Equipment, 12) }) is { Accepted: true, MoveCount: 1 }, "worn equipment can be sold");
-            That(!shop.Sell(current with { Inventory = current.Inventory with { Gold = int.MaxValue } }, sell).Accepted, "gold cap rejects entire sale");
+            var cappedEntity = current with { Inventory = current.Inventory with { Gold = int.MaxValue } };
+            var entityRejected = shop.Sell(cappedEntity, sell);
+            That(entityRejected is { Accepted: false, Error: 22, RejectReason: "gold_carry_limit", Plan: null } &&
+                cappedEntity.Inventory.Find(sell.Position) == current.Inventory.Find(sell.Position) &&
+                ShopPackets.Sold(entityRejected, sell).SequenceEqual(new byte[] { 0, 22, 0 }),
+                "金币超限标记真实出售拒绝原因，保留源实例和原3字节失败ACK");
+            int entityCap = new CurrencyService(itemResources.GoldLimits).CarryLimit(current);
+            var exactEntity = current with { Inventory = current.Inventory with { Gold = checked((uint)(entityCap - 3)) } };
+            That(shop.Sell(exactEntity, sell) is { Accepted: true, RejectReason: null, Plan: { } entityPlan } &&
+                entityPlan.After.Gold == entityCap && entityPlan.After.Find(sell.Position)!.Core.Count == 9,
+                "实体出售刚好达到携带上限仍成功，不产生金币拒绝提示原因");
 
             foreach (var (id, kind, slot, price) in new (int, CurrencyKind, short, int)[]
             {
@@ -214,10 +225,10 @@ internal static class ShopTests
                     "empty wallet rejects sale " + id);
                 int cap = new CurrencyService(itemResources.GoldLimits).CarryLimit(walletOnly);
                 var capped = walletOnly with { Inventory = walletOnly.Inventory with { Gold = checked((uint)(cap - price + 1)) } };
-                That(shop.Sell(capped, request) is { Accepted: false, Error: 22, Plan: null } && capped.Inventory.AccountWallet.Get(kind) == 2,
+                That(shop.Sell(capped, request) is { Accepted: false, Error: 22, RejectReason: "gold_carry_limit", Plan: null } && capped.Inventory.AccountWallet.Get(kind) == 2,
                     "gold cap rejects the whole wallet sale without debiting cubes " + id);
                 That(shop.Sell(capped with { Inventory = capped.Inventory with { Gold = checked((uint)(cap - price)) } }, request) is
-                    { Accepted: true, Plan: { } exact } && exact.After.Gold == cap, "sale may reach exact carry limit " + id);
+                    { Accepted: true, RejectReason: null, Plan: { } exact } && exact.After.Gold == cap, "sale may reach exact carry limit " + id);
                 That(walletOnly.Inventory.Gold == 1000 && walletOnly.Inventory.AccountWallet.Get(kind) == 2 && walletOnly.Inventory.Items.IsEmpty,
                     "sale planning and rejections leave the original wallet untouched " + id);
             }
@@ -371,6 +382,39 @@ internal static class ShopTests
         }
         finally { TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"PASS {Count - checks} NPC shop assertions");
+    }
+    static void VerifyMedalPurchases(Character current, ItemResources resources, InventoryShopService shop, InventoryService items)
+    {
+        var medalIds = new[] { 0, 1, 2, 3, 6 }.SelectMany(grade => resources.Items.GuildCompoundCandidates(ItemKind.GuildMedal, grade)).ToHashSet();
+        var offers = resources.Shops.Shops.SelectMany(pair => pair.Value.Items.Where(medalIds.Contains)
+            .Select(id => new BuyItemRequest(id, 0, pair.Key, pair.Value.NpcId))).ToArray();
+        That(offers.Length > 0, "匹配资源存在勋章商店，不能空跑购买回归");
+        foreach (var offer in offers)
+        {
+            var template = resources.Items.Get(offer.ItemId);
+            var source = current with { Inventory = InventorySnapshot.Empty with { Gold = 1_000_000 } };
+            var funded = items.Grant(source, template.ShopPrice.Materials.Select(cost => new InventoryReward(cost.ItemId, cost.Count)).ToArray());
+            That(funded.Accepted, "准备勋章原价兑换材料 " + offer.ItemId);
+            source = source with { Inventory = funded.Plan!.After };
+            foreach (int count in new[] { 0, 1, 2 })
+            {
+                var purchase = shop.Buy(source, offer with { Count = count }, out var receipt);
+                That(purchase.Accepted && receipt is { Count: 1, Position.List: InventoryListType.GuildMedal, Position.Index: 0,
+                        Core.Kind: ItemKind.GuildMedal, Core.Value: 1 } &&
+                    receipt.Core.ItemId == offer.ItemId && purchase.Plan!.After.Gold == source.Inventory.Gold - template.ShopPrice.Gold &&
+                    purchase.Plan.After.Items.Count(item => item.Core.Kind == ItemKind.GuildMedal) == 1 &&
+                    template.ShopPrice.Materials.All(cost => purchase.Plan.After.Items.All(item => item.Core.ItemId != cost.ItemId)),
+                    "每件在售勋章接受装备零数量合同，复数也只扣一份材料并发一件到勋章页 " + offer.ItemId + "/" + count);
+            }
+            foreach (int count in new[] { -1, 1_000_001 })
+                That(shop.Buy(source, offer with { Count = count }, out var receipt) is { Accepted: false, Error: 0x85, Plan: null } && receipt is null,
+                    "非法勋章数量仍拒绝且不产生扣费计划 " + offer.ItemId);
+            if (!template.ShopPrice.Materials.IsEmpty)
+                That(shop.Buy(source with { Inventory = InventorySnapshot.Empty with { Gold = 1_000_000 } }, offer, out var receipt)
+                    is { Accepted: false, Error: 10, Plan: null } && receipt is null,
+                    "零数量勋章购买仍必须足额支付兑换材料 " + offer.ItemId);
+        }
+        Console.WriteLine($"PASS {offers.Length} medal shop offers (zero/one/multiple count, invalid count and payment)");
     }
     sealed class Clock(DateTimeOffset now) : TimeProvider
     {

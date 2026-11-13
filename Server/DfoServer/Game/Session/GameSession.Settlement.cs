@@ -40,8 +40,10 @@ internal sealed partial class GameSession
         public byte? PaidCard { get; set; }
         public uint GainedExperience { get; set; }
         public uint ProficiencyGained { get; set; }
+        public bool LuckyStarEligible { get; set; }
         public bool LuckyStarGained { get; set; }
         public int LuckyStarTotal { get; set; }
+        public int ClearPartyBuffId { get; init; }
         public DungeonCardRewardPolicy? CardPolicy { get; init; }
         public DungeonCardClaimPreparation? Claim { get; set; }
         public DungeonTournamentReward? Tournament => Pending.Tournament;
@@ -73,7 +75,7 @@ internal sealed partial class GameSession
         bool cinematic = NonCombatCinematicTerminal(dungeon) is { } movie &&
             dungeon.Run.ClearFact.ConfirmedDeathEvents.Count > 0 && (PartyDungeon?.HasCompletedCinematic((uint)movie.Id,snapshot.CurrentMap) == true ||
                 Selected!.ActiveMainQuests.Any(active => active.QuestId == movie.Id && active.ConditionState == 0 && QuestHuntProgress.Bound(active,dungeon.Entry)));
-        if (boss is null) return dungeon.Run.HasCommittedPassiveClearCondition || cinematic
+        if (boss is null) return dungeon.Run.HasCommittedPassiveClearCondition || dungeon.Run.HasCommittedAntonTremorClear || cinematic
             ? (FormalReceipt(), (ushort?)null) : ((FormalDungeonReceipt, ushort?)?)null;
         return (FormalReceipt(), boss.ObjectKey);
     });
@@ -134,10 +136,17 @@ internal sealed partial class GameSession
             Dungeon: formalDungeon, Points: formalDungeon?.Run.CreatureExperiencePoints ?? 0,
             Prepared: formalDungeon?.Settlement is not null,
             ValidReport: formalDungeon is { } current && ValidSettlementReport(current, actorId, rankPoint, maximumRankPoint, reportMembers)));
+        // 无普通结果页的资源仍保留清图事实；不由迟到或越界报告启动经验、宠物或翻牌准备。
+        if (capture.Dungeon?.Entry.SuppressOrdinaryResultBoard == true)
+            return new(DungeonRunOutcome.Rejected);
         Events.DailyAttendancePlan? attendance = null;
+        DfoServer.Game.MonsterMockBattle.MockBattleVictory? mockVictory = null;
+        if (!capture.Prepared && capture.ValidReport && capture.Character is { } mockCharacter &&
+            capture.Dungeon is { Entry.MockBattle: { } mockAdmission, Run.ClearFact: not null } mockDungeon && monsterMockBattle is not null)
+            mockVictory = monsterMockBattle.PrepareVictory(owner, mockCharacter, mockDungeon.Run.Snapshot.Identity, mockAdmission);
         uint attendanceMailId = 0;
         if (!capture.Prepared && capture.ValidReport && capture.Character is { } attendee && capture.Dungeon is { } attendanceDungeon &&
-            dailyAttendance is not null && Events.DailyAttendanceService.IsRecommended(attendanceDungeon.Entry,
+            attendanceDungeon.Entry.RaidEntry is null && dailyAttendance is not null && Events.DailyAttendanceService.IsRecommended(attendanceDungeon.Entry,
                 dungeons.Get(checked((int)attendanceDungeon.Entry.DungeonId)), attendee.Level))
             attendance = dailyAttendance.Prepare(owner, claim: false);
         // 宠物资源与纯成长规划在账号锁外完成；结算事务只保存冻结结果，不重新读CRE或抽取进化目标。
@@ -189,7 +198,7 @@ internal sealed partial class GameSession
         }
         return owner.Execute(() =>
     {
-        if (!Ready || Selected?.Id != actorId || Phase != SessionPhase.Settlement || formalDungeon is not { } dungeon || dungeon.Entry.IsPractice || dungeon.Entry.RaidEntry is not null ||
+        if (!Ready || Selected?.Id != actorId || Phase != SessionPhase.Settlement || formalDungeon is not { } dungeon || dungeon.Entry.IsPractice || dungeon.Entry.RaidEntry is not null || dungeon.Entry.SuppressOrdinaryResultBoard ||
             dungeon.Run.ClearFact is not { } fact || dungeon.Run.CurrentAltar is not null || dungeon.Ground.HasPendingOperation || pendingQuestCompletion is not null || HasPendingQuestScene ||
             !ValidSettlementReport(dungeon, actorId, rankPoint, maximumRankPoint, reportMembers))
             return new FormalDungeonSettlementResult(DungeonRunOutcome.Rejected);
@@ -222,29 +231,46 @@ internal sealed partial class GameSession
                 GrowthContractExperience = bonuses.Amount(ExperienceBonusSource.GrowthContract),
                 PotionExperience = bonuses.Amount(ExperienceBonusSource.Potion), AdventureExperience = adventureBonus };
         }
-        if (dungeon.Settlement is null && !((dungeon.Entry.IsTutorial || dungeon.Entry.DisableMonsterAndClearExperience) && reward.TotalExperience == 0) &&
+        if (dungeon.Settlement is null && !(dungeon.Entry.AllowsZeroClearExperience && reward.TotalExperience == 0) &&
             !CharacterGrowthPlan.AddExperience(Selected!, reward.TotalExperience, growth).Success)
             return new FormalDungeonSettlementResult(DungeonRunOutcome.Rejected);
         var ancientGate = dungeon.Settlement?.Pending.AncientGate ?? (dungeon.Entry.DungeonId is >= 7101 and <= 7107 && !dungeon.Entry.IsPractice
             ? AncientGateProgression.Prepare(Selected!.Inventory, IncountNow()) : null);
         // 魔界大战的小图与超星空、悲叹之塔同一口径：没有普通白图的通关翻牌，结果页只留“重选地图/返回城镇”。
         // 翻牌层会一直占着结算阶段（客户端跳过翻牌的 1434 本服未实现），撤退与再选图都被阶段门挡住。
-        bool noClearCards = dungeon.Entry.IsTutorial || dungeon.Entry.IsCosmo || dungeon.Entry.IsTournament || dungeon.Entry.Maze.IsGriefTower ||
-            dungeon.Entry.IsBossRush || dungeon.EvildomWarEntry is not null || strongwayNormal && dungeon.Entry.DisableClearReward;
+        bool noClearCards = dungeon.Entry.MockBattle is not null || dungeon.Entry.IsTutorial || dungeon.Entry.IsCosmo || dungeon.Entry.IsTournament || dungeon.Entry.Maze.IsGriefTower ||
+            dungeon.Entry.IsBossRush || dungeon.EvildomWarEntry is not null || dungeon.Entry.DisableClearReward;
         DungeonCardReward? normalCard = null;
+        var settlementNow = (timeProvider ?? TimeProvider.System).GetUtcNow();
+        var rarityItems = items ?? griefItems;
+        var rarityBonus = dungeon.Settlement is null && !noClearCards && cards is not null && rarityItems is not null
+            ? EquipmentRarityBonusPolicy.Capture(Selected!, rarityItems, settlementNow.ToUnixTimeSeconds(), dungeon.Entry.ExperienceEquipmentModule)
+            : default;
+        DungeonIncountUsage? clearRewardUsage = null;
+        DungeonIncountUsage? itemRewardUsage = null;
         if (dungeon.Settlement is null && !noClearCards && cards is not null)
+        {
+            if (cards.ClearRewardLimits?.FindDungeon(checked((int)dungeon.Entry.DungeonId)) is { } rewardLimit)
+            {
+                clearRewardUsage = repository.LoadClearRewardLimitUsage(owner, Selected!.Id, rewardLimit, ClearRewardLimitPolicy.Period(settlementNow));
+                if (cards.LimitedContainer(checked((int)dungeon.Entry.DungeonId)) is { } container)
+                    itemRewardUsage = repository.LoadClearRewardLimitUsage(owner, Selected!.Id, rewardLimit,
+                        ClearRewardLimitPolicy.Period(settlementNow), container);
+            }
             normalCard = cards.Prepare(dungeons.Get(checked((int)dungeon.Entry.DungeonId)), dungeon.Entry.Difficulty,
-                fact.ConfirmedDeathEvents.Count, job: Selected!.Job, grow: Selected.GrowType, ancientBonus: ancientGate?.Bonus == true);
+                fact.ConfirmedDeathEvents.Count, utcNow: settlementNow, job: Selected!.Job, grow: Selected.GrowType,
+                ancientBonus: ancientGate?.Bonus == true, clearRewardUsage: clearRewardUsage, itemRewardUsage: itemRewardUsage, equipmentRarityBonus: rarityBonus, dropMultipliers: dungeon.Entry.DropMultipliers);
+        }
         var card = dungeon.Settlement?.Pending.Card ?? (dungeon.Assault is not null && normalCard is not null
-            ? cards!.PrepareAssault(normalCard.Gold, (timeProvider ?? TimeProvider.System).GetUtcNow())
+            ? cards!.PrepareAssault(normalCard.Gold, settlementNow)
             : normalCard);
         var options = dungeon.Settlement?.Pending.Options;
         if (dungeon.Settlement is null && !noClearCards && cards is not null)
         {
-            var now = DateTimeOffset.UtcNow;
-            var membership = repository.LoadCardMembership(owner,Selected!.Id,now);
+            var membership = repository.LoadCardMembership(owner,Selected!.Id,settlementNow);
             options = cards.PrepareOptions(dungeons.Get(checked((int)dungeon.Entry.DungeonId)),dungeon.Entry.Difficulty,
-                fact.ConfirmedDeathEvents.Count,membership,now,goldCardEvent,Selected.Job,Selected.GrowType);
+                fact.ConfirmedDeathEvents.Count,membership,settlementNow,goldCardEvent,Selected.Job,Selected.GrowType,
+                clearRewardUsage: clearRewardUsage, itemRewardUsage: itemRewardUsage, equipmentRarityBonus: rarityBonus, dropMultipliers: dungeon.Entry.DropMultipliers);
         }
         var prepared = dungeon.Run.PrepareSettlement(fact, reportBody, reward, card,options,creatureInventory,
             dungeon.Settlement?.Pending.Grief ?? griefReward, dungeon.Settlement?.Pending.BossRush ?? bossRushReward);
@@ -278,16 +304,25 @@ internal sealed partial class GameSession
         }
         prepared.Pending.FreezeGuildContribution(dungeon.GuildMemberships, contributionSource, guildDungeons, guildReward);
         prepared.Pending.FreezeDailyAttendance(attendance);
+        prepared.Pending.FreezeMockBattle(mockVictory);
         var settlement = dungeon.Settlement ??= new(prepared.Pending,
             new(dungeon.ClearTimeMilliseconds, rankPoint, finalRankGrade, dungeon.KillExperienceTotal)
             {
                 MonsterGrowthContractExperience = dungeon.KillGrowthContractExperience,
                 MonsterEquipmentExperience = dungeon.KillEquipmentExperience,
                 MonsterFatigueBurningExperience = dungeon.KillFatigueBurningExperience,
+                MonsterGuildExperience = dungeon.KillGuildExperience,
+                MonsterFatigueBuffExperience = dungeon.KillFatigueBuffExperience,
+                MonsterPartyExperience = dungeon.KillPartyExperience,
                 MonsterBossExperience = dungeon.KillBossExperience,
                 MonsterExperienceEntries = [.. dungeon.KillObjectExperience]
             }, Selected!)
-            { CardPolicy = dungeon.Entry.IsTournament || !noClearCards ? cards : null };
+            {
+                CardPolicy = dungeon.Entry.IsTournament || !noClearCards ? cards : null,
+                ClearPartyBuffId = !noClearCards
+                    ? DungeonMazeConditions.RollClearPartyBuffCard(dungeon.Entry.Maze.ClearPartyBuffCards, dungeon.Draw)
+                    : 0
+            };
         if (!ReferenceEquals(settlement.Pending, prepared.Pending))
             throw new InvalidOperationException("结算准备与本实例冻结报告不同");
         InventoryResult? inventory = null;
@@ -310,6 +345,7 @@ internal sealed partial class GameSession
                 var saved = repository.CommitTutorialCheckpoint(owner, checkpoint);
                 commit = new(saved.Character, saved.Duplicate, reward)
                 {
+                    Adventure = saved.Adventure,
                     GainedExperience = checked((uint)(saved.Character.Learning.Experience - expected.Learning.Experience))
                 };
             }
@@ -317,8 +353,9 @@ internal sealed partial class GameSession
             {
                 // 幸运星只按 ±5 等级区间；冒险团「推荐地下城通关」另按 95 规则加入剧情路线、地轨中心与哈林全图，团本排除。
                 var definition = dungeons.Get(checked((int)dungeon.Entry.DungeonId));
-                bool luckyStar = DungeonLuckyStarPolicy.IsRecommendedLevel(definition, expected.Level);
-                bool recommendedClear = DungeonLuckyStarPolicy.IsRecommendedClear(
+                bool luckyStar = dungeon.Entry.MockBattle is null && DungeonLuckyStarPolicy.IsRecommendedLevel(definition, expected.Level);
+                settlement.LuckyStarEligible = luckyStar && luckyStarLimit > 0;
+                bool recommendedClear = dungeon.Entry.MockBattle is null && DungeonLuckyStarPolicy.IsRecommendedClear(
                     definition, dungeon.Entry.QuestId, dungeon.Entry.RouteQuestId, expected.Level);
                 commit = repository.CommitDungeonSettlement(owner, expected, dungeon.Run, prepared.Pending, growth,
                     grantLuckyStar: luckyStar, luckyStarLimit: luckyStarLimit, recommendedClear: recommendedClear);
@@ -388,8 +425,10 @@ internal sealed partial class GameSession
                 AssaultClear = assaultClear, CrackClear = crackClear,
                 GainedExperience = settlement.GainedExperience,
                 ProficiencyGained = settlement.ProficiencyGained,
+                LuckyStarEligible = settlement.LuckyStarEligible,
                 LuckyStarGained = settlement.LuckyStarGained,
                 LuckyStarTotal = settlement.LuckyStarTotal,
+                ClearPartyBuffId = settlement.ClearPartyBuffId,
                 Adventure = adventureCommit,
                 EndlessAdventureAmount = endlessAdventureAmount,
                 GuildMileageGuildId = guildMileageGuildId,
@@ -575,11 +614,13 @@ internal sealed partial class GameSession
 
     bool HasPendingFormalCard => formalDungeon?.Settlement?.Claim is not null || formalDungeon?.Settlement?.TournamentClaim is not null;
     static bool HasFinishedDungeon(FormalDungeon? dungeon) => dungeon is not null &&
-        (dungeon.Settlement is { Committed: true } || dungeon.Run.HasCommittedAltarSettlement || dungeon.Run.HasCommittedDespairClear || (dungeon.Entry.IsPractice || dungeon.Entry.IsCosmo) &&
+        (dungeon.Settlement is { Committed: true } || dungeon.Run.HasCommittedAltarSettlement || dungeon.Run.HasCommittedDespairClear || (dungeon.Entry.IsPractice || dungeon.Entry.IsCosmo || dungeon.Entry.SuppressOrdinaryResultBoard) &&
             dungeon.SettlementEnabled && dungeon.Run.ClearFact is not null && !dungeon.Run.HasPendingSettlement);
 
-    bool CanUseSettlementNpcServices() => !HasPendingFormalCard && Phase == SessionPhase.Settlement && formalDungeon is { } dungeon &&
-        dungeon.Settlement is { Committed: true } && dungeon.Run.ClearFact is not null &&
+    internal bool CanUseSettlementNpcServices() => !HasPendingFormalCard && Phase == SessionPhase.Settlement && formalDungeon is { } dungeon &&
+        (dungeon.Settlement is { Committed: true } || (dungeon.Entry.IsCosmo || dungeon.Entry.SuppressOrdinaryResultBoard || dungeon.Entry.ForcedCreateDelilah) &&
+            dungeon.SettlementEnabled && !dungeon.Entry.IsPractice) &&
+        dungeon.Run.ClearFact is not null &&
         !dungeon.Run.HasPendingDeath && !dungeon.Run.HasPendingSettlement && !dungeon.Ground.HasPendingOperation &&
         pendingQuestCompletion is null && !HasPendingQuestScene;
 
@@ -604,14 +645,16 @@ internal sealed partial class GameSession
             !HasFinishedDungeon(formalDungeon))
             return null;
         // 普通结算复用自己的退场合同；不借用深渊清波或祭坛免虚弱资格。
-        if (ReturnFromFormalDungeon() is null) return null;
+        var returning = ReturnFromFormalDungeon();
+        if (returning is null) return null;
         CurrentDungeonSelection = new(++dungeonSelectionId, SelectionEpoch, Selected!.Id, Selected.Position, Selected.Position);
         SetState(SessionPhase.MapSelect);
-        return new(Selected, owner.Generation, SelectionEpoch, dungeonSelectionId);
+        return new(Selected, owner.Generation, SelectionEpoch, dungeonSelectionId)
+        { ConsumableCooldowns = returning.ConsumableCooldowns, ConsumableEffects = returning.ConsumableEffects };
     });
 
     public FormalDungeonReceipt? RetryFormalDungeon(FormalDungeonReceipt expected, DungeonCatalog dungeons,
-        DungeonRoomCatalog rooms, DungeonMonsterDropCatalog drops, ItemCatalog items, EpicPieceCatalog? pieces = null,
+        DungeonRoomCatalog rooms, DungeonMonsterDropCatalog? drops = null, ItemCatalog? items = null, EpicPieceCatalog? pieces = null,
         bool assaultNextHidden = false)
     {
         var original = owner.Execute(() => CanEnterFormalDungeon(expected) ? formalDungeon : null);
@@ -669,9 +712,10 @@ internal sealed partial class GameSession
 
         if (retryTarget is not { } targetId) return null;
         return EnterFormalDungeon(targetId, quest, expected.Entry.Difficulty, dungeons, rooms, drops, items,
-            draw: original.Draw, pieces: assaultRewards?.Pieces ?? pieces, requiredCharacter: expected.Character, retry: expected,
+            draw: original.Draw, pieces: assaultRewards?.Pieces ?? pieces ?? original.EntryPieces ?? original.HellPieces, requiredCharacter: expected.Character, retry: expected,
             prepareDrops: original.PrepareDrops, practice: expected.Entry.IsPractice, crackRewards: original.CrackRewards,
-            hellParty: expected.Entry.IsCosmo || expected.Entry.IsInfernoParty, allowDimensionHidden: false,
+            hellParty: expected.Entry.HellParty is not null || expected.Entry.IsCosmo || expected.Entry.IsInfernoParty,
+            hellLegend: expected.Entry.IsHellLegend, allowDimensionHidden: false,
             assaultRetry: assaultOverride, assaultRetryRewards: assaultRewards);
     }
     public bool CanRetryCosmoDungeon(FormalDungeonReceipt expected, bool partyAdmission = false) => owner.Execute(() =>
@@ -680,7 +724,7 @@ internal sealed partial class GameSession
             formalDungeon is not { HellTicket: not null, HellPieces: { } pieces } dungeon ||
             Selected is not { } character) return false;
         if (dungeon.Entry.UsesFatigue && FatigueForClient(character).Remaining == 0 ||
-            debugSettings?.InfiniteFatigue != true && dungeon.Entry.StartFatigue > 0 &&
+            !InfiniteFatigue && dungeon.Entry.StartFatigue > 0 &&
             (character.Fatigue is not { } fatigue || fatigue.Remaining < dungeon.Entry.StartFatigue ||
              FatigueForClient(character).Remaining < dungeon.Entry.StartFatigue)) return false;
         if (!towns.Areas.TryGetValue((character.Position.Town, character.Position.Area), out var area) ||
@@ -690,6 +734,39 @@ internal sealed partial class GameSession
         if (HellPartyEntryCost.CosmoPass(character.Inventory, dungeon.CosmoPasses, pieces, now).Ticket is not null) return true;
         var invitations = HellPartyEntryCost.Plan(character.Inventory, map.HellItemConditions, dungeon.CosmoInvitationCount, pieces, now);
         return invitations.Plan is { } plan &&
-            HellPartyEntryCost.Plan(plan.After, [HellPartyEntryCost.LegendStone], dungeon.CosmoStoneCount, pieces, now).Ticket is not null;
+            HellPartyEntryCost.Plan(plan.After, HellPartyEntryCost.LegendStones, dungeon.CosmoStoneCount, pieces, now).Ticket is not null;
+    });
+    public bool CanRetryEpicRoadDungeon(FormalDungeonReceipt expected, bool partyAdmission = false) => owner.Execute(() =>
+    {
+        if (!Ready || partyAdmission || !expected.Entry.SuppressOrdinaryResultBoard ||
+            expected.Entry.DungeonId is not (400000097 or 400000098) ||
+            !CanEnterFormalDungeon(expected) || formalDungeon is not { } dungeon ||
+            Selected is not { } character) return false;
+        if (serverEvents?.Read(Game.Events.ServerEventService.EpicRoadId).Active != true) return false;
+        if (dungeon.Entry.UsesFatigue && FatigueForClient(character).Remaining == 0 ||
+            !InfiniteFatigue && dungeon.Entry.StartFatigue > 0 &&
+            (character.Fatigue is not { } fatigue || fatigue.Remaining < dungeon.Entry.StartFatigue ||
+             FatigueForClient(character).Remaining < dungeon.Entry.StartFatigue)) return false;
+        var done = QuestEligibility.Completed(character);
+        if (SelectionRejection(character, done, dungeon.Entry.DungeonId) is not null) return false;
+        if (incounts is not null)
+        {
+            int id = checked((int)dungeon.Entry.DungeonId);
+            var row = IncountRow(dungeon.Entry.DungeonId);
+            var period = IncountPeriod(row?.CountKey ?? id);
+            if (row is not null && !DungeonIncountPolicy.CanEnter(row, repository.LoadDungeonIncount(owner, character.Id, row.CountKey, period)) ||
+                AccountCharges(id).Any(charge => charge.Check && repository.LoadAccountDungeonIncount(owner, charge.Dungeon, charge.Period) >=
+                    (long)charge.Limit + repository.LoadAccountDungeonIncountExtra(owner, charge.Dungeon, charge.Period)))
+                return false;
+        }
+        if (dungeon.Entry.EntryItem is { } entryItem)
+        {
+            if (dungeon.EntryPieces is not { } entryPieces) return false;
+            var spent = InventoryMaterialConsumptionService.Plan(character.Inventory,
+                [new ItemMaterialCost(entryItem.ItemId, entryItem.Count)], entryPieces,
+                (timeProvider ?? TimeProvider.System).GetUtcNow());
+            if (!spent.Accepted || spent.Plan is null) return false;
+        }
+        return true;
     });
 }

@@ -75,6 +75,8 @@ internal sealed partial class CharacterRepository
         CharacterSkill[] skills = WriteCanonicalSkills(db, transaction, expected.Id, learning);
         CharacterLearningState committed = ReadLearning(db, expected.Id, transaction);
         var skillSwitch = ReadSkillSwitchInventory(db, expected.Id, transaction);
+        if (expected.Learning.Initialized)
+            RecordReturningEvent(db, transaction, owner.Account, expected.Level, "skill setting");
         transaction.Commit();
         return expected with
         {

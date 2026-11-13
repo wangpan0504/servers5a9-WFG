@@ -14,11 +14,8 @@ internal static class ChannelCatalogTests
         int before = Count;
         const string row = "10 `<chn_channel_info_028>` 1 `[granfloris]` 5 0 0 0 0 0 0 0 0 0 0 ``";
         string source = "[server]\n2\n" + row + "\n[/server]\n";
-        foreach (string retiredRow in new[] { row.Replace(" 1 `[granfloris]`", " 40 `[granfloris]`"),
-            row.Replace("`[granfloris]`", "`[beast]`"),
-            row.Replace("`[granfloris]`", "`[BEAST]`"), row.Replace("`[granfloris]`", "`[BeAsT]`") })
-            Reject<InvalidDataException>(() => ChannelCatalog.Parse("[server]\n2\n" + retiredRow + "\n[/server]\n"),
-                "旧外置频道type40或专属分组明确拒绝，不能重新发布退役入口");
+        var beast = ChannelCatalog.Parse("[server]\n2\n" + row.Replace(" 1 `[granfloris]`", " 40 `[beast]`") + "\n[/server]\n");
+        That(beast.Entry(10) is { Type: 40, Group: "[beast]" }, "外置频道保留改版魔兽独立身份");
         string root = Path.Combine(Path.GetTempPath(), "S5A9-channel-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         try
@@ -69,13 +66,13 @@ internal static class ChannelCatalogTests
                 ChannelPackets.LoginChannelType(embedded.Entry(55)) == 13 &&
                 ChannelPackets.Endpoint("127.0.0.1", 10011, channelType: ChannelPackets.LoginChannelType(embedded.Entry(55)))[3] == 13,
                 "自由练习场追加本服55/type13（新版集成自由练习场），使用自由练习名称且LOGIN保留真实类型");
-            That(embedded.Channels[^2].Number == 50 && embedded.Channels[^2].Type == 55 &&
-                embedded.Channels[^2].NameReference == "<chn_channel_info_059>" &&
+            That(embedded.Channels[^3].Number == 50 && embedded.Channels[^3].Type == 55 &&
+                embedded.Channels[^3].NameReference == "<chn_channel_info_059>" &&
                 ChannelPackets.LoginChannelType(embedded.Entry(50)) == 55,
                 "强者之路追加独立50号/type55原生入口，使用本版名称059并保留既有频道端口顺序");
-            That(embedded.Channels[^1].Number == 56 && embedded.Channels[^1].Type == 64 &&
-                embedded.Channels[^1].NameReference == "<chn_channel_info_063>" &&
-                embedded.Channels[^1].Group == "[evildom_war_challenge]" && ChannelPackets.LoginChannelType(embedded.Entry(56)) == 64,
+            That(embedded.Channels[^2].Number == 56 && embedded.Channels[^2].Type == 64 &&
+                embedded.Channels[^2].NameReference == "<chn_channel_info_063>" &&
+                embedded.Channels[^2].Group == "[evildom_war_challenge]" && ChannelPackets.LoginChannelType(embedded.Entry(56)) == 64,
                 "英雄频道独立56号/type64只追加在原末尾，不改变旧频道端口顺序");
             foreach (int number in new[] { 101, 47, 51, 55 })
             {
@@ -92,8 +89,8 @@ internal static class ChannelCatalogTests
             That(embedded.Channels.Single(row => row.Number == 48) == new ChannelDefinition(48, "<chn_channel_info_049>", 39, "[tag_tournament]") &&
                 ChannelPackets.LoginChannelType(embedded.Entry(48)) == 39 && !ChannelAreaLanding.SameSnapshotPredicates(22, 39),
                 "帝国竞技场追加type39并隔离换频道快照，避让PK频道47");
-            That(embedded.Channels.All(row => row.Number != 49 && row.Type != 40),
-                "内置目录不发布退役49/type40频道");
+            That(embedded.Channels.Single(row => row.Number == 49) is { Type: 40, Group: "[beast]" },
+                "内置目录发布独立49/type40魔兽频道");
             That(embedded.Channels.Single(row => row.Number == 24).Type == 11 && embedded.Channels.Single(row => row.Number == 24).Group == "[ancient]",
                 "频道24仍是远古分组，类型11才会出现在远古地下城卡片");
             That(embedded.Channels.Single(row => row.Number == 35).Type == 11 && embedded.Channels.Single(row => row.Number == 35).Group == "[crack]",

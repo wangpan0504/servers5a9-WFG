@@ -103,6 +103,14 @@ internal static partial class SettingsProtocolTests
         foreach (byte profile in new byte[] { 0, 1 })
             That(SettingsPackets.Hotkeys(profile, parsed).SequenceEqual(new byte[] { profile }.Concat(Body(text))),
                 "454独立预期为配置u8、长度u32及原样文本，无额外尾部");
+        foreach (byte profile in new byte[] { 0, 1 })
+            Bytes(SettingsPackets.HotkeysInitialization(profile), [profile, 4, 0, 0, 0, 78, 79, 78, 69],
+                "缺存档454仅含profile、长度4和无终止符的原生NONE哨兵");
+        byte[] initialization = SettingsPackets.HotkeysInitialization(0);
+        initialization[5] = 0;
+        That(SettingsPackets.HotkeysInitialization(0)[5] == 78, "键位初始化正文不共享可变数组");
+        Reject<InvalidDataException>(() => SettingsPackets.HotkeysInitialization(2), "未知profile不能初始化另一键位bank");
+        Reject<InvalidDataException>(() => SettingsRequests.Hotkeys(Body("NONE"u8.ToArray())), "198仍拒绝仅用于454的初始化哨兵");
         That(HotkeySettingsRules.Profile(10) == 1 && Enumerable.Range(0, 16).Where(job => job != 10)
             .All(job => HotkeySettingsRules.Profile((byte)job) == 0), "本版job10单独使用缔造者键位配置");
         foreach (byte[] bad in new[] { Array.Empty<byte>(), Body(text)[..^1], Body(text).Concat(new byte[] { 0 }).ToArray(),
@@ -113,7 +121,7 @@ internal static partial class SettingsProtocolTests
             "保留用户明确取消绑定的合法键值，不擅自补默认移动键");
         var saved = new ClientSettingsSnapshot([.. new byte[204]], default, Hotkeys: parsed);
         That(ClientSettingsRules.Project(saved).Hotkeys == parsed && !new ClientSettingsSnapshot(default, default, Hotkeys: parsed).IsDefault,
-            "角色主区协调不丢失独立账号键位，也不生成未保存主区");
+            "角色主区协调不丢失独立角色键位，也不生成未保存主区");
         Reject<InvalidDataException>(() => SettingsPackets.Hotkeys(2, parsed), "未知配置不能回放到另一原生键位bank");
     }
 
@@ -236,6 +244,7 @@ internal static partial class SettingsProtocolTests
     sealed class SettingsStore : IClientSettingsStore
     {
         public bool SaveQuestNotify(AccountOwners.Lease owner, ushort id, ImmutableArray<byte> entries) => throw new NotSupportedException();
+        public bool SaveNpcBookmarks(AccountOwners.Lease owner, ushort id, ImmutableArray<byte> entries) => throw new NotSupportedException();
         public bool SaveRecentEmoticons(AccountOwners.Lease owner, ImmutableArray<byte> entries) => throw new NotSupportedException();
         public bool SaveChatEmoticons(AccountOwners.Lease owner, ImmutableArray<ChatEmoticonMacro> macros) => throw new NotSupportedException();
         public bool? SaveCloneTitle(AccountOwners.Lease owner, ushort id, uint itemId, long? expiresAt = null) => throw new NotSupportedException("此夹具只验证原有设置正文");
@@ -243,10 +252,10 @@ internal static partial class SettingsProtocolTests
         ImmutableArray<byte> main;
         readonly Dictionary<ushort, ImmutableArray<byte>> characters = [];
         readonly Dictionary<ushort, ImmutableArray<byte>> roleMain = [];
-        ImmutableArray<byte> hotkeys;
+        readonly Dictionary<ushort, ImmutableArray<byte>> hotkeys = [];
         ImmutableArray<byte> quickChat0, quickChat1;
         public ClientSettingsSnapshot Load(AccountOwners.Lease owner, ushort id) =>
-            new(main, characters.GetValueOrDefault(id), roleMain.GetValueOrDefault(id), hotkeys, quickChat0, quickChat1);
+            new(main, characters.GetValueOrDefault(id), roleMain.GetValueOrDefault(id), hotkeys.GetValueOrDefault(id), quickChat0, quickChat1);
         public bool SaveQuickChat(AccountOwners.Lease owner, byte bank, ImmutableArray<byte> text)
         {
             if (bank == 0) quickChat0 = text; else quickChat1 = text;
@@ -260,7 +269,7 @@ internal static partial class SettingsProtocolTests
             return true;
         }
         public bool SaveCharacterOptions(AccountOwners.Lease owner, ushort id, ImmutableArray<byte> payload) { characters[id] = payload; return true; }
-        public bool SaveHotkeys(AccountOwners.Lease owner, byte profile, ImmutableArray<byte> text) { hotkeys = text; return true; }
+        public bool SaveHotkeys(AccountOwners.Lease owner, ushort characterId, byte profile, ImmutableArray<byte> text) { hotkeys[characterId] = text; return true; }
     }
 
     static void RoleScopedValues()

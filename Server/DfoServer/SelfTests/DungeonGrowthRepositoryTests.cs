@@ -43,6 +43,7 @@ internal static partial class DungeonGrowthRepositoryTests
                 ActiveMainQuests = [new(0, 3145, 1)]
             };
             var initial = repository.Create(owner, fixture);
+            VerifyZeroKillExperience(Path.Combine(root,"zero-weight.db"), owner, fixture, pvf, growth);
             RunGuildExperienceStorage(owner, fixture, growth, root);
             var hunt = QuestEligibilityTests.Quest(100) with { Condition = "[hunt enemy]", IntData = [3,-1,1,1,2] };
             string huntPath = Path.Combine(root,"hunt.db");
@@ -486,12 +487,47 @@ internal static partial class DungeonGrowthRepositoryTests
             }
     }
 
-    private static (SinglePlayerDungeonRun Run, FixtureAuthority Authority) CreateRun(Character character)
+    private static void VerifyZeroKillExperience(string path, AccountOwners.Lease owner, NewCharacter fixture,
+        PvfArchive pvf, CharacterGrowthCatalog growth)
+    {
+        var repository = new CharacterRepository(path);
+        var initial = repository.Create(owner, fixture with { Name = "ZeroWeight" });
+        var (run, authority) = CreateRun(initial, experienceWeight: 0);
+        var pending = run.PrepareConfirmedDeath(authority.Death(run.Snapshot.Identity, 20, 1)).Pending!;
+        var reward = DungeonKillExperiencePolicy.Plan(run, pending, Testing.SelfTestCatalogs.KillExperience(pvf), initial.Level);
+        That(!run.Entry.DisableMonsterAndClearExperience && run.Entry.ExperienceWeight == 0 && reward.Amount == 0,
+            "显式零权重由原经验算法产生零奖励，不伪造禁经验标记");
+        Reject<InvalidDataException>(() => repository.CommitDungeonGrowth(owner, initial, run, pending, reward with { Amount = 1 }, growth),
+            "零权重不能借合法死亡提交非零经验");
+        var commit = repository.CommitDungeonGrowth(owner, initial, run, pending, reward, growth);
+        var replay = repository.CommitDungeonGrowth(owner, initial, run, pending, reward, growth);
+        That(!commit.Duplicate && replay.Duplicate && commit.GainedExperience == 0 && commit.ProficiencyGained == 0 &&
+            commit.Character.Learning.Experience == initial.Learning.Experience &&
+            commit.Character.Revision == initial.Revision + 1 && QuestCompletionRepositoryTests.Same(commit.Character,replay.Character),
+            "零经验死亡保存一次可重放回执，经验熟练度不变且不重复写revision");
+        run.ConfirmCommittedDeath(pending);
+        That(!run.Snapshot.LivingMonsters.Contains(pending.Monster.ObjectKey),
+            "合法零经验事务仍可确认该怪死亡，不让清房停在未提交候选");
+        var (ordinary, ordinaryAuthority) = CreateRun(commit.Character);
+        var ordinaryPending = ordinary.PrepareConfirmedDeath(ordinaryAuthority.Death(ordinary.Snapshot.Identity,20,1)).Pending!;
+        var ordinaryReward = DungeonKillExperiencePolicy.Plan(ordinary,ordinaryPending,Testing.SelfTestCatalogs.KillExperience(pvf),initial.Level);
+        Reject<InvalidDataException>(() => repository.CommitDungeonGrowth(owner,commit.Character,ordinary,ordinaryPending,
+            ordinaryReward with { Amount = 0 },growth), "正权重副本仍拒绝伪零奖励");
+        var (disabled, disabledAuthority) = CreateRun(commit.Character, disableExperience: true);
+        var disabledPending = disabled.PrepareConfirmedDeath(disabledAuthority.Death(disabled.Snapshot.Identity,20,1)).Pending!;
+        var disabledReward = DungeonKillExperiencePolicy.Plan(disabled,disabledPending,Testing.SelfTestCatalogs.KillExperience(pvf),initial.Level);
+        Reject<InvalidDataException>(() => repository.CommitDungeonGrowth(owner,commit.Character,disabled,disabledPending,
+            disabledReward with { Amount = 1 },growth), "原禁经验副本仍拒绝非零奖励");
+    }
+
+    private static (SinglePlayerDungeonRun Run, FixtureAuthority Authority) CreateRun(Character character,
+        float experienceWeight = 1, bool disableExperience = false)
     {
         var map = new DungeonMap("boss", new(0, 0), 76126, "map/growth-fixture.map");
         var maze = new DungeonMaze(0, 1, 1, "fixture-only", [map.Position], [map.Position], [map], []);
         var entry = new DungeonEntryPlan(character.Id, character.Revision, 3, 3145, 0, 0, maze, map, map)
-        { QuestAcceptances = character.ActiveMainQuests.ToImmutableArray() };
+        { QuestAcceptances = character.ActiveMainQuests.ToImmutableArray(), ExperienceWeight = experienceWeight,
+            DisableMonsterAndClearExperience = disableExperience };
         var sources = new ushort[] { 20, 21 }.Select(_ => new DungeonRoomMonster(1,
             Array.AsReadOnly(new[] { 1, 0, 3, 100, 100, 0, 1, 1 }), "[fixed]", "[normal]", "monster/growth-fixture.mob")).ToArray();
         var room = new DungeonRoomDefinition(map, Array.AsReadOnly(sources), [], []);

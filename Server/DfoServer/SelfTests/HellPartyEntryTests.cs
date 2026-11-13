@@ -20,12 +20,13 @@ namespace DfoServer;
 
 // 实验性（#256，深渊派对入场）：依据参考项目 dungeon_hell_party_entry.go / dungeon_hell_room.go / dungeon_info.go，未在95客户端实证。
 // 这里只锁定本服的假设行为：请求体解析、PVF 深渊房间/区域声明解析、入场资格、DUNGEON_INFO/START_MAP 的深渊字段、拒绝包形状。
-internal static class HellPartyEntryTests
+internal static partial class HellPartyEntryTests
 {
     internal static void RunCore()
     {
         HellApcFactionTests.RunCore();
         OrdinaryPassCore();
+        LegendPassCore();
         Bytes(DungeonPackets.SelectionNotice(), new byte[42], "空深渊资格名单保持原42字节选图通知");
         byte[] expected = new byte[46];
         expected[8] = 2; expected[11] = 3;
@@ -40,7 +41,7 @@ internal static class HellPartyEntryTests
             Reject<ArgumentOutOfRangeException>(() => DungeonPackets.SelectionNotice(incompleteHellQuestMemberSlots: invalid),
                 "拒绝越界、重复或过长的队伍槽位名单");
         Bytes(DungeonPackets.HellPartyRejected(DungeonSelectionError.Silent), [0, 9, 0, 0], "缺任务拒绝保持原生失败恢复，不发送次数上限0xAD");
-        Bytes(DungeonPackets.HellPartyRejected(DungeonSelectionError.RequiredMaterials), [0, 17, 0, 0], "缺门票保留材料不足拒绝");
+        Bytes(DungeonPackets.HellPartyRejected(DungeonSelectionError.GroupMaterials), [0, 27, 0, 0], "缺门票走0x1B提示并复位选图深渊按钮");
         That(InfernoQuestUnlock.Satisfied(10110, new HashSet<int> { 2900 }) &&
             InfernoQuestUnlock.Satisfied(10110, new HashSet<int> { 10110 }) &&
             !InfernoQuestUnlock.Satisfied(10110, new HashSet<int>()) &&
@@ -108,6 +109,8 @@ internal static class HellPartyEntryTests
         var walk = area.Map(done).Bounds.First(row => row.Conditions.Length == 0 && row.Quests.All(done.Contains)).Bounds;
         var position = new Location(area.Town, area.Area, checked((ushort)(walk.X + walk.Width / 2)), checked((ushort)(walk.Y + walk.Height / 2)));
         done.Add(6080);
+        RunSealRetry(towns, pvf, characters, items, quests, skills, growth, dungeons, rooms, done, position);
+        RunLegendPass(towns, pvf, characters, items, quests, skills, growth, dungeons, rooms, done, position);
         foreach (int invitationCount in new[] { 0, 30 })
         {
             var passFixture = new QuestSceneTests.Fixture(towns, characters, skills, growth, quests, false, 95,

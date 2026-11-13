@@ -4,12 +4,29 @@ using DfoServer.Game.Accounts;
 namespace DfoServer.Game.Settings;
 
 internal sealed class ClientSettingsService(IClientSettingsStore store, DfoServer.GameWorld.Characters.CharacterEmotionCatalog? emotions = null,
-    DfoServer.GameWorld.Quests.TitleCatalog? titles = null)
+    DfoServer.GameWorld.Quests.TitleCatalog? titles = null, DfoServer.GameWorld.Items.NpcFavorCatalog? npcs = null)
 {
     public const int GameOptionLength = 204;
     public const int CharacterOptionLength = 512;
     public const int QuickChatLength = 300;
     public const int RecentEmoticonLength = 18 * sizeof(uint);
+    public bool SaveNpcBookmarks(AccountOwners.Lease owner, ushort characterId, ImmutableArray<byte> entries)
+    {
+        ValidateNpcBookmarks(entries);
+        return store.SaveNpcBookmarks(owner, characterId, entries);
+    }
+    public bool CanBookmark(int id) => npcs?.Contains(id) == true;
+    internal static void ValidateNpcBookmarks(ImmutableArray<byte> entries)
+    {
+        if (entries.IsDefault || entries.Length > 4096 || entries.Length % 4 != 0)
+            throw new InvalidDataException("人物辞典收藏长度无效");
+        var ids = new HashSet<int>();
+        for (int at = 0; at < entries.Length; at += 4)
+        {
+            int id = System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(entries.AsSpan()[at..]);
+            if (id <= 0 || !ids.Add(id)) throw new InvalidDataException("人物辞典收藏编号无效或重复");
+        }
+    }
     public bool? SaveCloneTitle(AccountOwners.Lease owner, ushort characterId, uint itemId, long? expiresAt = null) =>
         store.SaveCloneTitle(owner, characterId, itemId, expiresAt);
     public (ushort Error, bool Changed) SaveEmotion(AccountOwners.Lease owner, DfoServer.Game.Characters.Character character, ushort emotion)
@@ -24,6 +41,7 @@ internal sealed class ClientSettingsService(IClientSettingsStore store, DfoServe
         if (!saved.Hotkeys.IsDefault) HotkeySettingsRules.Validate(saved.Hotkeys);
         if (!saved.RecentEmoticons.IsDefault) ValidateRecentEmoticons(saved.RecentEmoticons);
         if (!saved.QuestNotify.IsDefault) QuestNotifyRules.Validate(saved.QuestNotify);
+        if (!saved.NpcBookmarks.IsDefault) ValidateNpcBookmarks(saved.NpcBookmarks);
         return saved;
     }
     public bool SaveQuestNotify(AccountOwners.Lease owner, ushort characterId, ImmutableArray<byte> entries)
@@ -31,11 +49,11 @@ internal sealed class ClientSettingsService(IClientSettingsStore store, DfoServe
         QuestNotifyRules.Validate(entries);
         return store.SaveQuestNotify(owner, characterId, entries);
     }
-    public bool SaveHotkeys(AccountOwners.Lease owner, byte profile, ImmutableArray<byte> text)
+    public bool SaveHotkeys(AccountOwners.Lease owner, ushort characterId, byte profile, ImmutableArray<byte> text)
     {
         if (profile > 1) throw new InvalidDataException("键位配置类型无效");
         HotkeySettingsRules.Validate(text);
-        return store.SaveHotkeys(owner, profile, text);
+        return store.SaveHotkeys(owner, characterId, profile, text);
     }
     public bool SaveGameOptions(AccountOwners.Lease owner, ImmutableArray<byte> payload, ushort? characterId = null)
     {

@@ -28,6 +28,11 @@ internal sealed record ItemTemplate(int Id, ItemKind Kind, byte EquipmentSlot, b
     public bool UsableExpired { get; init; }
     public ImmutableArray<int> PartSetIds { get; init; } = [];
     public decimal ExperiencePercent { get; init; }
+    public bool IsQuickSlotEquipment => Kind == ItemKind.Equipment && EquipmentSlot == QuickSlotEquipmentDefinition.EquipmentType;
+    public QuickSlotEquipmentDefinition? QuickSlotEquipment { get; init; }
+    public int QuestItemDropRateBonus { get; init; }
+    public EquipmentUpgradeBonuses UpgradeBonuses { get; init; }
+    public ImmutableArray<EquipmentQuestDropSetBonus> QuestItemDropSetBonuses { get; init; } = [];
     public ItemWorlds UsableWorlds { get; init; } = ItemWorlds.Common;
     public ImmutableHashSet<string> ExperienceForbiddenModules { get; init; } = ImmutableHashSet<string>.Empty;
     public bool CreatureEgg { get; init; }
@@ -43,12 +48,15 @@ internal sealed record ItemTemplate(int Id, ItemKind Kind, byte EquipmentSlot, b
     public bool PersonalCargoForbidden { get; init; }
     public bool AccountCargoForbidden { get; init; }
     public AccountMaterialDefinition? AccountMaterial { get; init; }
+    public bool AccountCommonItem { get; init; }
     public bool AccountBoundAfterTrade { get; init; }
     public int AccountBindingTradeLimit { get; init; }
     public ushort PersonalCargoUpgradeTarget { get; init; }
     public bool AdvancesPersonalCargo { get; init; }
+    public bool AdvancesAccountCargo { get; init; }
     public ItemShopPrice ShopPrice { get; init; } = new(0, 0, [], null);
     public ItemExpiration Expiration { get; init; } = new();
+    public bool EpicRoad2019FixedExpirationRestored { get; init; }
     public int RepairPrice { get; init; }
     public int CreationRate { get; init; }
     public EchonEquipmentDefinition? Echon { get; init; }
@@ -68,18 +76,24 @@ internal sealed record ItemTemplate(int Id, ItemKind Kind, byte EquipmentSlot, b
     public int CharacterSlotMaximum { get; init; }
     public int MaximumLevel { get; init; } = int.MaxValue;
     public int AvatarExpansionStage { get; init; }
-    public bool AllowsUse(byte level, byte job) => !UseForbidden && level >= MinimumLevel && level <= MaximumLevel &&
-        job < 16 && (Jobs & (1 << job)) != 0;
+    // STK激活的职业与模板副本名单由客户端判断；装备穿戴和本职业候选仍使用AllowsUse。
+    public bool AllowsActivation(byte level, byte job) => job < 16 && !UseForbidden && level >= MinimumLevel && level <= MaximumLevel;
+    public bool AllowsUse(byte level, byte job) => AllowsActivation(level, job) &&
+        (Jobs & (1 << job)) != 0;
     public RefinementTicketDefinition? RefinementTicket { get; init; }
     public EquipmentQualityBox? QualityBox { get; init; }
     public AvatarAbilityChangeDefinition? AvatarAbilityChange { get; init; }
     public EquipmentResealConsumable? ResealConsumable { get; init; }
     public bool GrowthEquipment { get; init; }
     public bool RandomOptionEquipment { get; init; }
+    // 精确魔封资格与标签存在性分开；零值、坏值不在普通掉落中猜作魔封。
+    public bool MagicSealedEquipment { get; init; }
     public bool PeriodEquipment { get; init; }
     public AvatarSocketTypes AvatarSockets { get; init; }
     public bool CloneAvatar { get; init; }
     public bool BorrowAvatarAppearance { get; init; }
+    public bool CannotBeCloneTitle { get; init; }
+    public bool CannotBeHiddenByCloneTitle { get; init; }
     public int? AvatarGiftType { get; init; }
     public ushort EmblemTargetSockets { get; init; }
     public ImmutableHashSet<string> GuardianGemEffects { get; init; } = [];

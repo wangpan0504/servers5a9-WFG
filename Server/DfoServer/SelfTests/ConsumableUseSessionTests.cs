@@ -25,6 +25,10 @@ internal static partial class ConsumableUseSessionTests
         RunTimedStates(towns, characters, archive);
         RunStaminaVariant(towns, characters, archive);
         RunEpicDropStates(towns, characters, archive);
+        RunLanternEpicDropStates(towns, characters);
+        RunDungeonEpicDropStates(towns, characters, archive);
+        RunCompositeDropStates(towns, characters, archive);
+        RunVariousAssociations(towns, characters, archive);
         RunHellLegendEpicDropStates(towns, characters, archive);
         RunVillageMoveSpeedStates(towns, characters, archive);
         RunRevivalTimeouts(towns, characters, archive);
@@ -264,6 +268,258 @@ internal static partial class ConsumableUseSessionTests
             "真实副本拒绝带城镇/房间并集声明的盒，而无声明保留既有副本合法地点");
     }
 
+    static void RunDungeonEpicDropStates(TownCatalog towns, CharacterCatalog characters, PvfArchive archive)
+    {
+        var definitions = DungeonEpicDropBuffTests.Definitions();
+        foreach (var (item,buff) in new[] { (10304461,280),(10305166,284) })
+        {
+            var definition = new RecoveryConsumableDefinition(item,1,60,-item) { DungeonEpicDropBuff=definitions[buff] };
+            using var f=new Fixture(towns,characters,hp:definition,consumables:new([definition]));
+            f.Select();
+            That(f.Use().Outcome==ConsumableUseOutcome.Committed && f.Count==2 && f.Read().Inventory.ConsumableStates.IsEmpty &&
+                f.Session.CurrentDungeonEpicBuffId==buff,"次数型药剂真实消费后仅安装当前角色内存资格，不造持久截止时间");
+            var projection=f.Session.PlanDungeonEpicBuffProjection()!;
+            That(projection.Added==buff && projection.IsCurrent(),"一次副本资格投影使用当前owner和选角身份");
+            projection.MarkSent();
+            That(f.Session.LeaveRoom() && f.Session.Travel(new(38,2,1085,249,5,38,0,0)),"次数型药剂沿实际城镇入口准备");
+            Enter(practice:true);
+            That(f.Session.CurrentDungeonEpicBuffId==buff && f.Session.ReturnFromFormalDungeon() is not null &&
+                f.Session.CurrentDungeonEpicBuffId==buff,"练习不消耗已在城镇取得的一次资格，回城仍保留");
+            Enter(practice:false);
+            That(f.Session.CurrentDungeonEpicBuffId==buff && f.Session.ReturnFromFormalDungeon() is not null &&
+                f.Session.CurrentDungeonEpicBuffId==0,"实际实例中资格生效，撤退结束后不延续到下一局");
+            var removed=f.Session.PlanDungeonEpicBuffProjection()!;
+            That(removed.Removed==buff && removed.Added==0 && removed.IsCurrent(),"回城通过原488移除本局次数Buff");
+            removed.MarkSent();
+            Enter(practice:false);
+            That(f.Session.CurrentDungeonEpicBuffId==0 && f.Session.ReturnFromFormalDungeon() is not null,
+                "同一副本再次进入不从已消耗的准备状态重新激活");
+            f.Clock.Advance(TimeSpan.FromMilliseconds(61));
+            That(f.Use(1).Outcome==ConsumableUseOutcome.Committed && f.Count==1,"新消费可以重新取得一次资格");
+            f.Session.ReturnToRoster();f.Select();
+            That(f.Session.CurrentDungeonEpicBuffId==0 && f.Count==1 && f.Read().Inventory.ConsumableStates.IsEmpty &&
+                !projection.IsCurrent(),"无is-save声明的资格重选后清理，不补源或沿用旧投影");
+            void Enter(bool practice)
+            {
+                f.Session.BeginDungeonSelection();
+                That(f.Session.EnterFormalDungeon(3,0,0,global::DfoServer.Testing.SelfTestCatalogs.Dungeons(archive),
+                    global::DfoServer.Testing.SelfTestCatalogs.Rooms(archive),practice:practice) is not null &&
+                    f.Session.CompleteFormalDungeonLoading() is not null,"建立次数型药剂的真实普通/练习实例");
+            }
+        }
+        var match=new RecoveryConsumableDefinition(10304461,1,60,-10304461) { DungeonEpicDropBuff=definitions[280] };
+        var starry=new RecoveryConsumableDefinition(490703675,1,300000,253)
+        { HellLegendEpicDropBuff=new(1271,6520) { ItemIds=ImmutableHashSet.Create(490703675) },
+            EffectMilliseconds=300000,EffectMaintenance=7,CooltimeMaintenance=7 };
+        foreach (bool rollback in new[] { false, true })
+        {
+            using var f=new Fixture(towns,characters,hp:match,consumables:new([match,starry]));
+            f.Select();
+            f.Session.MutateInventory(c=>new(true,0,new(c.Inventory,c.Inventory with
+            {
+                Items=[.. c.Inventory.Items.Where(item=>item.Position!=new InventorySlot(InventoryListType.Main,66)),
+                    new(0,new(InventoryListType.Main,66),new(starry.ItemId,ItemKind.Consumable,3))],
+                ConsumableStates=[new(ConsumableStateKind.Effect,starry.ItemId,f.Clock.GetUtcNow().ToUnixTimeMilliseconds()+300000,7,253)]
+            },"starry_before_match_fixture")));
+            var before=f.Read();
+            if (rollback)
+            {
+                f.Sql("CREATE TRIGGER fail_match_replace AFTER DELETE ON character_consumable_states BEGIN SELECT RAISE(ABORT,'match rollback'); END");
+                Reject<Microsoft.Data.Sqlite.SqliteException>(()=>f.Use(),"同组1271移除失败与新道具源消费一起回滚");
+                That(Same(before,f.Read()) && f.Session.CurrentDungeonEpicBuffId==0,"SQL失败不能提前安装次数资格或清除旧星空账本");
+            }
+            else
+            {
+                That(f.Use().Outcome==ConsumableUseOutcome.Committed && f.Session.CurrentDungeonEpicBuffId==280 &&
+                    f.Read().Inventory.ConsumableStates.IsEmpty,"280成功使用在同一库存事务内移除同组1271效果");
+                var replaced=f.Session.UseConsumable(new(new(InventoryListType.Main,66),1,starry.ItemId,0),f.Service);
+                That(replaced.Outcome==ConsumableUseOutcome.Committed && f.Session.CurrentDungeonEpicBuffId==0 &&
+                    f.Session.HellLegendEpicDropPotionBonus(f.Read(),f.Clock.GetUtcNow())==6520,
+                    "1271反向使用清除待入场次数资格，不能让同组星空与280两份倍率同时生效");
+            }
+        }
+    }
+
+    static void RunVariousAssociations(TownCatalog towns, CharacterCatalog characters, PvfArchive archive)
+    {
+        var choiceA = VariousBuffAssociationTests.Definition(91001);
+        var choiceB = VariousBuffAssociationTests.Definition(91002);
+        var random = new RecoveryConsumableDefinition(10008219, 1, 0, -10008219)
+        {
+            VariousBuff = VariousBuffAssociationTests.Binding(10008219, [choiceA, choiceB], random: true),
+            VariousDurationMilliseconds = 600000, EffectMaintenance = 7
+        };
+        using (var f = new Fixture(towns, characters, hp: random, consumables: new([random])))
+        {
+            f.Select();
+            That(f.Use().Outcome == ConsumableUseOutcome.Committed && f.Count == 2, "概率来源在真实库存事务消费原源一次");
+            var chosen = f.Read().Inventory.VariousBuffs.Single();
+            That(chosen.BuffId is 91001 or 91002 && chosen.UntilMilliseconds == f.Clock.GetUtcNow().ToUnixTimeMilliseconds() + 600000 &&
+                f.Read().Inventory.ConsumableStates.IsEmpty, "实际抽选身份独立保存，不用普通STK恢复在重登时重新抽选");
+            var initial = f.Session.PlanDungeonEpicBuffProjection()!;
+            That(initial.AddedBuffs is [{ } display] && display.BuffId == chosen.BuffId && display.Value == chosen.UntilMilliseconds / 1000,
+                "概率来源只投影本次已提交选择，不广播全部候选");
+            initial.MarkSent();
+            var before = f.Read();
+            f.Clock.Advance(TimeSpan.FromSeconds(1));
+            f.Sql("CREATE TRIGGER fail_various_buff BEFORE UPDATE ON character_various_buffs BEGIN SELECT RAISE(ABORT,'various rollback'); END");
+            Reject<Microsoft.Data.Sqlite.SqliteException>(() => f.Use(1), "通用Buff写入失败必须回滚源与新抽选资格");
+            That(Same(before, f.Read()) && f.Count == 2 && f.Session.PlanDungeonEpicBuffProjection() is null,
+                "失败不发布新选择、不覆盖原期限或提前删除原客户端资格");
+            f.Sql("DROP TRIGGER fail_various_buff");
+            f.Session.ReturnToRoster(); f.Select();
+            That(f.Read().Inventory.VariousBuffs.Single() == chosen && f.Count == 2 &&
+                f.Session.PlanDungeonEpicBuffProjection(force: true)!.AddedBuffs.Single().BuffId == chosen.BuffId,
+                "新选角恢复完全相同的抽选结果和截止，不补源或重抽");
+            f.Clock.Advance(TimeSpan.FromMinutes(10));
+            That(f.Session.AdvanceVariousBuffs() is { Accepted: true } && f.Read().Inventory.VariousBuffs.IsEmpty && f.Count == 2,
+                "计时资格到点从真实保存状态回收，不再次消费物品");
+        }
+        var saved = VariousBuffAssociationTests.Definition(92001, "saved_count", "dungeon_one_match", 3, save: true);
+        var transient = VariousBuffAssociationTests.Definition(92002, "session_count", "dungeon_one_match", 2, save: false);
+        var multiple = new RecoveryConsumableDefinition(10304998, 1, 0, -10304998)
+            { VariousBuff = VariousBuffAssociationTests.Binding(10304998, [saved, transient]) };
+        using (var f = new Fixture(towns, characters, hp: multiple, consumables: new([multiple])))
+        {
+            f.Select();
+            That(f.Use().Outcome == ConsumableUseOutcome.Committed && f.Read().Inventory.VariousBuffs is [{ BuffId: 92001, Remaining: 3 }],
+                "多Buff整批授予，仅将声明保存的次数写入角色账本");
+            var both = f.Session.PlanDungeonEpicBuffProjection()!;
+            That(both.AddedBuffs.Select(row => (row.BuffId, row.Value)).SequenceEqual(new[] { (92001, 3), (92002, 2) }),
+                "多Buff各自发布真实初始次数，不固定为一次");
+            both.MarkSent();
+            That(f.Session.LeaveRoom() && f.Session.Travel(new(38, 2, 1085, 249, 5, 38, 0, 0)), "次数资格经真实城镇路径准备");
+            Enter(practice: true);
+            That(f.Session.ReturnFromFormalDungeon() is not null && f.Read().Inventory.VariousBuffs.Single().Remaining == 3,
+                "练习实例不消耗任何保存或非保存的次数");
+            Enter(practice: false);
+            That(f.Read().Inventory.VariousBuffs.Single().Remaining == 2 &&
+                f.Session.PlanDungeonEpicBuffProjection(force: true)!.AddedBuffs.Select(row => row.Value).SequenceEqual(new[] { 3, 2 }),
+                "入场同事务预扣下一局次数，当前实例仍持有本局有效资格");
+            That(f.Session.ReturnFromFormalDungeon() is not null &&
+                f.Session.PlanDungeonEpicBuffProjection(force: true)!.AddedBuffs.Select(row => row.Value).SequenceEqual(new[] { 2, 1 }),
+                "离开实例后发布剩余次数，不重置或重复扣减");
+            f.Session.ReturnToRoster(); f.Select();
+            That(f.Read().Inventory.VariousBuffs is [{ BuffId: 92001, Remaining: 2 }] &&
+                f.Session.PlanDungeonEpicBuffProjection(force: true)!.AddedBuffs is [{ BuffId: 92001, Value: 2 }],
+                "重选仅恢复保存型剩余次数，非保存资格不重载");
+            void Enter(bool practice)
+            {
+                f.Session.BeginDungeonSelection();
+                That(f.Session.EnterFormalDungeon(3, 0, 0, global::DfoServer.Testing.SelfTestCatalogs.Dungeons(archive),
+                    global::DfoServer.Testing.SelfTestCatalogs.Rooms(archive), practice: practice) is not null &&
+                    f.Session.CompleteFormalDungeonLoading() is not null, "建立通用次数资格的真实副本实例");
+            }
+        }
+    }
+
+    static void RunCompositeDropStates(TownCatalog towns, CharacterCatalog characters, PvfArchive archive)
+    {
+        var count = DungeonEpicDropBuffTests.Definitions()[280];
+        var other = count with { BuffId = 90002, SystemGroup = "other_drop_group",
+            Resource = count.Resource! with { BuffId = 90002, SystemGroup = "other_drop_group" } };
+        var timed = count with { BuffId = 90003, BossDropPercent = 100,
+            Resource = count.Resource! with { BuffId = 90003, ApplyType = "expire_time", ApplyParameters = [600, 0] } };
+        var countItem = new RecoveryConsumableDefinition(10304461, 1, 0, -10304461) { DungeonEpicDropBuff = count };
+        var otherItem = new RecoveryConsumableDefinition(10305166, 1, 0, -10305166) { DungeonEpicDropBuff = other };
+        var timedItem = new RecoveryConsumableDefinition(10304999, 1, 0, -10304999)
+            { DungeonEpicDropBuff = timed, EffectMilliseconds = 600000, EffectMaintenance = 7 };
+        var catalog = new RecoveryConsumableCatalog([countItem, otherItem, timedItem]);
+        using var f = new Fixture(towns, characters, hp: countItem, consumables: catalog);
+        f.Select();
+        f.Session.MutateInventory(character => new(true, 0, new(character.Inventory, character.Inventory with
+        {
+            Items = character.Inventory.Items.Where(item => item.Position != new InventorySlot(InventoryListType.Main, 66))
+                .Append(new(0, new(InventoryListType.Main, 66), new(otherItem.ItemId, ItemKind.Consumable, 3)))
+                .Append(new(0, new(InventoryListType.Main, 67), new(timedItem.ItemId, ItemKind.Consumable, 3))).ToImmutableArray()
+        }, "composite_drop_buff_fixture")));
+        ConsumableUseResult Use(short slot, RecoveryConsumableDefinition definition) => f.Session.UseConsumable(
+            new(new(InventoryListType.Main, slot), 0, definition.ItemId, 0), f.Service);
+        That(f.Use().Outcome == ConsumableUseOutcome.Committed && Use(66, otherItem).Outcome == ConsumableUseOutcome.Committed,
+            "两个不同资源组的次数Buff分别消费成功，不因共享模块互相覆盖");
+        var both = f.Session.PlanDungeonEpicBuffProjection()!;
+        That(both.AddedBuffs.Select(buff => buff.BuffId).SequenceEqual(new[] { 280, 90002 }) &&
+            both.AddedBuffs.All(buff => buff.Value == 1) && f.Read().Inventory.ConsumableStates.IsEmpty,
+            "不同组完整投影两项计数，不写伪造截止或覆盖其它组");
+        both.MarkSent();
+        That(Use(67, timedItem).Outcome == ConsumableUseOutcome.Committed &&
+            f.Read().Inventory.VariousBuffs.Single().ItemId == timedItem.ItemId,
+            "多效果计时Buff沿原库存事务写实际持续状态");
+        var timeDisplay = f.Session.PlanDungeonEpicBuffProjection()!;
+        That(timeDisplay.RemovedIds.SequenceEqual(new[] { 280, 90003 }) && timeDisplay.AddedBuffs is [{ BuffId: 90003 } display] &&
+            display.Value == f.Clock.GetUtcNow().ToUnixTimeSeconds() + 600 && !both.IsCurrent(),
+            "同组计时效果覆盖次数资格，仅移除原组编号，保留其它组并投影真实截止");
+        timeDisplay.MarkSent();
+        That(f.Use(1).Outcome == ConsumableUseOutcome.Committed && f.Read().Inventory.ConsumableStates.IsEmpty,
+            "反向次数消费与清除同组计时账本共同提交，不清除其它组");
+        var restored = f.Session.PlanDungeonEpicBuffProjection()!;
+        That(restored.RemovedIds.SequenceEqual(new[] { 280, 90003 }) && restored.AddedBuffs is [{ BuffId: 280, Value: 1 }],
+            "计时转次数只重投该组，不重新计时或重发其它组");
+        restored.MarkSent();
+        That(f.Session.LeaveRoom() && f.Session.Travel(new(38, 2, 1085, 249, 5, 38, 0, 0)), "组合Buff沿真实城镇入口准备入场");
+        f.Session.BeginDungeonSelection();
+        That(f.Session.EnterFormalDungeon(3, 0, 0, global::DfoServer.Testing.SelfTestCatalogs.Dungeons(archive),
+            global::DfoServer.Testing.SelfTestCatalogs.Rooms(archive)) is not null && f.Session.CompleteFormalDungeonLoading() is not null,
+            "同一正式实例接收全部适用的不同组资格");
+        That(f.Session.PlanDungeonEpicBuffProjection(force: true)!.AddedBuffs.Length == 2 &&
+            f.Session.ReturnFromFormalDungeon() is not null, "本局保留两组，实例结束统一清理");
+        var removed = f.Session.PlanDungeonEpicBuffProjection()!;
+        That(removed.RemovedIds.Order().SequenceEqual(new[] { 280, 90002 }) && removed.AddedBuffs.IsEmpty,
+            "结束时移除两组原资格，不转移到下一个实例");
+    }
+
+    static void RunLanternEpicDropStates(TownCatalog towns, CharacterCatalog characters)
+    {
+        var family = ImmutableHashSet.Create(490005358, 490005359, 490000413);
+        foreach (var (id, buff, percent) in new[] { (490005358, 1239, 10), (490005359, 1240, 5) })
+        {
+            var definition = new RecoveryConsumableDefinition(id, 1, 600000, 251)
+            {
+                EpicDropBuff = new(buff, percent) { ItemIds = family, HellRewardOnly = true }, EffectMilliseconds = 600000,
+                EffectMaintenance = 15, CooltimeMaintenance = 7
+            };
+            using var f = new Fixture(towns, characters, hp: definition, consumables: new([definition]));
+            f.Select();
+            var used = f.Use();
+            var saved = f.Read();
+            long until = saved.Inventory.ConsumableStates.Single(row => row.Kind == ConsumableStateKind.Effect).UntilMilliseconds;
+            That(used.Outcome == ConsumableUseOutcome.Committed && f.Count == 2 &&
+                f.Session.EpicDropPotionBonus(saved, f.Clock.GetUtcNow()) == 0 &&
+                f.Session.EpicDropPotionBonus(saved, f.Clock.GetUtcNow(), hellRewardOnly: true) == percent,
+                "小灯笼真实消费只登记深渊专用倍率，不借普通史诗药入口扩大适用范围");
+            var display = f.Session.PlanDungeonEpicBuffProjection()!;
+            That(display.AddedBuffs is [{ BuffId: var displayedId, Value: var value }] && displayedId == buff && value == until / 1000 &&
+                display.IsCurrent() && f.Session.NextVariousBuffWake(f.Clock.GetUtcNow()).ToUnixTimeMilliseconds() == until &&
+                saved.Inventory.VariousBuffs.IsEmpty,
+                "旧小灯笼账本发布原生Buff及真实截止，纳入到期唤醒但不复制药效资格");
+            // 同一药效在发送完成前被命令尾部和周期刷新各观察一次，不能互相废弃写帧回执。
+            var queuedAgain = f.Session.PlanDungeonEpicBuffProjection()!;
+            That(display.IsCurrent() && queuedAgain.IsCurrent(),
+                "相同未完成药效投影保留原写帧回执，未写成功时仍可重试");
+            display.MarkSent();
+            That(!queuedAgain.IsCurrent(), "首批药效图标写成功后，队列中的同状态投影不得再次发送");
+            queuedAgain.MarkSent();
+            That(f.Session.PlanDungeonEpicBuffProjection() is null,
+                "相同小灯笼截止无需重复补图标，只有成功写帧才确认显示水位");
+            f.Session.ReturnToRoster(); f.Select();
+            That(f.Read().Inventory.ConsumableStates.Single(row => row.Kind == ConsumableStateKind.Effect).UntilMilliseconds == until &&
+                f.Session.EpicDropPotionBonus(f.Session.Selected!, f.Clock.GetUtcNow(), hellRewardOnly: true) == percent &&
+                !f.Session.CanPublishConsumable(used.Guard!), "重选恢复原小灯笼截止及倍率，旧投影失效且不续期");
+            var restored = f.Session.PlanDungeonEpicBuffProjection()!;
+            That(!display.IsCurrent() && restored.AddedBuffs is [{ BuffId: var restoredId, Value: var restoredUntil }] &&
+                restoredId == buff && restoredUntil == until / 1000,
+                "小灯笼重选恢复同一Buff身份和原截止，旧显示回执不能确认新角色状态");
+            restored.MarkSent();
+            f.Clock.Advance(TimeSpan.FromMinutes(10));
+            That(f.Session.EpicDropPotionBonus(f.Session.Selected!, f.Clock.GetUtcNow(), hellRewardOnly: true) == 0,
+                "小灯笼恰到期不再加成，不把Buff配置param10当成十秒或额外抽样次数");
+            var expired = f.Session.PlanDungeonEpicBuffProjection()!;
+            That(expired.RemovedIds.SequenceEqual(new[] { buff }) && expired.AddedBuffs.IsEmpty && expired.IsCurrent() &&
+                f.Session.NextVariousBuffWake(f.Clock.GetUtcNow()) == DateTimeOffset.MaxValue,
+                "旧计时药效到期沿488清除图标，过期账本不重复唤醒或补建永久图标");
+        }
+    }
+
     static void RunEpicDropStates(TownCatalog towns, CharacterCatalog characters, PvfArchive archive)
     {
         var effect = new EpicDropBuffDefinition(1136, 100) { ItemIds = ImmutableHashSet.Create(490000413, 490002458) };
@@ -360,18 +616,34 @@ internal static partial class ConsumableUseSessionTests
         using (var f = new Fixture(towns, characters, hp: definition, consumables: catalog, level: 95))
         {
             f.Select();
+            That(f.Session.PlanHellLegendBuffProjection() is null, "持有未使用的星空药剂不创建状态栏buff");
             That(f.Session.HellLegendEpicDropPotionBonus(f.Session.Selected!, f.Clock.GetUtcNow()) == 0 &&
                 f.Session.EpicDropPotionBonus(f.Session.Selected!, f.Clock.GetUtcNow()) == 0,
                 "未成功使用的星空药剂不因持有物品产生掉率加成");
             var used = f.Use();
             var saved = f.Read();
             long until = saved.Inventory.ConsumableStates.Single(row => row.Kind == ConsumableStateKind.Effect).UntilMilliseconds;
+            var display = f.Session.PlanHellLegendBuffProjection();
+            var retry = f.Session.PlanHellLegendBuffProjection();
+            That(display is not null && retry is not null && !display.IsCurrent() && retry.IsCurrent(),
+                "未写帧的星空显示允许重规划，旧回执不能确认新计划");
+            display!.MarkSent();
+            display = f.Session.PlanHellLegendBuffProjection();
+            That(display is not null && !retry!.IsCurrent(), "旧版本确认不安装去重水位，同owner仍可重发");
+            display!.MarkSent();
+            That(display is not null && display.UntilSeconds == until / 1000 && display.IsCurrent() &&
+                f.Session.PlanHellLegendBuffProjection() is null,
+                "星空图标只取已提交截止秒，同阶段不重复发送完整时长");
             That(used.Outcome == ConsumableUseOutcome.Committed && f.Count == 2 &&
                 f.Session.HellLegendEpicDropPotionBonus(saved, f.Clock.GetUtcNow()) == 6520 &&
                 f.Session.EpicDropPotionBonus(saved, f.Clock.GetUtcNow()) == 0 && f.Session.CanPublishConsumable(used.Guard!),
                 "星空药剂在城镇正规消费后与持续状态同事务落库，1136 掉落输入仍为零");
             f.Clock.Advance(TimeSpan.FromMilliseconds(1));
             f.Session.ReturnToRoster(); f.Select();
+            var restoredDisplay = f.Session.PlanHellLegendBuffProjection(force: true);
+            That(!display!.IsCurrent() && restoredDisplay is not null && restoredDisplay.UntilSeconds == until / 1000 &&
+                restoredDisplay.IsCurrent(), "重选使旧显示回执失效，恢复原截止而不续期");
+            restoredDisplay!.MarkSent();
             That(f.Count == 2 &&
                 f.Read().Inventory.ConsumableStates.Single(row => row.Kind == ConsumableStateKind.Effect).UntilMilliseconds == until &&
                 f.Session.HellLegendEpicDropPotionBonus(f.Session.Selected!, f.Clock.GetUtcNow()) == 6520,
@@ -386,6 +658,12 @@ internal static partial class ConsumableUseSessionTests
                 f.Session.HellLegendEpicDropPotionBonus(contaminated, now.AddMilliseconds(2000)) == 0 &&
                 f.Session.EpicDropPotionBonus(contaminated, now.AddMilliseconds(2000)) == 100,
                 "星空同族取最大且不与固定1136相加或互相冒充");
+            f.Clock.Advance(TimeSpan.FromMilliseconds(299999));
+            var expiredDisplay = f.Session.PlanHellLegendBuffProjection();
+            expiredDisplay?.MarkSent();
+            That(!restoredDisplay!.IsCurrent() && expiredDisplay is { UntilSeconds: 0 } && expiredDisplay.IsCurrent() &&
+                f.Session.PlanHellLegendBuffProjection() is null && f.Count == 2,
+                "到期等号撤下星空状态，旧添加回执失效，不再次消费药剂");
         }
         using (var f = new Fixture(towns, characters, hp: definition, consumables: catalog, level: 95))
         {
@@ -439,6 +717,9 @@ internal static partial class ConsumableUseSessionTests
                 saved.Inventory.ConsumableStates.Single(row => row.Kind == ConsumableStateKind.Effect) is
                     { ItemId: 490006630, Maintenance: 7 } && f.Session.CanPublishConsumable(used.Guard!),
                 "城镇移速药剂在城镇正规消费后与持续状态同事务落库，走速仍由客户端启动");
+            That(f.Session.PlanDungeonEpicBuffProjection()!.AddedBuffs is [{ BuffId: 1244, Value: var speedUntil }] &&
+                speedUntil == until / 1000,
+                "同路径的旧城镇移速药剂也以原生487启用客户端效果，不只保存服务端计时");
             f.Clock.Advance(TimeSpan.FromMilliseconds(1));
             f.Session.ReturnToRoster(); f.Select();
             That(f.Count == 2 &&
@@ -508,34 +789,30 @@ internal static partial class ConsumableUseSessionTests
 
     static void RunDungeonRestrictions(TownCatalog towns, CharacterCatalog characters, PvfArchive archive)
     {
+        foreach (bool inDungeon in new[] { false, true })
         foreach (bool allowed in new[] { false, true })
         using (var f = new Fixture(towns, characters, hp: ConsumableUseTests.Hp with
-            { ItemId = 10312384, AllowedDungeons = ImmutableHashSet.Create(allowed ? 3U : 5350U) }))
+            { ItemId = 10312384, Jobs = 1 << 3, AllowedDungeons = ImmutableHashSet.Create(allowed ? 3U : 5350U) }))
         {
             f.Select();
-            var before = f.Read();
-            That(f.Use().Outcome == ConsumableUseOutcome.Rejected && Same(before, f.Read()) && f.Count == 3,
-                "副本专用补给在城镇拒绝，不扣数量、不启动冷却或改变持久revision");
-            That(f.Session.LeaveRoom() && f.Session.Travel(new(38, 2, 1085, 249, 5, 38, 0, 0)),
-                "副本专用补给回归沿真实入口旅行");
-            f.Session.BeginDungeonSelection();
-            That(f.Use().Outcome == ConsumableUseOutcome.Rejected && f.Count == 3,
-                "选图界面没有正式副本身份时仍不能消费专用药");
-            That(f.Session.EnterFormalDungeon(3, 0, 0, global::DfoServer.Testing.SelfTestCatalogs.Dungeons(archive),
-                global::DfoServer.Testing.SelfTestCatalogs.Rooms(archive)) is not null &&
-                f.Session.CompleteFormalDungeonLoading() is not null, "专用药建立真实正式副本");
-            before = f.Read();
-            var result = f.Use();
-            if (!allowed)
-                That(result.Outcome == ConsumableUseOutcome.Rejected && Same(before, f.Read()) && f.Count == 3,
-                    "真实副本不在原允许名单时完整拒绝，不以处于Dungeon代替副本资格");
-            else
+            if (inDungeon)
             {
-                That(result.Outcome == ConsumableUseOutcome.Committed && f.Count == 2 && f.Session.CanPublishConsumable(result.Guard!),
-                    "名单内真实副本沿原事务消费一次，前面的场景拒绝不占用冷却");
-                That(f.Use(1).Outcome == ConsumableUseOutcome.Rejected && f.Count == 2,
-                    "专用品仍使用原冷却组，不能因名单允许而重复消费");
+                That(f.Session.LeaveRoom() && f.Session.Travel(new(38, 2, 1085, 249, 5, 38, 0, 0)),
+                    "药剂资格回归沿真实入口旅行");
+                f.Session.BeginDungeonSelection();
+                var before = f.Read();
+                That(f.Use().Outcome == ConsumableUseOutcome.Rejected && Same(before, f.Read()) && f.Count == 3,
+                    "选图未就绪仍完整拒绝，资格委派不取消实际业务阶段门禁");
+                That(f.Session.EnterFormalDungeon(3, 0, 0, global::DfoServer.Testing.SelfTestCatalogs.Dungeons(archive),
+                    global::DfoServer.Testing.SelfTestCatalogs.Rooms(archive)) is not null &&
+                    f.Session.CompleteFormalDungeonLoading() is not null, "药剂资格建立真实正式副本");
             }
+            var result = f.Use();
+            That(result.Outcome == ConsumableUseOutcome.Committed && f.Count == 2 && f.Session.CanPublishConsumable(result.Guard!),
+                "职业及模板副本匹配交原生客户端，城镇或真实副本均复用同一消费事务");
+            var committed = f.Read();
+            That(f.Use(1).Outcome == ConsumableUseOutcome.Rejected && Same(committed, f.Read()) && f.Count == 2,
+                "资格委派仍保留原冷却组，不重复扣源或刷新状态");
         }
     }
 
@@ -598,17 +875,68 @@ internal static partial class ConsumableUseSessionTests
                     f.Session.ReportFormalCharacterDeath() is { AutomaticRevival: false },
                     "免费神圣祝福保存在原实例内，实际免币复活一次后清除，不与持久库存建立平行快照");
             }
-            That(f.Session.ReturnFromFormalDungeon() is not null && f.Read().Inventory.ConsumableStates.IsEmpty,
+            var returned = f.Session.ReturnFromFormalDungeon();
+            That(returned is not null && f.Read().Inventory.ConsumableStates.IsEmpty &&
+                (freeDefinition.RevivalBlessing ? returned.ConsumableCooldowns.IsEmpty :
+                    returned.ConsumableCooldowns is [{ RemainingSeconds: 0 }]),
                 "离开免费玩法销毁原实例效果，不保存或带出免费资格");
             if (!freeDefinition.RevivalBlessing)
                 That(f.Use(1).Outcome == ConsumableUseOutcome.Committed && f.Count == 2,
                     "免费实例的临时冷却不封锁出图后新的普通有偿使用，旧完整token仍单独保护");
+        }
+        using (var f = new Fixture(towns, characters, hp: definition with { CoolTime = 10000 }))
+        {
+            f.Select();
+            That(f.Use().Outcome == ConsumableUseOutcome.Committed, "普通模式先建立真实已扣源药效与冷却");
+            var real = f.Read();
+            That(f.Session.LeaveRoom() && f.Session.Travel(new(38,2,1085,249,5,38,0,0)), "已有普通药效仍可前往练习入口");
+            f.Session.BeginDungeonSelection();
+            That(f.Session.EnterFormalDungeon(3,0,0,global::DfoServer.Testing.SelfTestCatalogs.Dungeons(archive),
+                global::DfoServer.Testing.SelfTestCatalogs.Rooms(archive),practice:true) is not null &&
+                f.Session.CompleteFormalDungeonLoading() is not null, "建立独立练习冷却的真实实例");
+            That(f.Use(1).Outcome == ConsumableUseOutcome.Committed && f.Count == 2 &&
+                f.Read().Inventory.ConsumableStates.SequenceEqual(real.Inventory.ConsumableStates),
+                "普通冷却不封锁免费练习，同组练习使用也不改真实药效及截止");
+            That(f.Use(2).Outcome == ConsumableUseOutcome.Rejected, "练习自身冷却在原实例内仍然执行");
+            f.Clock.Advance(TimeSpan.FromSeconds(10));
+            var repeated = f.Use(3);
+            That(repeated.Outcome == ConsumableUseOutcome.Committed && repeated.EffectUpdates is [{ RemainingSeconds: 1800 }],
+                "练习冷却到期后合法续药，按新截止刷新客户端剩余时间");
+            var returned = f.Session.ReturnFromFormalDungeon()!;
+            That(returned.ConsumableCooldowns is [{ RemainingSeconds: 0 }] &&
+                returned.ConsumableEffects.Any(row => row.ItemId == definition.ItemId && row.RemainingSeconds == 1790) &&
+                f.Read().Inventory.ConsumableStates.SequenceEqual(real.Inventory.ConsumableStates.Where(row => row.Active(f.Clock.GetUtcNow().ToUnixTimeMilliseconds()))),
+                "退出练习只结束临时计时并恢复普通药效原剩余时间，不把免费续时保存到普通模式");
+            var paid = f.Use(4);
+            That(paid.Outcome == ConsumableUseOutcome.Committed && f.Count == 1 && paid.EffectUpdates.IsEmpty &&
+                f.Read().Inventory.ConsumableStates.Single(row=>row.Kind==ConsumableStateKind.Effect).UntilMilliseconds==
+                    f.Clock.GetUtcNow().ToUnixTimeMilliseconds()+1800000,
+                "普通冷却自然到期即可真实消费，原练习冷却不能封锁它");
+        }
+        using (var f = new Fixture(towns, characters, hp: definition with { CoolTime = 10000, EffectMaintenance = 6, CooltimeMaintenance = 6 }))
+        {
+            f.Select();
+            That(f.Use().Outcome == ConsumableUseOutcome.Committed,"免费死亡隔离先保存普通计时");
+            var real = f.Read().Inventory.ConsumableStates;
+            That(f.Session.LeaveRoom() && f.Session.Travel(new(38,2,1085,249,5,38,0,0)),"免费死亡隔离走实际入口");
+            f.Session.BeginDungeonSelection();
+            That(f.Session.EnterFormalDungeon(3,0,0,global::DfoServer.Testing.SelfTestCatalogs.Dungeons(archive),
+                global::DfoServer.Testing.SelfTestCatalogs.Rooms(archive),practice:true) is not null &&
+                f.Session.CompleteFormalDungeonLoading() is not null && f.Use(1).Outcome == ConsumableUseOutcome.Committed,
+                "死亡前建立只属于本练习的同组计时");
+            That(f.Session.ReportFormalCharacterDeath() is not null && f.Read().Inventory.ConsumableStates.SequenceEqual(real),
+                "练习死亡不消除普通冷却或药效，只按维护位结束免费实例状态");
+            var returned = f.Session.ReturnFromFormalDungeon()!;
+            That(returned.ConsumableCooldowns is [{ RemainingSeconds: 10 }] &&
+                returned.ConsumableEffects is [{ RemainingSeconds: 1800 }] && f.Use(2).Outcome == ConsumableUseOutcome.Rejected,
+                "免费状态已因死亡消失仍恢复被临时覆盖的普通计时，不能漏发或绕过真实冷却");
         }
     }
 
     public static void RunDisguiseInventoryLifetime(TownCatalog towns, CharacterCatalog characters,
         RecoveryConsumableCatalog consumables)
     {
+        DisguiseSourceQualifications(towns,characters,consumables);
         const int itemId = 490013028, formId = 56673;
         That(consumables.TryGet(itemId, out var definition) && definition is
             { Unlimited: true, Disguise: { Type: 2, Seconds: 300 } },
@@ -618,7 +946,7 @@ internal static partial class ConsumableUseSessionTests
         var source = f.Session.Selected!.Inventory.Find(f.Request.Position)!;
         uint originalGold = f.Session.Selected.Inventory.Gold;
         long started = f.Clock.GetUtcNow().ToUnixTimeMilliseconds();
-        var activated = f.Session.ApplyUnlimitedRandomDisguise(2, formId, itemId, f.Service);
+        var activated = f.Session.ApplyUnlimitedDisguise(2, formId, itemId, f.Service);
         That(activated is not null && f.Session.CurrentConsumableDisguise() is not null,
             "真实028持有源经直接211用例激活，不预发44或伪造在线Disguise");
         var original = f.Session.CurrentConsumableDisguise()!.Value;
@@ -706,7 +1034,7 @@ internal static partial class ConsumableUseSessionTests
             That(resources.RecoveryConsumables.TryGet(id, out var owl), "猫头鹰资源可经现有CMD44解析 " + id);
             using var f = new Fixture(towns, characters, hp: owl, consumables: resources.RecoveryConsumables);
             f.Select();
-            var inventory = new InventoryService(resources.Items, resources.GoldLimits, resources.EpicPieces);
+            var inventory = new InventoryService(resources.Items, resources.GoldLimits, resources.EpicPieces, clock: f.Clock);
             That(f.Session.MutateInventory(c => new(true, 0, new(c.Inventory, c.Inventory with
                 { AccountCargo = c.Inventory.AccountCargo with { Capacity = 8 } }, "portable_cargo_fixture"))).Accepted,
                 "准备已有账号仓库的真实库存快照");
@@ -714,11 +1042,36 @@ internal static partial class ConsumableUseSessionTests
                 new(InventoryListType.PersonalCargo, 0), 0, 0, -1, 0, 0);
             InventoryMoveRequest withdraw = new(new(InventoryListType.PersonalCargo, 0), 1114, 1,
                 new(InventoryListType.Main, 66), 1114, 0, -1, 0, 0);
-            That(f.Session.MoveInventory(deposit, inventory).Accepted &&
-                f.Session.MoveInventory(withdraw, inventory).Accepted, "城镇NPC仓库存取保持原行为");
+            InventorySortRequest personalSort = new(InventoryListType.PersonalCargo, (ItemKind)20, 0);
+            InventorySortRequest accountSort = new(InventoryListType.AccountCargo, 0, 0);
+            var depositSlot3 = deposit with { Destination = new(InventoryListType.PersonalCargo, 3) };
+            var accountDepositSlot3 = deposit with { Destination = new(InventoryListType.AccountCargo, 3) };
+            That(f.Session.MoveInventory(depositSlot3, inventory).Accepted &&
+                f.Session.SortInventory(personalSort, inventory).Accepted &&
+                f.Session.Selected!.Inventory.Find(new(InventoryListType.PersonalCargo, 0))?.Core.ItemId == 1114 &&
+                f.Session.MoveInventory(withdraw, inventory).Accepted, "城镇NPC仓库存取与整理保持原行为");
             That(f.Session.LeaveRoom() && f.Session.Travel(new(38, 2, 1085, 249, 5, 38, 0, 0)), "猫头鹰测试进入真实副本入口");
             Enter();
-            That(f.Session.MoveInventory(deposit, inventory) is { Accepted: false, Error: 1 }, "未使用猫头鹰仍拒绝副本仓库移动");
+            var accountDeposit = deposit with { Destination = new(InventoryListType.AccountCargo, 0) };
+            var accountWithdraw = withdraw with { Source = new(InventoryListType.AccountCargo, 0) };
+            if (owl.Unlimited)
+            {
+                // 客户端 CStackableItem::CheckUse 对无限猫头鹰返回 2 并直接本地打开仓库 UI，不发送 CMD 44。
+                That(f.Session.MoveInventory(depositSlot3, inventory).Accepted &&
+                    f.Session.SortInventory(personalSort, inventory).Accepted &&
+                    f.Session.Selected!.Inventory.Find(new(InventoryListType.PersonalCargo, 0))?.Core.ItemId == 1114 &&
+                    f.Session.MoveInventory(withdraw, inventory).Accepted &&
+                    f.Session.MoveInventory(accountDepositSlot3, inventory).Accepted &&
+                    f.Session.SortInventory(accountSort, inventory).Accepted &&
+                    f.Session.Selected.Inventory.Find(new(InventoryListType.AccountCargo, 0))?.Core.ItemId == 1114 &&
+                    f.Session.MoveInventory(accountWithdraw, inventory).Accepted,
+                    "持有可用无限猫头鹰在副本内无需先发CMD44即可存取和整理个人与账号仓库 " + id);
+                SetOwlLock(1);
+            }
+            That(f.Session.MoveInventory(deposit, inventory) is { Accepted: false, Error: 1 } &&
+                f.Session.SortInventory(personalSort, inventory) is { Accepted: false, Error: 1 } &&
+                f.Session.SortInventory(accountSort, inventory) is { Accepted: false, Error: 1 },
+                "未使用或已锁定猫头鹰仍拒绝副本仓库移动和整理");
             ushort characterId = f.Session.Selected!.Id;
             var capabilities = f.Session.ReadHelperCapabilities(characterId);
             That(capabilities is not null && f.Session.CanPublishHelperCapabilities(capabilities) &&
@@ -729,44 +1082,75 @@ internal static partial class ConsumableUseSessionTests
                 "错误角色和非仓库容器不建立助手资格");
             var helperCargo = f.Session.SetHelperPortableCargo(characterId, InventoryListType.PersonalCargo);
             That(helperCargo is { Accepted: true } && f.Session.CanPublishHelperCargo(helperCargo) &&
-                f.Session.MoveInventory(deposit, inventory).Accepted &&
-                !f.Session.CanPublishHelperCargo(helperCargo) && f.Session.MoveInventory(withdraw, inventory).Accepted,
-                "助手授权不消耗道具且支持个人仓库双向提交，过期资产快照不发布");
+                f.Session.MoveInventory(depositSlot3, inventory).Accepted &&
+                !f.Session.CanPublishHelperCargo(helperCargo) &&
+                f.Session.SortInventory(personalSort, inventory).Accepted &&
+                f.Session.Selected.Inventory.Find(new(InventoryListType.PersonalCargo, 0))?.Core.ItemId == 1114 &&
+                f.Session.MoveInventory(withdraw, inventory).Accepted,
+                "助手授权不消耗道具且支持个人仓库双向存取与整理，过期资产快照不发布");
             var helperAccountDeposit = deposit with { Destination = new(InventoryListType.AccountCargo, 0) };
             var helperAccountWithdraw = withdraw with { Source = new(InventoryListType.AccountCargo, 0) };
             That(!f.Session.MoveInventory(helperAccountDeposit, inventory).Accepted &&
+                !f.Session.SortInventory(accountSort, inventory).Accepted &&
                 f.Session.SetHelperPortableCargo(characterId, InventoryListType.AccountCargo) is { Accepted: true } &&
-                f.Session.MoveInventory(helperAccountDeposit, inventory).Accepted && f.Session.MoveInventory(helperAccountWithdraw, inventory).Accepted,
-                "个人授权不越权账号仓库，账号单独授权后支持双向提交");
+                f.Session.MoveInventory(accountDepositSlot3, inventory).Accepted &&
+                f.Session.SortInventory(accountSort, inventory).Accepted &&
+                f.Session.Selected.Inventory.Find(new(InventoryListType.AccountCargo, 0))?.Core.ItemId == 1114 &&
+                f.Session.MoveInventory(helperAccountWithdraw, inventory).Accepted,
+                "个人授权不越权账号仓库存取或整理，账号单独授权后支持双向存取与整理");
             That(f.Session.MutateInventory(c => new(true, 0, new(c.Inventory, c.Inventory with
                 { CargoCapacity = 24 }, "helper_cargo_upgrade_boundary")), requireTown: false).Accepted &&
-                !f.Session.MoveInventory(deposit, inventory).Accepted && !f.Session.MoveInventory(helperAccountDeposit, inventory).Accepted,
-                "任一仓库实际容量变化同时废止本实例助手旧资格");
+                !f.Session.MoveInventory(deposit, inventory).Accepted && !f.Session.MoveInventory(helperAccountDeposit, inventory).Accepted &&
+                !f.Session.SortInventory(personalSort, inventory).Accepted && !f.Session.SortInventory(accountSort, inventory).Accepted,
+                "任一仓库实际容量变化同时废止本实例助手旧存取与整理资格");
+            if (owl.Unlimited) SetOwlLock(0);
             That(f.Use().Outcome == ConsumableUseOutcome.Committed, "猫头鹰经原消耗品提交成功 " + id);
-            That(f.Session.MoveInventory(deposit, inventory).Accepted &&
-                f.Session.MoveInventory(withdraw, inventory).Accepted, "副本使用猫头鹰后支持双向真实库存提交 " + id);
-            var accountDeposit = deposit with { Destination = new(InventoryListType.AccountCargo, 0) };
-            var accountWithdraw = withdraw with { Source = new(InventoryListType.AccountCargo, 0) };
-            That(f.Session.MoveInventory(accountDeposit, inventory).Accepted &&
-                f.Session.MoveInventory(accountWithdraw, inventory).Accepted, "同一资格支持账号仓库双向存取");
-            That(!f.Session.MutateInventory(c => inventory.Sort(c, new(InventoryListType.PersonalCargo, ItemKind.Consumable, 0))).Accepted,
-                "猫头鹰不放宽仓库整理等其他Town门禁");
+            That(f.Session.MoveInventory(depositSlot3, inventory).Accepted &&
+                f.Session.SortInventory(personalSort, inventory) is { Accepted: true, Receipt: { } personalReceipt } &&
+                f.Session.CanPublishInventory(personalReceipt) &&
+                f.Session.Selected.Inventory.Find(new(InventoryListType.PersonalCargo, 0))?.Core.ItemId == 1114 &&
+                f.Session.MoveInventory(withdraw, inventory).Accepted, "副本使用猫头鹰后支持个人仓库真实存取与整理提交 " + id);
+            That(f.Session.MoveInventory(accountDepositSlot3, inventory).Accepted &&
+                f.Session.SortInventory(accountSort, inventory) is { Accepted: true, Receipt: { } accountReceipt } &&
+                f.Session.CanPublishInventory(accountReceipt) &&
+                f.Session.Selected.Inventory.Find(new(InventoryListType.AccountCargo, 0))?.Core.ItemId == 1114 &&
+                f.Session.MoveInventory(accountWithdraw, inventory).Accepted, "同一资格支持账号仓库双向存取与整理");
+            That(!f.Session.DeleteInventory(new(InventoryListType.PersonalCargo, [new(0, 0, 1, 1)], 0), inventory).Accepted,
+                "猫头鹰不放宽仓库丢弃删除等其他Town门禁");
+            if (owl.Unlimited) SetOwlLock(1);
             That(f.Session.MutateInventory(c => new(true, 0, new(c.Inventory, c.Inventory with
                 { CargoCapacity = 16 }, "portable_cargo_upgrade_boundary")), requireTown: false).Accepted &&
-                f.Session.MoveInventory(deposit, inventory) is { Accepted: false, Error: 1 },
-                "已提交仓库容量变化使旧猫头鹰资格失效");
+                f.Session.MoveInventory(deposit, inventory) is { Accepted: false, Error: 1 } &&
+                f.Session.SortInventory(personalSort, inventory) is { Accepted: false, Error: 1 } &&
+                f.Session.SortInventory(accountSort, inventory) is { Accepted: false, Error: 1 },
+                "已提交仓库容量变化使旧猫头鹰存取与整理资格失效");
             That(f.Session.ReturnFromFormalDungeon() is not null, "猫头鹰测试经正式回城");
             Enter();
-            That(f.Session.MoveInventory(deposit, inventory) is { Accepted: false, Error: 1 }, "新副本不继承回城前猫头鹰资格");
+            That(f.Session.MoveInventory(deposit, inventory) is { Accepted: false, Error: 1 } &&
+                f.Session.SortInventory(personalSort, inventory) is { Accepted: false, Error: 1 } &&
+                f.Session.SortInventory(accountSort, inventory) is { Accepted: false, Error: 1 }, "新副本不继承回城前猫头鹰资格");
             That(f.Session.SetHelperPortableCargo(characterId, InventoryListType.PersonalCargo) is { Accepted: true },
                 "新实例只能重新建立本实例助手授权");
             f.Clock.Advance(TimeSpan.FromSeconds(4));
+            if (owl.Unlimited) SetOwlLock(0);
             That(f.Use(1).Outcome == ConsumableUseOutcome.Committed, "新副本可重新使用猫头鹰");
             f.Session.ReturnToRoster(); f.Select();
+            if (owl.Unlimited) SetOwlLock(1);
             That(f.Session.LeaveRoom() && f.Session.Travel(new(38, 2, 1085, 249, 5, 38, 0, 0)), "重新选角进入入口");
             Enter();
-            That(f.Session.MoveInventory(deposit, inventory) is { Accepted: false, Error: 1 }, "同角色重选不继承旧资格");
+            That(f.Session.MoveInventory(deposit, inventory) is { Accepted: false, Error: 1 } &&
+                f.Session.SortInventory(personalSort, inventory) is { Accepted: false, Error: 1 } &&
+                f.Session.SortInventory(accountSort, inventory) is { Accepted: false, Error: 1 }, "同角色重选不继承旧资格");
             That(capabilities is not null && !f.Session.CanPublishHelperCapabilities(capabilities), "同角色重选后旧能力回执也失效");
+
+            void SetOwlLock(byte lockId) => That(f.Session.MutateInventory(c =>
+            {
+                var source = c.Inventory.Find(new(InventoryListType.Main, 65))!;
+                return new(true, 0, new(c.Inventory, c.Inventory with
+                {
+                    Items = c.Inventory.Items.Replace(source, source with { Core = source.Core with { EquipmentLockId = lockId } })
+                }, "portable_cargo_owl_lock"));
+            }, requireTown: false).Accepted, "切换无限猫头鹰锁定状态");
 
             void Enter()
             {
@@ -798,6 +1182,7 @@ internal static partial class ConsumableUseSessionTests
     sealed class Fixture : IDisposable
     {
         readonly string root = Path.Combine(Path.GetTempPath(), "S5A9-potion-session-" + Guid.NewGuid().ToString("N"));
+        public string DatabasePath => Path.Combine(root, "game.db");
         public AccountOwners Owners { get; } = new();
         public AccountOwners.Lease Owner { get; }
         public CharacterRepository Repository { get; }
@@ -821,7 +1206,8 @@ internal static partial class ConsumableUseSessionTests
             _ = consumables.HellLegendEpicDropBuffs;
             _ = consumables.VillageMoveSpeedBuffs;
             Session = new(store is null ? Repository : store, towns, Owner,
-                timeProvider: hp.EffectMilliseconds > 0 || hp.BossSelectionBuff is not null ? Clock : null, consumables: consumables, entry: entry);
+                timeProvider: hp.EffectMilliseconds > 0 || hp.BossSelectionBuff is not null || hp.DungeonEpicDropBuff is not null || hp.VariousBuff is not null ? Clock : null,
+                consumables: consumables, entry: entry);
             Service = new(consumables, Clock);
         }
         public void Select() { Session.Select(0); Session.MarkReady(); }

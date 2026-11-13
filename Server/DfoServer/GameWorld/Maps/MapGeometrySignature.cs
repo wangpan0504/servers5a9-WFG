@@ -62,14 +62,14 @@ internal static class MapGeometrySignature
         "[animation]", "[passive object]", "[monster]", "[ai character]", "[event monster position]", "[special passive object]"
     };
     public static byte[] CanonicalAnchors(string path, IReadOnlyList<PvfToken> tokens, Func<int, string> resolve) =>
-        ScalarCanonical("DCG3"u8,path,tokens,resolve,DungeonTags.Concat(AnchorTags).ToHashSet(StringComparer.Ordinal),false);
+        ScalarCanonical("DCG3"u8,path,tokens,resolve,DungeonTags.Concat(Tags).Concat(AnchorTags).ToHashSet(StringComparer.Ordinal),false);
 
     public static byte[] ComputeAnchors(string path, IReadOnlyList<PvfToken> tokens, Func<int, string> resolve) =>
         SHA256.HashData(CanonicalAnchors(path,tokens,resolve));
 
     // 副本标量段在下一个标签或EOF结束；不借用城镇DCG1必须闭合的块合同。
     public static byte[] CanonicalDungeon(string path, IReadOnlyList<PvfToken> tokens, Func<int, string> resolve) =>
-        ScalarCanonical("DCG2"u8, path, tokens, resolve, DungeonTags, false);
+        ScalarCanonical("DCG2"u8, path, tokens, resolve, DungeonTags.Concat(Tags).ToHashSet(StringComparer.Ordinal), false);
 
     public static byte[] ComputeDungeon(string path, IReadOnlyList<PvfToken> tokens, Func<int, string> resolve) =>
         SHA256.HashData(CanonicalDungeon(path,tokens,resolve));

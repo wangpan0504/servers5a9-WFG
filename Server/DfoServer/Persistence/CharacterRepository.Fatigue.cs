@@ -14,9 +14,10 @@ internal sealed partial class CharacterRepository
         command.Transaction = tx;
         command.CommandText = """
             SELECT f.used,f.maximum,f.used_maximum,f.remaining,f.context_auxiliary,f.selection_auxiliary,f.account,c.account,
-              COALESCE(d.service_day,0)
+              COALESCE(d.service_day,0),COALESCE(b.charging,0),COALESCE(b.buff,0)
             FROM character_fatigue f JOIN characters c ON c.id=f.character_id
-              LEFT JOIN character_fatigue_reset_days d ON d.character_id=f.character_id WHERE f.character_id=$id
+              LEFT JOIN character_fatigue_reset_days d ON d.character_id=f.character_id
+              LEFT JOIN character_fatigue_battery b ON b.character_id=f.character_id WHERE f.character_id=$id
             """;
         command.Parameters.AddWithValue("$id", id);
         using var reader = command.ExecuteReader();
@@ -26,7 +27,8 @@ internal sealed partial class CharacterRepository
             throw new InvalidDataException("疲劳owner账号归属损坏");
         var state = new CharacterFatigueState(checked((ushort)reader.GetInt32(0)), checked((ushort)reader.GetInt32(1)),
             checked((ushort)reader.GetInt32(2)), checked((ushort)reader.GetInt32(3)), checked((ushort)reader.GetInt32(4)),
-            checked((ushort)reader.GetInt32(5))) { ResetDay = reader.GetInt32(8) };
+            checked((ushort)reader.GetInt32(5))) { ResetDay = reader.GetInt32(8),
+                BatteryCharging = checked((ushort)reader.GetInt32(9)), BatteryBuff = checked((ushort)reader.GetInt32(10)) };
         state.Validate();
         return state;
     }
@@ -64,6 +66,14 @@ internal sealed partial class CharacterRepository
         if (command.ExecuteScalar() is not long revision || revision != expected.Revision || ReadFatigue(db, expected.Id, tx) != before ||
             ReadAccountWallet(db, owner.Account, tx).ContractExpiry(56) != expected.BlackDiamondExpiresAt)
             throw new InvalidOperationException("每日疲劳恢复的角色或资格快照已变化");
+        if (growthCatalog?.FatigueBattery is { } battery && before.ResetDay > 0)
+        {
+            command.CommandText = "SELECT COUNT(*) FROM characters WHERE account=$account AND level>=$level";
+            command.Parameters.AddWithValue("$level", DfoServer.GameWorld.Characters.CharacterGrowthCatalog.MaximumSupportedLevel);
+            int endLevels = checked((int)(long)command.ExecuteScalar()!);
+            var charged = FatigueBattery.Recharge(before, battery, expected.Level, endLevels, day - before.ResetDay);
+            target = target with { BatteryCharging = charged.BatteryCharging, BatteryBuff = charged.BatteryBuff };
+        }
         command.Parameters.AddWithValue("$day", day);
         command.Parameters.AddWithValue("$maximum", target.Maximum);
         command.Parameters.AddWithValue("$remaining", target.Remaining);
@@ -77,6 +87,7 @@ internal sealed partial class CharacterRepository
             WHERE service_day<excluded.service_day
             """;
         if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("每日疲劳恢复日戳冲突");
+        WriteFatigueBattery(db, tx, owner.Account, expected.Id, target);
         // 只改疲劳与版本，不在每日定时器的writer内重载两遍整套角色资产。
         var committed = expected with { Fatigue = target, Revision = checked(expected.Revision + 1) };
         tx.Commit();
@@ -116,7 +127,8 @@ internal sealed partial class CharacterRepository
         return committed;
     });
 
-    public Character ConsumeDungeonRoomFatigue(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run, TimeProvider? battlePassClock = null) => owner.Execute(() =>
+    public Character ConsumeDungeonRoomFatigue(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run, TimeProvider? battlePassClock = null,
+        DfoServer.Game.Inventory.Models.InventoryItem? energySource = null) => owner.Execute(() =>
     {
         var snapshot = run.Snapshot;
         var identity = snapshot.Identity;
@@ -124,7 +136,9 @@ internal sealed partial class CharacterRepository
         state.Validate();
         bool ordinary = run.Entry.UsesRoomFatigue;
         string rule = CharacterFatigueState.NormalRoomRuleId;
-        ushort amount = DfoServer.Game.PcRoom.FatigueAccelerationRules.Cost(1, run.FatigueAccelerationPercent);
+        // 基数与 Run 的应耗统计一致；燃烧仍只在账本乘 2。0 视为普通 1 点。
+        ushort basis = run.Entry.RoomFatigueCost == 0 ? (ushort)1 : run.Entry.RoomFatigueCost;
+        ushort amount = DfoServer.Game.PcRoom.FatigueAccelerationRules.Cost(basis, run.FatigueAccelerationPercent);
         if (!ordinary || run.CurrentMonsterPlan.Room.Map != snapshot.CurrentMap ||
             snapshot.Phase != SinglePlayerDungeonPhase.Loading || identity.CharacterId != expected.Id ||
             identity.InstanceId == Guid.Empty || identity.TaskAttempt != expected.DungeonState?.LastAttempt)
@@ -153,22 +167,47 @@ internal sealed partial class CharacterRepository
         if (current.Revision != expected.Revision || current.Fatigue != state)
             throw new InvalidOperationException("扣点的原revision或疲劳owner已变化");
         var target = state.ConsumeOrdinaryRoom(amount);
-        command.Parameters.AddWithValue("$revision", expected.Revision);
-        command.CommandText = "UPDATE characters SET revision=revision+1 WHERE id=$id AND account=$account AND revision=$revision";
-        if (command.ExecuteNonQuery() != 1)
-            throw new InvalidOperationException("首次房间扣点revision冲突");
+        var energy = DfoServer.Game.Inventory.Services.QuickSlotEquipmentEnergy.Plan(expected, expected.Inventory,
+            energySource, state.Remaining - target.Remaining);
+        if (energy is not null)
+            current = CommitInventoryInTransaction(db, tx, owner, current, expected, energy);
+        else
+        {
+            command.Parameters.AddWithValue("$revision", expected.Revision);
+            command.CommandText = "UPDATE characters SET revision=revision+1 WHERE id=$id AND account=$account AND revision=$revision";
+            if (command.ExecuteNonQuery() != 1)
+                throw new InvalidOperationException("首次房间扣点revision冲突");
+        }
         command.Parameters.AddWithValue("$used", target.Used);
         command.Parameters.AddWithValue("$remaining", target.Remaining);
         command.CommandText = "UPDATE character_fatigue SET used=$used,remaining=$remaining WHERE character_id=$id AND account=$account";
         if (command.ExecuteNonQuery() != 1)
             throw new InvalidOperationException("首次房间扣点缺少原疲劳owner");
+        WriteFatigueBattery(db, tx, owner.Account, expected.Id, target);
         ApplyBattlePassDungeonActivity(db,tx,owner.Account,DfoServer.Game.BattlePass.BattlePassDungeonActivity.PrepareFatigue(
             identity,"room",snapshot.CurrentMap.Id,state,target,battlePassClock ?? TimeProvider.System));
-        var committed = Require(db, tx, owner.Account, expected.Name);
+        var committed = Require(db, tx, owner.Account, expected.Name, current.Inventory);
         var cached = new DungeonTransientFatigue(rule, expected.Revision, state, target);
         receipts.Fatigue[snapshot.CurrentMap.Id] = cached;
         tx.Commit();
         cached.Committed = true;
         return committed;
     });
+
+    static void WriteFatigueBattery(SqliteConnection db, SqliteTransaction tx, string account, ushort id, CharacterFatigueState state)
+    {
+        state.Validate();
+        using var command = db.CreateCommand();
+        command.Transaction = tx;
+        command.CommandText = """
+            INSERT INTO character_fatigue_battery(character_id,charging,buff)
+              SELECT character_id,$charging,$buff FROM character_fatigue WHERE character_id=$id AND account=$account
+            ON CONFLICT(character_id) DO UPDATE SET charging=excluded.charging,buff=excluded.buff
+            """;
+        command.Parameters.AddWithValue("$id", id);
+        command.Parameters.AddWithValue("$account", account);
+        command.Parameters.AddWithValue("$charging", state.BatteryCharging);
+        command.Parameters.AddWithValue("$buff", state.BatteryBuff);
+        if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("疲劳蓄电池缺少原owner");
+    }
 }

@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Text.Json;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Currency;
@@ -6,9 +7,11 @@ using DfoServer.Game.ExpertJob;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.GameWorld.Towns;
+using DfoServer.GameWorld.Items;
 using DfoServer.Infrastructure;
 using DfoServer.Persistence;
 using Microsoft.Data.Sqlite;
+using PvfLib;
 using static DfoServer.Testing.TestCheck;
 
 namespace DfoServer;
@@ -19,6 +22,7 @@ internal static class ExpertJobCraftTests
     {
         int checks = Count;
         ExpertJobExtractionTests.Run(towns, resources);
+        UpgradedCardBeads(towns, resources);
         var scripts = resources.ExpertJobs;
         var items = resources.Items;
         That(scripts.TryRecipe(1, 2600141, out var recipe) && recipe.ProductId == 2610034 && recipe.ProductCount == 1 &&
@@ -92,14 +96,14 @@ internal static class ExpertJobCraftTests
             var card = beadSource.Inventory.Items.Single(item => item.Core.ItemId == 3619);
             bool Bead(Character source, uint id, ushort count, out ExpertJobCraftPlan craft) => ExpertJobCraft.TryPlan(source,
                 scripts, items, resources.GoldLimits, resources.EpicPieces, id, count, (ushort)card.Position.Index,
-                _ => 0, DateTimeOffset.UtcNow, out craft, out _);
+                _ => 0, DateTimeOffset.UtcNow, out craft, out _, resources.Enchantments);
             That(!Bead(beadSource, 0, 1, out _) && !Bead(beadSource, 2600141, 1, out _) &&
                 !Bead(beadSource, 10015129, 3, out _) && Bead(beadSource with { ExpertJobRecipes = [] }, 10015129, 1, out _),
                 "无效配方、错映射和源卡数量不足拒绝，基础资格自动获得");
             foreach (var core in new[] { card.Core with { EquipmentLockId = 1 }, card.Core with { ExpireTime = 1 },
-                card.Core with { Attr = 1 }, card.Core with { EnchantUpgrade = 1 } })
+                card.Core with { Attr = 1 }, card.Core with { EnchantUpgrade = checked((byte)(resources.Enchantments.CardMaximumLevel(3619) + 1)) } })
                 That(!Bead(beadSource with { Inventory = beadSource.Inventory with { Items = beadSource.Inventory.Items.Replace(card, card with { Core = core }) } },
-                    10015129, 1, out _), "锁定、到期或非标准实例字段未闭合的源卡不能制珠");
+                    10015129, 1, out _), "锁定、到期、强化字段或超出卡片实际等级表的源卡不能制珠");
             That(Bead(beadSource with { Inventory = beadSource.Inventory with { Items = beadSource.Inventory.Items.Replace(card,
                 card with { Core = card.Core with { Attr = 0x20 } }) } }, 10015129, 1, out _),
                 "Attr高三位不是升级级别，不误拒绝正常模板卡片");
@@ -161,5 +165,184 @@ internal static class ExpertJobCraftTests
         }
         finally { SqliteConnection.ClearAllPools(); if (passed) TestFiles.DeleteDirectory(root, true); else Console.WriteLine("FAILED fixture retained: " + root); }
         Console.WriteLine($"PASS {Count - checks} 副职业制作资源、钱包成本与原子提交断言");
+    }
+
+    static void UpgradedCardBeads(TownCatalog towns, ItemResources resources)
+    {
+        const int cardId = 10305832, beadId = 10305865;
+        var scripts = resources.ExpertJobs;
+        var items = resources.Items;
+        var enchantments = resources.Enchantments;
+        That(scripts.TryCardRecipe(cardId, out var recipe) && recipe.RecipeId == 10015132 && recipe.BeadId == beadId &&
+            enchantments.CardMaximumLevel(cardId) == 1 && enchantments.Get(beadId) is { UsesInstanceUpgrade: true },
+            "瑟尔莫升级卡沿EXJ原成品10305865，不替换账号珠或积分珠");
+        int upgradeablePairs = 0;
+        foreach (int knownCard in scripts.KnownCards(1))
+        {
+            if (!items.TryGet(knownCard, out _) || !scripts.TryCardRecipe(knownCard, out var knownRecipe) ||
+                !items.TryGet(knownRecipe.BeadId, out _)) continue;
+            byte maxUpgrade = enchantments.CardMaximumLevel(knownCard);
+            if (maxUpgrade == 0) continue;
+            upgradeablePairs++;
+            for (byte level = 1; level <= maxUpgrade; level++)
+                That(enchantments.Get(knownRecipe.BeadId, level) is { CardItemId: var mappedCard, Upgrade: var mappedLevel, UsesInstanceUpgrade: true } &&
+                    mappedCard == knownCard && mappedLevel == level,
+                    $"EXJ可升级卡片 {knownCard} 的 {level}/{maxUpgrade} 级制珠成品 {knownRecipe.BeadId} 均能解析对应实例等级");
+        }
+        That(upgradeablePairs == 272, "EXJ全部可升级卡片制珠映射完整覆盖满级实例: " + upgradeablePairs);
+        const int rosenCardId = 10306743, rosenBeadId = 10306744, rosenRecipeId = 10159564;
+        That(scripts.TryCardRecipe(rosenCardId, out var rosenRecipe) && rosenRecipe.RecipeId == rosenRecipeId &&
+            rosenRecipe.BeadId == rosenBeadId && enchantments.CardMaximumLevel(rosenCardId) == 2 &&
+            enchantments.ReadEffects(rosenCardId, 2) is var rosenEffects &&
+            rosenEffects.Any(row => row.Tag == "[water attack]" && row.IntegerValues.SequenceEqual([25])) &&
+            rosenEffects.Any(row => row.Tag == "[light attack]" && row.IntegerValues.SequenceEqual([25])),
+            "寒冰之行星-罗什卡片满级2/2对应10159564配方与10306744宝珠及25冰光强效果");
+        var effects = enchantments.ReadEffects(cardId, 1);
+        That(effects.Length == 2 && effects.Any(row => row.Tag == "[separate attack]" && row.IntegerValues.SequenceEqual([50, 50])) &&
+            effects.Any(row => row.Tag == "[physical attack]" && row.IntegerValues.SequenceEqual([20])),
+            "真实一级效果保持完整50/50独立与20物攻向量");
+        string root = Path.Combine(Path.GetTempPath(), "s5a9-upgraded-bead-" + Guid.NewGuid().ToString("N"));
+        bool passed = false;
+        try
+        {
+            string path = Path.Combine(root, "game.db");
+            var database = new SqliteGameDatabase(path);
+            var repository = new CharacterRepository(path);
+            using var owner = new AccountOwners().Acquire("upgraded-bead", () => { });
+            var created = repository.Create(owner, new("UpgradedBead", towns.Room, towns.InitialReturn) { Level = 95 });
+            var supplies = InventoryRewardGrantService.TryGrantBatch(created,
+                new InventoryReward[] { new(cardId, 2) { EnchantUpgrade = 1 }, new(beadId, 1), new(27308, 1) }
+                    .Concat(recipe.Materials.Concat(recipe.BeadMaterials).Select(row => new InventoryReward(row.ItemId, row.Count * 3))).ToArray(),
+                items, resources.GoldLimits, resources.EpicPieces);
+            That(supplies.Accepted, "真实升级卡、零级珠、武器与完整三份制珠成本准备成功");
+            var seed = repository.CommitInventory(owner, created, supplies.Plan!);
+            var sameGrade = InventoryRewardGrantService.TryGrantCore(seed,
+                InventoryRewardGrantService.Create(items.Get(beadId)) with { EnchantUpgrade = 1 }, items.Get(beadId), resources.EpicPieces);
+            That(sameGrade.Accepted, "同级宝珠使用完整核心入口，不放宽全局普通奖励限制");
+            repository.CommitInventory(owner, seed, sameGrade.Plan!);
+            int exp = Enumerable.Range(0, 100000).First(value => scripts.Level(1, value) == 9);
+            Sql($"INSERT INTO character_expert_job(character_id,account,job_type,expertness,learned_recipes) VALUES({created.Id},'upgraded-bead',1,{exp},'[10015132]')");
+            var current = repository.LoadCharacter(owner, 0);
+            string before = JsonSerializer.Serialize(current);
+            var card = current.Inventory.Items.Single(row => row.Core.ItemId == cardId);
+            var zero = current.Inventory.Items.Single(row => row.Core.ItemId == beadId && row.Core.EnchantUpgrade == 0);
+            var one = current.Inventory.Items.Single(row => row.Core.ItemId == beadId && row.Core.EnchantUpgrade == 1);
+            int draws = 0;
+            bool Craft(Character role, out ExpertJobCraftPlan plan, EnchantmentCatalog? catalog = null) =>
+                ExpertJobCraft.TryPlan(role, scripts, items, resources.GoldLimits, resources.EpicPieces,
+                    (uint)recipe.RecipeId, 2, (ushort)card.Position.Index, _ => { draws++; return 0; }, DateTimeOffset.UtcNow,
+                    out plan, out _, catalog ?? enchantments);
+            foreach (var invalid in new[] { card with { Uid = 0 }, card with { Core = card.Core with { EquipmentLockId = 1 } },
+                card with { Core = card.Core with { EnchantUpgrade = 2 } } })
+            {
+                int beforeDraws = draws;
+                That(!Craft(current with { Inventory = current.Inventory with { Items = current.Inventory.Items.Replace(card, invalid) } }, out _) &&
+                    draws == beforeDraws, "无UID、锁卡或不存在的二级在扣料与随机前拒绝");
+            }
+            var wrongMapping = OtherMapping();
+            int beforeWrongMapping = draws;
+            That(wrongMapping.Get(beadId, 1) is { UsesInstanceUpgrade: true, Upgrade: 1 } &&
+                !Craft(current, out _, wrongMapping) && draws == beforeWrongMapping,
+                "可解析但关联另一张卡的珠在扣料与随机前拒绝，不仅验证珠ID和等级");
+            var full = current with { Inventory = current.Inventory with { Items = current.Inventory.Items.Remove(one) } };
+            var range = ItemSlotBoundService.Range(ItemKind.Consumable, full.Inventory);
+            for (short slot = range.Start; slot <= range.End; slot++)
+            {
+                InventorySlot position = new(InventoryListType.Main, slot);
+                if (full.Inventory.Find(position) is null)
+                    full = full with { Inventory = full.Inventory with { Items = full.Inventory.Items.Add(new(10000 + slot, position, zero.Core)) } };
+            }
+            That(!Craft(full, out _) && JsonSerializer.Serialize(repository.LoadCharacter(owner, 0)) == before,
+                "无同级可合堆且消耗品页满时不产珠，原卡材料及数据库不变");
+            var sortedCard = card with { Core = card.Core with { SortLockFlag = 1 } };
+            var sorted = current with { Inventory = current.Inventory with { Items = current.Inventory.Items.Replace(card, sortedCard).Remove(one) } };
+            That(Craft(sorted, out var cleanPlan) && cleanPlan.Inventory.After.Items.Single(row => row.Core.ItemId == beadId && row.Core.EnchantUpgrade == 1)
+                is { Uid: 0, Core.SortLockFlag: 0, Core.EquipmentLockId: 0 },
+                "新珠不复制源卡UID或排序锁，只携带等级并采用模板默认核心");
+            That(Craft(current, out var craft) && craft.SuccessCount == 2 && craft.FailureCount == 0 &&
+                craft.Inventory.After.Find(one.Position) == one with { Core = one.Core with { Value = 3 } } &&
+                craft.Inventory.After.Find(zero.Position) == zero && craft.Inventory.After.Find(card.Position) is null,
+                "两张一级卡制作同ID一级珠并合入原同级UID，零级珠完整分堆且源卡耗尽");
+            foreach (var cost in recipe.Materials.Concat(recipe.BeadMaterials))
+                That(Balance(current.Inventory, cost.ItemId) - Balance(craft.Inventory.After, cost.ItemId) == cost.Count * 2,
+                    "升级制珠精确扣除两份EXJ成本 " + cost.ItemId);
+            Sql("CREATE TRIGGER fail_upgraded_bead BEFORE UPDATE OF expertness ON character_expert_job BEGIN SELECT RAISE(ABORT,'bead tail'); END");
+            bool reachedTail = false;
+            try { repository.CommitExpertJobCraft(owner, current, craft.Inventory, craft.Experience); }
+            catch (SqliteException error) when (error.SqliteErrorCode == 19 && error.Message == "SQLite Error 19: 'bead tail'.")
+            { reachedTail = true; }
+            That(reachedTail, "升级制珠必须命中指定经验尾段bead tail，其他SQL错误不能冒充回滚覆盖");
+            That(JsonSerializer.Serialize(repository.LoadCharacter(owner, 0)) == before, "失败保留全部卡片、材料、珠核心与revision");
+            Sql("DROP TRIGGER fail_upgraded_bead");
+            repository.CommitExpertJobCraft(owner, current, craft.Inventory, craft.Experience);
+            var saved = new CharacterRepository(path).LoadCharacter(owner, 0);
+            var bead = saved.Inventory.Find(one.Position)!;
+            That(bead.Core is { EnchantUpgrade: 1, Count: 3 } && saved.Inventory.Find(zero.Position) == zero && !Craft(saved, out _),
+                "制珠保存重开仍为一级且耗尽请求不重复产出");
+            Reject<InvalidOperationException>(() => repository.CommitExpertJobCraft(owner, current, craft.Inventory, craft.Experience),
+                "原制珠计划不能再次提交");
+            var weapon = saved.Inventory.Items.Single(row => row.Core.ItemId == 27308);
+            var service = new InventoryEnchantmentService(items, enchantments);
+            var request = new EnchantmentRequest(bead.Position, weapon.Position, uint.MaxValue);
+            var invalidBead = saved with { Inventory = saved.Inventory with { Items = saved.Inventory.Items.Replace(bead,
+                bead with { Core = bead.Core with { EnchantUpgrade = 2 } }) } };
+            That(!service.Plan(invalidBead, request, DateTimeOffset.UtcNow.ToUnixTimeSeconds()).Accepted,
+                "用珠时同样拒绝真实表外二级，不将伪造实例回退为零级效果");
+            var applied = service.Plan(saved, request, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+            That(applied.Accepted && applied.Plan!.After.Find(weapon.Position)!.Core is { EnchantCardId: cardId, EnchantUpgrade: 1 },
+                "重开后的真实珠通过共同用珠入口，将相同卡片和一级写到武器，opaque不控制等级");
+            repository.CommitInventory(owner, saved, applied.Plan!);
+            var enchanted = new CharacterRepository(path).LoadCharacter(owner, 0);
+            That(enchanted.Inventory.Find(weapon.Position)!.Core is { EnchantCardId: cardId, EnchantUpgrade: 1 } &&
+                enchanted.Inventory.Find(bead.Position)!.Core.Count == 2, "用珠提交重开保持真实卡片级别并仅扣一珠");
+            foreach (string part in new[] { "weapon", "coat", "pants" })
+                That(enchantments.CanEnchantCard(cardId, 1, items.Get(27308) with { EquipmentSlot = ItemCatalog.Slot(part) }),
+                    "同级真实卡资格保留部位 " + part);
+            var rosenSupplies = InventoryRewardGrantService.TryGrantBatch(enchanted,
+                new InventoryReward[] { new(rosenCardId, 1) { EnchantUpgrade = 2 } }
+                    .Concat(rosenRecipe.Materials.Concat(rosenRecipe.BeadMaterials).Select(row => new InventoryReward(row.ItemId, row.Count))).ToArray(),
+                items, resources.GoldLimits, resources.EpicPieces);
+            That(rosenSupplies.Accepted, "寒冰之行星-罗什满级2/2卡片及制珠材料准备成功");
+            var rosenSeed = repository.CommitInventory(owner, enchanted, rosenSupplies.Plan!) with
+            {
+                ExpertJobExperience = scripts.ExperienceForLevel(1, rosenRecipe.RequiredLevel),
+                ExpertJobRecipes = enchanted.ExpertJobRecipes.Add(rosenRecipeId)
+            };
+            var rosenCard = rosenSeed.Inventory.Items.Single(row => row.Core.ItemId == rosenCardId);
+            That(!ExpertJobCraft.TryPlan(rosenSeed with { Inventory = rosenSeed.Inventory with { Items = rosenSeed.Inventory.Items.Replace(
+                    rosenCard, rosenCard with { Core = rosenCard.Core with { EnchantUpgrade = 3 } }) } },
+                scripts, items, resources.GoldLimits, resources.EpicPieces, rosenRecipeId, 1, (ushort)rosenCard.Position.Index,
+                _ => 0, DateTimeOffset.UtcNow, out _, out _, enchantments),
+                "超出寒冰之行星-罗什2/2上限的伪造三级卡片拒绝制珠");
+            That(ExpertJobCraft.TryPlan(rosenSeed, scripts, items, resources.GoldLimits, resources.EpicPieces,
+                rosenRecipeId, 1, (ushort)rosenCard.Position.Index, _ => 0, DateTimeOffset.UtcNow, out var rosenCraft, out _, enchantments) &&
+                rosenCraft.SuccessCount == 1 && rosenCraft.FailureCount == 0 &&
+                rosenCraft.Inventory.After.Items.Single(row => row.Core.ItemId == rosenBeadId).Core is { EnchantUpgrade: 2, Count: 1 },
+                "寒冰之行星-罗什满级2/2卡片成功转为携带EnchantUpgrade=2的10306744宝珠");
+            passed = true;
+            void Sql(string sql) { using var db = database.Open(); using var command = db.CreateCommand(); command.CommandText = sql; command.ExecuteNonQuery(); }
+        }
+        finally { SqliteConnection.ClearAllPools(); if (passed) TestFiles.DeleteDirectory(root, true); else Console.WriteLine("FAILED fixture retained: " + root); }
+
+        static long Balance(InventorySnapshot inventory, int id) => id == 0 ? inventory.Gold :
+            CurrencyWallet.RewardKind(id) is { } kind ? CurrencyWallet.Get(inventory, kind) :
+            inventory.Items.Where(row => row.Position.List == InventoryListType.Main && row.Core.ItemId == id).Sum(row => row.Core.Count);
+
+        static EnchantmentCatalog OtherMapping()
+        {
+            const int other = 990271;
+            string card = "[stackable type]\n`[material expert job]` 1\n[string data]\n`test.img` `[weapon]`\n[/string data]\n" +
+                "[enchant table]\n[enchant index] 0\n[physical attack] 1\n[/enchant index]\n" +
+                "[enchant index] 1\n[physical attack] 2\n[/enchant index]\n[/enchant table]\n";
+            string[] strings = ["[enchant table]", "[enchant index]", "[physical attack]", "[/enchant index]", "[/enchant table]"];
+            var tokens = new List<PvfToken> { new(3, 0) };
+            foreach (int level in new[] { 0, 1 })
+                tokens.AddRange([new(3, 1), new(0, level), new(3, 2), new(0, level + 1), new(3, 3)]);
+            tokens.Add(new(3, 4));
+            return new(path => path == "stackable/bead.stk" ?
+                $"[stackable type]\n`[enchant waste]` 0\n[monster card id]\n{other}\n" : card,
+                new Dictionary<int, string> { [beadId] = "bead.stk", [other] = "other.stk" },
+                _ => new(tokens.ToArray(), index => strings[index]));
+        }
     }
 }

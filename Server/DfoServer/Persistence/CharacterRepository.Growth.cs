@@ -17,7 +17,8 @@ internal sealed partial class CharacterRepository
         SinglePlayerDungeonRun run, PreparedDungeonDeath prepared, DungeonExperienceReward reward, CharacterGrowthCatalog catalog,
         FrozenDungeonGroundDeath? loot = null, QuestDropPlan? questDrops = null, DfoServer.Game.Inventory.Services.EquipmentGrowthPlan? equipmentGrowth = null,
         DfoServer.Game.Raids.AntonRaidBattle.FiendwarTitleDeath? fiendwarTitle = null,
-        DungeonDirectPickupPlan? directPickup = null) => owner.Execute(() =>
+        DungeonDirectPickupPlan? directPickup = null,
+        SpecialDungeonClearRewardPlan? specialClearReward = null) => owner.Execute(() =>
     {
         ArgumentNullException.ThrowIfNull(expected);
         ArgumentNullException.ThrowIfNull(run);
@@ -31,8 +32,9 @@ internal sealed partial class CharacterRepository
             return CommitAltarQuestDeath(owner, expected, run, prepared, reward, catalog, questDrops);
         }
         ulong amount = reward.Amount;
+        bool noKillExperience = run.Entry.DisableMonsterAndClearExperience || run.Entry.ExperienceWeight == 0;
         if (run.TagEvildomLife is not null || !run.IsPendingDeath(prepared) || prepared.Death.Identity.CharacterId != expected.Id ||
-            (run.Entry.DisableMonsterAndClearExperience ? amount != 0 : amount == 0) ||
+            (noKillExperience ? amount != 0 : amount == 0) ||
             string.IsNullOrWhiteSpace(reward.RuleId) || reward.RuleId.Length > 128 || reward.MonsterId != prepared.Monster.MonsterId ||
             reward.MonsterLevel != prepared.Monster.CandidateLevel || reward.ResourceSource != DungeonKillExperienceCatalog.ResourcePath)
             throw new InvalidDataException("成长提交需要本角色当前实例的待提交死亡及符合副本声明的经验");
@@ -77,7 +79,8 @@ internal sealed partial class CharacterRepository
                 proficiencyGained = checked((uint)reader.GetInt64(15));
             }
         }
-        var current = duplicate || equipmentGrowth is not null ? Require(db, tx, owner.Account, expected.Name, duplicate ? null : expected.Inventory)
+        var current = duplicate || equipmentGrowth is not null || specialClearReward is not null
+            ? Require(db, tx, owner.Account, expected.Name, duplicate ? null : expected.Inventory)
             : ReadDungeonGrowthCharacter(db, tx, owner.Account, expected, questDrops);
         if (current.Id != expected.Id)
             throw new InvalidOperationException("成长角色或账号已变化");
@@ -96,8 +99,17 @@ internal sealed partial class CharacterRepository
             CacheDungeonLoot(owner, expected, prepared, loot);
             var replayEquipment = equipmentGrowth?.Changes.Where(change =>
                 current.Inventory.Find(change.After.Position) == change.After).ToImmutableArray() ?? [];
+            var replaySpecialSlots = specialClearReward is null ? [] :
+                specialClearReward.Plan.ChangedSlots.Where(slot =>
+                    current.Inventory.Find(slot)?.Core == specialClearReward.Plan.AfterIndex.Find(slot)?.Core).ToImmutableArray();
             return new DungeonGrowthCommit(current, true, gained, proficiencyGained)
-                { CommittedBonuses = replayBonuses, EquipmentChanges = replayEquipment, DirectPickup = replayDirectPickup };
+            {
+                CommittedBonuses = replayBonuses,
+                EquipmentChanges = replayEquipment,
+                DirectPickup = replayDirectPickup,
+                SpecialClearRewardSlots = replaySpecialSlots,
+                SpecialClearRewardMailOverflow = specialClearReward is { Plan.OverflowItems.IsEmpty: false }
+            };
         }
         var committedBonuses = RevalidateGuildExperience(db, tx, owner.Account, expected.Id, reward.Bonuses,
             DateTimeOffset.UtcNow.ToUnixTimeSeconds());
@@ -147,6 +159,36 @@ internal sealed partial class CharacterRepository
                     ? new(expected.Inventory, appliedDirectPickup.After, "dungeon_direct_pickup", new(expected))
                     : inventoryPlan.WithAfter(appliedDirectPickup.After);
         }
+        if (specialClearReward is not null)
+        {
+            var expectedBefore = inventoryPlan?.After ?? expected.Inventory;
+            if (!ReferenceEquals(specialClearReward.Expected, expected) || !ReferenceEquals(specialClearReward.Death, prepared) ||
+                !SameInventory(expectedBefore, specialClearReward.Plan) ||
+                specialClearReward.Plan.CharacterPrecondition?.MatchesIdentity(expected) == false)
+                throw new InvalidDataException("特殊地下城通关奖励规划必须基于同笔击杀的当前库存");
+            if (specialClearReward.Plan.Changed)
+                inventoryPlan = inventoryPlan is null
+                    ? new(expected.Inventory, specialClearReward.Plan.After, specialClearReward.Plan.Reason,
+                        specialClearReward.Plan.CharacterPrecondition, specialClearReward.Plan.OverflowItems)
+                    {
+                        OverflowMailSender = specialClearReward.Plan.OverflowMailSender,
+                        OverflowMailText = specialClearReward.Plan.OverflowMailText
+                    }
+                    : inventoryPlan.WithAfter(specialClearReward.Plan.After,
+                        overflowItems: inventoryPlan.OverflowItems.IsEmpty
+                            ? specialClearReward.Plan.OverflowItems
+                            : inventoryPlan.OverflowItems.AddRange(specialClearReward.Plan.OverflowItems),
+                        overflowMailSender: specialClearReward.Plan.OverflowMailSender,
+                        overflowMailText: specialClearReward.Plan.OverflowMailText);
+        }
+        if (!reward.AppliedVariousBuffs.IsDefaultOrEmpty)
+        {
+            var before = inventoryPlan?.After ?? expected.Inventory;
+            var after = before with { VariousBuffs = Game.Inventory.Services.VariousBuffPolicy.Consume(before.VariousBuffs,
+                Game.Inventory.Models.VariousBuffLifetime.EffectApplications, reward.AppliedVariousBuffs.ToHashSet()) };
+            if (!after.VariousBuffs.SequenceEqual(before.VariousBuffs))
+                inventoryPlan = inventoryPlan is null ? new(expected.Inventory, after, "various_buff_effect_application", new(expected)) : inventoryPlan.WithAfter(after);
+        }
         var inventoryCharacter = inventoryPlan is null ? current : CommitInventoryInTransaction(db,tx,owner,current,expected,inventoryPlan);
         command.Parameters.AddWithValue("$revision", inventoryCharacter.Revision);
         command.Parameters.AddWithValue("$increment", inventoryPlan?.Changed == true ? 0 : 1);
@@ -167,10 +209,11 @@ internal sealed partial class CharacterRepository
         if (skillsChanged)
             WriteCanonicalSkills(db, tx, expected.Id, plan.Learning);
         // 副本击杀经验计入冒险团：按角色更新前的有效位置推进里程，满级部分按资源倍率折算。
+        AdventureProgressionCommit? adventureCommit = null;
         if (CreditAdventure(db, tx, owner.Account, expected.Id, AdventureCreditSource.Earned, amount,
                 EffectivePosition(current.Level, current.Learning.Experience), current.Level, plan.TargetLevel,
                 DateTimeOffset.UtcNow) is { } credit)
-            WriteAdventureCredit(db, tx, owner.Account, credit, AdventureCreditSource.Earned, adventureCatalog!);
+            adventureCommit = WriteAdventureCredit(db, tx, owner.Account, credit, AdventureCreditSource.Earned, adventureCatalog!);
         // 熟练度与角色经验同源：满级溢出全额、跨过95级入口线只计入口线以上部分。
         // 回执保存这笔经验里真正记入熟练度的额度，重复报告与显示层都按同一有效经验回放。
         bool proficiencyChanged = false;
@@ -199,7 +242,7 @@ internal sealed partial class CharacterRepository
                 ? QuestHuntProgress.MonsterDeath(current.ActiveMainQuests,run.Entry,quests,prepared.Monster)
                 : QuestHuntProgress.AiCharacterDeath(current.ActiveMainQuests,run.Entry,quests,prepared.Monster.MonsterId);
             active = QuestHuntProgress.QuestObjectRoomClear(active,run.Entry,quests,prepared.Result.ClearFact);
-            if (inventory is not null) active = QuestInventoryProgress.Refresh(active,inventoryCharacter.Inventory,quests,DateTimeOffset.UtcNow.ToUnixTimeSeconds(),QuestEligibility.Completed(current));
+            if (inventoryPlan is not null) active = QuestInventoryProgress.Refresh(active,inventoryCharacter.Inventory,quests,DateTimeOffset.UtcNow.ToUnixTimeSeconds(),QuestEligibility.Completed(current));
             active = QuestStateProgress.Refresh(active,current with { Level = plan.TargetLevel, Learning = plan.Learning,
                 Inventory = inventoryCharacter.Inventory },quests);
             WriteQuestConditions(db,tx,expected.Id,current.ActiveMainQuests,active);
@@ -232,13 +275,25 @@ internal sealed partial class CharacterRepository
             throw new InvalidOperationException("持久成长结果与候选不一致");
         ApplyBattlePassDungeonDeath(db,tx,owner.Account,run,prepared);
         ApplyBattlePassHellCosmoCompletion(db, tx, owner.Account, run, prepared);
+        if (!run.Entry.IsPractice && !run.Entry.IsTrainingRoom && !run.Entry.IsTutorial &&
+            !run.Entry.IsClassExperience && !run.Entry.IsQuestReplay && amount > 0)
+            ApplyBattlePassExperienceGain(db, tx, owner.Account, "dungeon_growth",
+                FormattableString.Invariant($"{expected.Id}:{death.EventId:N}"), amount,
+                prepared.BattlePassActivity?.Clock.GetUtcNow());
         var itemRead = PrepareInventoryItemRead(db, tx, owner.Account, committed.Id, current.Inventory, committed.Inventory);
         var directPickupCommit = SaveDirectPickupCommit(db, tx, owner, committed, appliedDirectPickup);
         tx.Commit();
         RememberInventoryItems(committed.Inventory, itemRead);
         CacheDungeonLoot(owner, expected, prepared, loot);
         return new DungeonGrowthCommit(committed, false, checked((uint)plan.GainedExperience), proficiencyGained)
-            { CommittedBonuses = committedBonuses, EquipmentChanges = equipmentGrowth?.Changes ?? [], DirectPickup = directPickupCommit };
+        {
+            Adventure = adventureCommit,
+            CommittedBonuses = committedBonuses,
+            EquipmentChanges = equipmentGrowth?.Changes ?? [],
+            DirectPickup = directPickupCommit,
+            SpecialClearRewardSlots = specialClearReward?.Plan.ChangedSlots ?? [],
+            SpecialClearRewardMailOverflow = specialClearReward is { Plan.OverflowItems.IsEmpty: false }
+        };
     });
 
     static void WriteDungeonGrowthReceipt(Microsoft.Data.Sqlite.SqliteConnection db, Microsoft.Data.Sqlite.SqliteTransaction tx,

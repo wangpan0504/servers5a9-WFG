@@ -73,9 +73,10 @@ internal static class ImperialArenaPackets
         return stream.ToArray();
     }
 
+    // 0177B770收到1402后无论count是否为0都会打开201逐关KO奖励窗；仅普通模式实发单关奖励时构造。
     public static byte[] Reward(ImmutableArray<ImperialArenaRewardItem> reward)
     {
-        if (reward.Length > 2) throw new InvalidDataException("帝国奖励通知最多两行");
+        if (reward.IsEmpty || reward.Length > 2) throw new InvalidDataException("帝国逐关奖励通知必须为1至2行");
         using var stream = new MemoryStream();
         using var writer = new BinaryWriter(stream);
         writer.Write(checked((byte)reward.Length));

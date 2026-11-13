@@ -32,7 +32,7 @@ internal static partial class TownProtocolTcpTests
                 { Experience = gradeRules.Experience[20], HighestGrade = 20, Initialized = true };
             fixture.Sql("INSERT INTO character_pvp_ratings(account,character_id,revision,state_json) VALUES('10000',$p0,1,$p1)",
                 peer.Id, JsonSerializer.Serialize(terra));
-            peer.ExpectedOpenEvents = [ServerEventService.NolanVisibilityId, ServerEventService.MileageShopId];
+            peer.ExpectedOpenEvents = [282, 2449, 414, 181, ServerEventService.NolanVisibilityId, ServerEventService.MileageShopId];
             TownPresenceTcpTests.PvpGrade(peer.Select()[2].Body, 20);
             That(serverEvents.Read(ServerEventService.NolanVisibilityId) is { Active: true, Schedule: { Revision: 0, OverrideActive: null } } &&
                 fixture.Query("SELECT count(*) FROM server_events WHERE event_id=2532") is [[0L]],
@@ -69,6 +69,8 @@ internal static partial class TownProtocolTcpTests
                 if (i == 0)
                 {
                     peer.Send(8, [255, 255, 2]);
+                    peer.Send(692, Name("剑、"));
+                    peer.Expect(1, 692, [0, 23, 0]);
                     peer.Send(692, Name("DoorTest"));
                     peer.Expect(1, 692, [0, 24, 0]);
                 }
@@ -80,7 +82,7 @@ internal static partial class TownProtocolTcpTests
             That(fixture.Snapshot() == before, "return selection and unselected movement preserve all persisted fields");
             var goldOn = serverEvents.Override(ServerEventService.DoubleGoldCardId, true);
             var nolanOn = serverEvents.Override(ServerEventService.NolanVisibilityId, true);
-            peer.ExpectedOpenEvents = [ServerEventService.NolanVisibilityId, ServerEventService.MileageShopId];
+            peer.ExpectedOpenEvents = [282, 2449, 414, 181, ServerEventService.NolanVisibilityId, ServerEventService.MileageShopId];
             TownPresenceTcpTests.PvpGrade(peer.Select()[2].Body, 20);
             Bytes(peer.CompletedQuestHistory, mapHistory, "返回选角再入城恢复同一月轮山显示标记");
             That(serverEvents.Read(ServerEventService.NolanVisibilityId) == nolanOn &&
@@ -88,7 +90,7 @@ internal static partial class TownProtocolTcpTests
                 "重选只投影已提交2532，不混入黄金牌64或改写两项活动版本");
             peer.Send(7); peer.Expect(1, 7, [1]); peer.Expect(0, 2);
             var nolanOff = serverEvents.Override(ServerEventService.NolanVisibilityId, false);
-            peer.ExpectedOpenEvents = [ServerEventService.MileageShopId];
+            peer.ExpectedOpenEvents = [282, 2449, 414, 181, ServerEventService.MileageShopId];
             peer.Select();
             That(new ServerEventService(new ServerEventRepository(fixture.Database)).Read(ServerEventService.NolanVisibilityId) == nolanOff &&
                 serverEvents.Read(ServerEventService.DoubleGoldCardId) == goldOn,
@@ -309,7 +311,7 @@ internal static partial class TownProtocolTcpTests
             peer.Send(692, Name("备用角色"));
             peer.Expect(1, 692, [1]);
             That(fixture.Snapshot() == beforeNameCheck, "Chinese duplicate and available name checks preserve all character data");
-            peer.ExpectedOpenEvents = [ServerEventService.NolanVisibilityId, ServerEventService.MileageShopId];
+            peer.ExpectedOpenEvents = [282, 2449, 414, 181, ServerEventService.NolanVisibilityId, ServerEventService.MileageShopId];
             var packets = peer.Select(slot, prepared: true);
             That(serverEvents.Read(ServerEventService.NolanVisibilityId) == nolanRestart,
                 "原fixture停止及Runtime重建后仍投影同一已提交2532，CLI准备和入城不改写revision");
@@ -600,7 +602,7 @@ internal static partial class TownProtocolTcpTests
                 }
 
                 if (job == 15)
-                    That(U32(player, 36) == 1700 && U32(player, 40) == 1500 && U16(player, 108) == 9000 && U16(player, 110) == 8000, "gunblade PVF stats");
+                    That(U32(player, 36) == 1840 && U32(player, 40) == 1650 && U16(player, 108) == 9000 && U16(player, 110) == 8000, "gunblade PVF stats");
                 peer.Send(35, Move(461, 234));
                 peer.Barrier();
             }

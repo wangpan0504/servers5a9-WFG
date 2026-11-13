@@ -1,8 +1,10 @@
 using System.Collections.Immutable;
+using DfoServer.Game.Adventure;
 using DfoServer.Game.Dungeons;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Quests;
 using DfoServer.Game.Raids;
+using DfoServer.GameWorld.Adventure;
 using DfoServer.GameWorld.Dungeons;
 
 namespace DfoServer.Game.Characters;
@@ -21,13 +23,16 @@ internal sealed record SelectionContents(int DespairUsed, int DespairFloor, int 
     int TayberrsRemaining, int DazzlementUsed, int HopeRemaining, int WarRemaining, int GuildRemaining);
 
 internal sealed class SelectionContentsRules(TowerOfDespairCatalog despair, GriefTowerCatalog grief,
-    DungeonIncountCatalog incounts, EvildomWarCatalog? war, RaidWeeklyCycle? lukeCycle = null)
+    DungeonIncountCatalog incounts, EvildomWarCatalog? war, RaidWeeklyCycle? lukeCycle = null,
+    AdventureCatalog? adventure = null)
 {
     public SelectionTowerCounts Towers(SelectionContentsState state)
     {
-        int despairMaximum = checked(despair.AccountMaximum + despair.AdventureCounts
+        int towerBonus = despair.AdventureCounts
             .Where(row => state.AdventureLevel >= row.MinimumLevel && state.AdventureLevel <= row.MaximumLevel)
-            .Select(row => row.AdditionalCount).DefaultIfEmpty().Single());
+            .Select(row => row.AdditionalCount).DefaultIfEmpty().Single();
+        int benefitBonus = AdventureBenefitPolicy.DespairTowerExtraEntries(state.AdventureLevel, adventure);
+        int despairMaximum = checked(despair.AccountMaximum + Math.Max(towerBonus, benefitBonus));
         int griefMaximum = checked(grief.DeclaredAccountMaximum + grief.DeclaredAdventureBands
             .Where(row => state.AdventureLevel >= row.MinimumLevel && state.AdventureLevel <= row.MaximumLevel)
             .Sum(row => row.AdditionalCount));

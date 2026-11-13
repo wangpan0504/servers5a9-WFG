@@ -5,6 +5,8 @@ using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Party;
 using DfoServer.GameWorld.Items;
+using DfoServer.GameWorld.Dungeons;
+using DfoServer.Game.Dungeons;
 using DfoServer.GameWorld.Raids;
 using DfoServer.GameWorld.Towns;
 
@@ -17,6 +19,7 @@ internal sealed record RaidLifecycleAdmission(string Source, DateTimeOffset At, 
 internal sealed record RaidStartReservation(RaidActor Actor, Character Expected, Location Position, InventoryPlan Inventory)
 {
     public RaidLifecycleAdmission? Lifecycle { get; init; }
+    public SingleDungeonAdmission? SingleBinding { get; init; }
 }
 internal sealed record RaidStartReceipt(RaidParty Party, ImmutableArray<RaidStartReservation> Reservations,
     ImmutableArray<Character> Characters, PartyNotice[] Squads, RaidCost Cost)
@@ -56,8 +59,13 @@ internal sealed class RaidStartCommands : IDisposable
 internal sealed class AntonRaidStart(RaidRegistry registry, PartyService parties, IRaidStartStore store,
     TownCatalog towns, EpicPieceCatalog pieces, TimeProvider? clock = null, bool phaseProgress = false,
     AntonResourceRewards? rewards = null, LukeRaidClocks? timers = null, PreyGuideRewards? preyRewards = null,
-    FiendwarRewards? fiendwarRewards = null, Random? fiendwarMazeRandom = null)
+    FiendwarRewards? fiendwarRewards = null, Random? fiendwarMazeRandom = null, PreyGuideRewards? preyTeamRewards = null,
+    DungeonDropControlSettings? dropControl = null, DungeonIncountCatalog? incounts = null)
 {
+#if DEBUG
+    internal bool DebugIgnorePreyEntryLimits { get; init; }
+    internal bool DebugIgnorePreyRewardLimits { get; init; }
+#endif
     internal bool LeaveExpiredAnton(RaidActor actor, Guid instance)
     {
         // 调用方持原连接门禁；只清理该次已失败实例，不能退出随后重建的团。
@@ -68,21 +76,53 @@ internal sealed class AntonRaidStart(RaidRegistry registry, PartyService parties
         return true;
     }
 
-    public RaidChange? Leave(RaidActor actor, ushort target, Guid? expiredAntonInstance = null)
+    internal Game.Town.TownTravelReceipt? ReturnPreyWaiting(RaidActor actor, Guid instance, bool completedPhase = false)
     {
         var result = actor.Owner.Execute(() =>
         {
+            Game.Town.TownTravelReceipt? receipt;
+            if (completedPhase)
+            {
+                var battle = actor.Session.CurrentRaidBattle(actor);
+                receipt = battle is { Kind: RaidKind.Prey, PreyGuide: false } && battle.View.Phase == 1 &&
+                    battle.View.Phase + 1 == battle.PhaseCount &&
+                    battle.RequiresLukeCompletedPhaseReturn(actor, instance, battle.View.Phase)
+                        ? actor.Session.ReturnLukeRejoinToWaiting(actor) : null;
+            }
+            else receipt = actor.Session.ReturnFailedPreyWaiting(actor, instance);
+            // 位置SQL成功后才解除本实例的临时Party；攻坚成员与整局标记仍由原Raid保留。
+            PartyNotice[] notices = receipt is not null && parties.Current(actor.Session)?.PreyBattleId == instance
+                ? parties.DetachNotices(actor.Session) : [];
+            return (Receipt: receipt, Notices: notices);
+        });
+        if (result.Notices.Length != 0) parties.Publish(result.Notices);
+        return result.Receipt;
+    }
+
+    public RaidChange? Leave(RaidActor actor, ushort target, Guid? expiredAntonInstance = null)
+    {
+        var result = actor.Owner.Execute<(RaidChange? Change, PartyNotice[] Notices, AntonRaidBattle? Battle, AntonRaidBattleView? BeforeBattle)>(() =>
+        {
             var departingBattle = actor.Session.CurrentRaidBattle(actor);
             var beforeBattle = departingBattle?.View;
-            // 旧超时回调在任何票据写入前拒绝，不能先把后来新团的恢复资格记为主动放弃。
-            if (expiredAntonInstance is { } expected &&
-                (!actor.IsCurrent || departingBattle is not { Kind: RaidKind.Anton or RaidKind.Fiendwar, View.PhaseExpired: true } ||
-                    departingBattle.Instance != expected || registry.Find(actor)?.Started?.InstanceId != expected))
-                return (Change: (RaidChange?)null, Notices: Array.Empty<PartyNotice>(), Battle: departingBattle, BeforeBattle: beforeBattle);
+            var before = registry.Find(actor);
+            // 旧超时回调在任何票据写入前拒绝，不能先放弃后来新团的恢复资格。
+            if (expiredAntonInstance is { } expected && (!actor.IsCurrent || departingBattle is not { Kind: RaidKind.Anton or RaidKind.Fiendwar, View.PhaseExpired: true } ||
+                departingBattle.Instance != expected || before?.Started?.InstanceId != expected))
+                return (null, [], departingBattle, beforeBattle);
+            Game.Town.TownTravelReceipt? townReturn = null;
+            if (target == actor.Character && actor.CanManage && before is { Type: 3 } &&
+                actor.Session.Selected?.Position is { Town: 59 } pos &&
+                (before.Guide ? pos.Area is >= 3 and <= 5 : pos.Area is >= 2 and <= 5))
+            {
+                townReturn = actor.Session.ReturnPreyLobby(actor, before);
+                if (townReturn is null) return (null, [], departingBattle, beforeBattle);
+            }
             if (target == actor.Character && actor.CanManage && departingBattle is { Kind: RaidKind.Fiendwar } &&
                 registry.Find(actor)?.Started?.InstanceId == departingBattle.Instance)
                 actor.Session.RecordFiendwarDeparture(actor, departingBattle, disconnected: false);
             var change = registry.Leave(actor, target);
+            if (change is not null && townReturn is not null) change = change with { TownReturn = townReturn };
             if (change is { Before.Started: { } started, Removed: { } departed })
                 departed.Session.DetachRaidCombatStart(departed, started.InstanceId);
             PartyNotice[] notices = change?.Before.Started is not null && change.Removed is { } removed
@@ -99,7 +139,15 @@ internal sealed class AntonRaidStart(RaidRegistry registry, PartyService parties
     {
         if (expected.Leader != actor.Character) return new(8, "not-leader");
         if (expected.Started is not null) return new(0, "already-started", Replay: true);
-        bool prey = definition.Type == 3 && expected.Guide && expected.Capacity == 1 && expected.Members.Length == 1 && preyRewards is not null;
+        bool preyGuide = definition.Type == 3 && expected.Guide && expected.Capacity == 1 && expected.Members.Length == 1 && preyRewards is not null;
+        bool preyTeam = definition.Type == 3 && !expected.Guide && preyTeamRewards is not null;
+        bool prey = preyGuide || preyTeam;
+        if (preyTeam)
+        {
+            if (definition.Resources?.PreyTeam is not { PreyTeamStartReady: true } teamResources)
+                return new(19, "prey-team-definition-unavailable");
+            definition = definition with { Resources = teamResources };
+        }
         bool fiendwar = definition.Type == 2 && fiendwarRewards is not null && definition.Resources?.Fiendwar is not null;
         if (fiendwar && expected.Guide)
         {
@@ -113,8 +161,12 @@ internal sealed class AntonRaidStart(RaidRegistry registry, PartyService parties
         if (definition.Resources.MissingItems.Contains(cost.ItemId)) return new(19, "entry-cost-resource-missing");
         if (expected.Members.Length < definition.StartMinimum) return new(22, "too-few-members");
         if (expected.Members.Length > definition.MemberMax || expected.Members.Length is < 1 or > 20 ||
-            (!fiendwar && (expected.Members.Any(m => m.Squad is < 1 or > 5) || expected.Members.GroupBy(m => m.Squad).Any(g => g.Count() > 4))))
+            (!fiendwar && !preyTeam && (expected.Members.Any(m => m.Squad is < 1 or > 5) || expected.Members.GroupBy(m => m.Squad).Any(g => g.Count() > 4))))
             return new(19, "squads-unassigned");
+        if (preyTeam && (expected.Members.Any(member => member.Squad is < 1 or > 3 ||
+            member.PreyPosition / 10 != member.Squad || member.PreyPosition % 10 is < 1 or > 4) ||
+            expected.Members.Select(member => member.PreyPosition).Distinct().Count() != expected.Members.Length))
+            return new(19, "prey-team-positions-unassigned");
         var now = (clock ?? TimeProvider.System).GetUtcNow();
         var reservations = PlanReservations(expected, cost, room, towns, pieces, now, out var rejection);
         if (rejection is not null) return new(19, rejection);
@@ -131,28 +183,56 @@ internal sealed class AntonRaidStart(RaidRegistry registry, PartyService parties
             timeout = new("anton-local-phase-seconds-v1;etc/raid/anton.etc", limit.Values.Select(row => row.Number).ToImmutableArray());
             if (!timeout.Matches(definition.Resources.Script)) return new(19, "anton-phase-timeout-unavailable");
         }
-        var completion = prey ? preyRewards!.Create(actor.Session.PremiumPcRoom) : null;
+        ImmutableDictionary<ushort, ImmutableArray<RaidPhaseRewardPolicy>>? memberRewards = null;
+        decimal epicMultiplier = dropControl?.Current.ResolveReward(DfoServer.Game.Dungeons.DungeonDropScope.Raid)?.Equipment ?? 1;
+        var completion = preyGuide ? preyRewards!.Create(actor.Session.PremiumPcRoom, epicMultiplier: epicMultiplier,
+            privilege: reservations.Single().Expected.Inventory.PrivilegeService.IsActive(now.ToUnixTimeSeconds())) : null;
+        if (preyTeam)
+        {
+            var policies = reservations.ToDictionary(member => member.Actor.Character,
+                member => preyTeamRewards!.CreateTeam(member.Actor.Session.PremiumPcRoom,
+                    member.Expected.Inventory.PrivilegeService.IsActive(now.ToUnixTimeSeconds()), epicMultiplier: epicMultiplier));
+            completion = policies[actor.Character];
+            memberRewards = policies.ToImmutableDictionary(row => row.Key,
+                row => row.Value.Phases.Select(phase => phase.Rewards).ToImmutableArray());
+        }
         if (completion is not null)
         {
             int daily = definition.Resources.Script.Headers.Single(row => row.Tag == "[daily account enter limit]").Values.Single().Number;
+#if DEBUG
+            bool ignoreEntryLimits = prey && DebugIgnorePreyEntryLimits;
+            if (prey && DebugIgnorePreyRewardLimits)
+                completion = completion with { WeeklyClearLimit = int.MaxValue,
+                    Phases = completion.Phases.Select(phase => phase with { WeeklyEligibilityLimit = int.MaxValue }).ToImmutableArray() };
+#else
+            const bool ignoreEntryLimits = false;
+#endif
+            // 调试策略只改变内存额度，仍沿原事务保存入场、扣票及奖励记录。
             reservations = reservations.Select(row => row with { Lifecycle = new(completion.Source, now,
-                completion.Cycle.Key(now), completion.WeeklyClearLimit, daily) }).ToImmutableArray();
+                ignoreEntryLimits ? null : completion.Cycle.Key(now),
+                ignoreEntryLimits ? null : completion.WeeklyClearLimit, ignoreEntryLimits ? null : daily) }).ToImmutableArray();
             int total = definition.Resources.Script.Headers.Single(row => row.Tag == "[phase total time over]").Values.Single().Number;
-            timeout = new(PreyGuideRewards.Source, [total, total]);
+            timeout = new(completion.Source, Enumerable.Repeat(total, definition.Resources.Script.Phases.Length).ToImmutableArray());
         }
         int guideRoute = fiendwar && expected.Guide ? store.FiendwarGuideRoute(actor, now) : 0;
-        ImmutableDictionary<ushort, ImmutableArray<RaidPhaseRewardPolicy>>? memberRewards = null;
+        if (preyGuide && incounts is not null)
+        {
+            var group = incounts.SingleGroups.SingleOrDefault(group => group.Id == 3);
+            if (group is null) return new(19, "prey-guide-binding-group-missing");
+            var binding = SingleDungeonAdmission.At(group, clock ?? TimeProvider.System);
+            reservations = reservations.Select(row => row with { SingleBinding = binding }).ToImmutableArray();
+        }
         if (fiendwar)
         {
             if (expected.Members.Any(member => RaidAdmissionPlan.Rejection(member.Actor.Session.ChannelEntry,
                 member.Actor.Session.Selected!) is not null || parties.Current(member.Actor.Session) is not null))
                 return new(19, "fiendwar-member-not-ready");
-            // 在全团owner/事务之外抽取每人完整结果，SQL重试与网络重发均复用原冻结产物。
+            // 在全团owner/事务之外抽取每人完整结果，SQL重试与网络重发均复用原产物。
             var policies = reservations.ToDictionary(member => member.Actor.Character,
                 member => expected.Guide ? fiendwarRewards!.CreateGuide(member.Actor.Session.PremiumPcRoom,
-                    member.Expected.Inventory.PrivilegeService.IsActive(now.ToUnixTimeSeconds())) :
+                    member.Expected.Inventory.PrivilegeService.IsActive(now.ToUnixTimeSeconds()), epicMultiplier: epicMultiplier) :
                     fiendwarRewards!.Create(member.Actor.Session.PremiumPcRoom,
-                        member.Expected.Inventory.PrivilegeService.IsActive(now.ToUnixTimeSeconds())));
+                        member.Expected.Inventory.PrivilegeService.IsActive(now.ToUnixTimeSeconds()), epicMultiplier: epicMultiplier));
             completion = policies[actor.Character];
             memberRewards = policies.ToImmutableDictionary(row => row.Key,
                 row => row.Value.Phases.Select(phase => phase.Rewards).ToImmutableArray());
@@ -160,11 +240,14 @@ internal sealed class AntonRaidStart(RaidRegistry registry, PartyService parties
                 completion.Cycle.Key(now), completion.WeeklyClearLimit, definition.Resources.Fiendwar!.DailyAccountLimit, expected.Guide ? guideRoute : null) }).ToImmutableArray();
         }
         var kind = fiendwar ? RaidKind.Fiendwar : prey ? RaidKind.Prey : RaidKind.Anton;
+        AccountMaterialDefinition? songLimit = preyGuide ? preyRewards!.UndefeatedSongLimit
+            : preyTeam ? preyTeamRewards!.UndefeatedSongLimit
+            : fiendwar ? fiendwarRewards!.UndefeatedSongLimit : null;
         var battle = new AntonRaidBattle(definition.Resources.Script, kind: kind, completion: completion,
             antonPhaseProgress: !prey && !fiendwar && phaseProgress, clock: clock, antonRewards: prey || fiendwar ? null : rewards, phaseTimeout: timeout,
             fiendwar: fiendwar ? definition.Resources.Fiendwar : null, memberRewards: memberRewards, fiendwarRoute: guideRoute,
-            fiendwarMazeRandom: fiendwarMazeRandom);
-        battle.PrepareFiendwarPayments(reservations);
+            fiendwarMazeRandom: fiendwarMazeRandom, preyGuide: preyGuide, epicMultiplier: epicMultiplier, undefeatedSongLimit: songLimit);
+        battle.PrepareRaidPayments(reservations);
         var timerLease = timers?.Reserve(battle);
         if (timers is not null && timerLease is null) return new(19, "anton-clock-capacity");
         bool installed = false;
@@ -192,7 +275,7 @@ internal sealed class AntonRaidStart(RaidRegistry registry, PartyService parties
                 }
                 var result = registry.CommitStart(actor, expected, reservations, cost, () =>
                 {
-                    if (!fiendwar) return parties.CreateRaidSquads(expected, CommitMembers);
+                    if (!fiendwar && !preyTeam) return parties.CreateRaidSquads(expected, CommitMembers);
                     if (expected.Members.Any(member => parties.Current(member.Actor.Session) is not null)) return null;
                     var committed = CommitMembers();
                     return (committed.Start, committed.Characters, Array.Empty<PartyNotice>());
@@ -208,6 +291,7 @@ internal sealed class AntonRaidStart(RaidRegistry registry, PartyService parties
             return startResult;
         }
         catch (RaidLifecycleRejectedException error) { return new(19, error.Reason); }
+        catch (SingleDungeonAdmissionRejectedException error) { return new(19, error.Message); }
         catch (InvalidOperationException) when (reservations.Any(r => !r.Actor.IsCurrent))
         { return new(19, "member-owner-changed"); }
         finally { if (!installed) timerLease?.Dispose(); }

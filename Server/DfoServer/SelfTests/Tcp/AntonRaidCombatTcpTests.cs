@@ -204,6 +204,8 @@ internal static class AntonRaidCombatTcpTests
                 peer.Send(42); Bytes(peer.Expect(1, 42).Body, [1], "复用正式回城请求42与ACK");
                 Bytes(peer.Expect(0, 3).Body, [1, (byte)created.Id, (byte)(created.Id >> 8), 0], "回城先发本人NOTI3状态");
                 peer.Expect(0, 24);
+                Bytes(peer.Expect(0, 583).Body, [1, 7, 0, 0, 0, 1, 0, 0, 0],
+                    "回城场景恢复本合成战役唯一HP符号7=1，不重播阶段演出或吞其它通知");
                 peer.Send(1278); peer.Expect(1, 1278);
                 That(session.Phase == SessionPhase.Town, "位置提交和场景初始化完成后回到城镇");
             }

@@ -41,7 +41,7 @@ internal static class AdventureCoreTcpTests
             var roster = peer.Expect(1, 1403).Body.AsSpan(1).ToArray();
             Information(roster, 0, "adventurea", 2);
             That(U32(roster, 18 + 72 + 48) == 95 && roster[18 + 72] == 0 && roster[18 + 73] == 1 &&
-                roster[18 + 72 + 42] == 0, "轻量账号名册展示合法二觉角色及初始零熟练角标，不装载其坏背包");
+                roster[18 + 72 + 42] == 2 && U32(roster, 18 + 72 + 4) == 0, "轻量账号名册展示合法二觉角色、真实服务器与独立零熟练度，不装载其坏背包");
             peer.Select();
             AccountName(peer.AdventureName, "");
             Information(peer.AdventureInfo, peer.Id, "adventurea", 2);
@@ -76,14 +76,14 @@ internal static class AdventureCoreTcpTests
             AccountName(peer.Expect(0, 1375).Body, "测试团");
             Information(peer.Expect(0, 1343).Body, 0, "测试团", 2);
             SelectionContentsTcpTests.ExpectTowers(peer, fixture, resources, "adventurea");
-            // 1343 名册行 offset42 是选角卡片熟练角标，客户端 010314C0 读入显示结构 +0x2C；
-            // 服务端投影角色持久熟练等级而不是频道地域。放在重开之后设置，避免把熟练度
-            // 计入账号开启经验，影响本用例对初始进度的断言。
+            // 收藏服务器与熟练度独立；重开后改变持久熟练度，不能让服务器名称随之改变。
+            // 此时再设置熟练度，避免影响初次开启经验断言。
             Execute("UPDATE character_dungeon_state SET proficiency_level=188,proficiency_experience=871311064 WHERE character_id=" + other);
             peer.Send(1403, [0, 0]);
             var refreshed = peer.Expect(1, 1403).Body.AsSpan(1).ToArray();
-            That(U32(refreshed, 18 + 72 + 48) == 95 && refreshed[18 + 72 + 42] == 188,
-                "1343名册offset42投影角色持久熟练等级");
+            That(U32(refreshed, 18 + 72 + 48) == 95 && refreshed[18 + 72 + 42] == 2 &&
+                U32(refreshed, 18 + 72 + 4) == 188 && U16(refreshed, 18 + 72 + 44) == 188,
+                "1343名册服务器仍为真实区服，持久熟练度只更新独立字段");
             peer.Send(692, Name("GroupProbe")); peer.Expect(1, 692, [1]);
         }
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0,
@@ -100,7 +100,7 @@ internal static class AdventureCoreTcpTests
     static void Information(byte[] body, ushort actor, string name, ushort count)
     {
         That(U16(body, 0) == actor && U32(body, 14) == 7440 && U32(body, 18) == 1 && BinaryPrimitives.ReadUInt64LittleEndian(body.AsSpan(26)) == 0 &&
-            U16(body, 86) == count && U32(body, 18 + 7432) == 0, "完整信息保留7440B、角色数量、初始进度及零胶囊次数");
+            U16(body, 86) == count && U32(body, 18 + 7432) == 0, "完整信息保留7440B、角色数量、初始进度及零胶囊领取经验");
         int nameSize = checked((int)U32(body, 18 + 7440));
         That(body.Length == 22 + 7440 + nameSize && DecodeName(body, 22 + 7440, nameSize) == name,
             "名称按原生长度及CP936回放");

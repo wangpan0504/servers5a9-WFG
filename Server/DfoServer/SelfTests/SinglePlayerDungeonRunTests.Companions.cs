@@ -31,13 +31,13 @@ internal static partial class SinglePlayerDungeonRunTests
                 continue;
             }
             var expected = catalog.Profiles.Where(profile => profile.BaseId == baseId &&
-                (catalog.EqualTiers || profile.Tier == tier)).ToArray();
+                profile.Tier == tier).ToArray();
             for (int ordinal = 0; ordinal < expected.Length; ++ordinal)
             {
                 int choice = ordinal;
                 var actual = catalog.Pick(baseId, tier, count =>
                 {
-                    That(count == expected.Length, "统一强度目录按同职业完整装备池抽取，旧目录保留档次池");
+                    That(count == expected.Length, "只在同职业和所选档次的装备池抽取，不跨档");
                     return choice;
                 });
                 That(actual == expected[ordinal] && actual is { Level: 95 },
@@ -117,5 +117,28 @@ internal static partial class SinglePlayerDungeonRunTests
             nextRoute with { Rooms = [nextRoute.Rooms[0], second, BossPlan(boss, survivor[0].ObjectKey)] },
             authority, out var colliding, out _) && !colliding!.TryCarryCompanions(survivor, 30),
             "实际路线与继承演员key碰撞时拒绝接管");
+    }
+
+    static void VerifyTagSystemCompanionSuppression()
+    {
+        var map = new DungeonMap("map", new(0, 0), 320, "map/fixture-tag-companion.map");
+        var dedicated = new DungeonRoomAiCharacter(DungeonCompanion.WangFuguiId,
+            [DungeonCompanion.WangFuguiId, 100, 200, 0, 0, 0], "[character]", "[normal]",
+            "aicharacter/fixture-companion.aic", 95);
+        var legacy = new DungeonRoomAiCharacter(5409, [5409, 120, 210, 0, 0, 0], "[character]", "[normal]",
+            "aicharacter/legacy-companion.aic", 95);
+        var native = legacy with { Faction = "[monster]", Path = "aicharacter/native-5409.aic" };
+        var room = new DungeonRoomDefinition(map, [], [], []) { AiCharacters = [dedicated, legacy, native] };
+
+        var ordinary = DungeonMonsterPlan.FromRoom(room, 99, 10, companionRows: []);
+        That(ordinary.Monsters.Select(monster => monster.AiCharacter?.Id).SequenceEqual([5409, 5409]) &&
+            ordinary.Monsters[0].AiCharacter!.Faction == "[character]" &&
+            ordinary.Monsters[1].AiCharacter!.Faction == "[monster]",
+            "普通副本继续保留未登记的5409原生APC，不做全局误删");
+
+        var activity = DungeonMonsterPlan.FromRoom(room, 99, 10, companionRows: [DungeonCompanion.WangFuguiId],
+            suppressCompanions: true);
+        That(activity.Monsters.Count == 1 && activity.Monsters[0].AiCharacter is { Id: 5409, Faction: "[monster]" },
+            "帝国竞技场和再战魔界服务端硬屏蔽专用及旧5409支援兵，仅保留敌方原生APC");
     }
 }

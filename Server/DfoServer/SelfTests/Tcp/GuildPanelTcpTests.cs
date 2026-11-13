@@ -202,7 +202,7 @@ internal static class GuildPanelTcpTests
             }
             if (packet.Kind == 0 && packet.Opcode == 124)
             {
-                That(ownGrade && information == (grade != 100), "有无公会的登录均安装准确职位且不伪造会籍");
+                That(ownGrade && !information, "NOTI 124 清零 062D4970 前已安装本人职位且不提前下发 NOTI 70，避免首次登录与切角打印两条公会公告");
                 peer.ReadWeeklyDungeon();
                 peer.Send(156, Text("PanelBar"));
                 bool guardian = false;

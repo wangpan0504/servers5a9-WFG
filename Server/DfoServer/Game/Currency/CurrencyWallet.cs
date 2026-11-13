@@ -35,7 +35,8 @@ internal sealed record AccountWallet(long Revision, ImmutableSortedDictionary<Cu
         value.Validate();
         return this with { Materials = value.Balance == 0 && value.RaidWeek == 0 ? Materials.Remove(itemId) : Materials.SetItem(itemId, value) };
     }
-    public bool SameMaterials(AccountWallet other) => Materials.Count == other.Materials.Count &&
+    public bool SameMaterials(AccountWallet other) => ReferenceEquals(Materials, other.Materials) ||
+        Materials.Count == other.Materials.Count &&
         Materials.All(pair => other.Materials.TryGetValue(pair.Key, out var value) && pair.Value.Same(value));
     public ImmutableSortedDictionary<int, long> PremiumContracts => Contracts ?? ImmutableSortedDictionary<int, long>.Empty;
     public int Get(CurrencyKind kind) => kind switch
@@ -76,8 +77,12 @@ internal sealed record AccountWallet(long Revision, ImmutableSortedDictionary<Cu
             throw new InvalidDataException("无效赛丽亚幸运值");
         return this with { SeriaLuck = value };
     }
-    public bool Same(AccountWallet other) => Revision == other.Revision && CharacterSlotCapacity == other.CharacterSlotCapacity && RentalPoints == other.RentalPoints && Mileage == other.Mileage && MileageShop.Same(other.MileageShop) && SeriaLuck == other.SeriaLuck &&
-        Balances.SequenceEqual(other.Balances) && PremiumContracts.SequenceEqual(other.PremiumContracts) && SameMaterials(other);
+    public bool Same(AccountWallet other) => ReferenceEquals(this, other) ||
+        Revision == other.Revision && CharacterSlotCapacity == other.CharacterSlotCapacity && RentalPoints == other.RentalPoints &&
+        Mileage == other.Mileage && MileageShop.Same(other.MileageShop) && SeriaLuck == other.SeriaLuck &&
+        (ReferenceEquals(Balances, other.Balances) || Balances.SequenceEqual(other.Balances)) &&
+        (ReferenceEquals(PremiumContracts, other.PremiumContracts) || PremiumContracts.SequenceEqual(other.PremiumContracts)) &&
+        SameMaterials(other);
     public void Validate()
     {
         MileageShop.Validate();

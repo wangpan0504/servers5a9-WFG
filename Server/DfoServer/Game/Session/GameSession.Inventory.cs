@@ -11,6 +11,28 @@ internal sealed partial class GameSession
         PlanAndCommitInventory(character => service.Add(character, position, Phase == SessionPhase.Town),
             3, requireTown: false, effectItem: position);
 
+    public InventoryResult UseRidingConsumable(InventorySlot source, ItemCatalog catalog, TimeProvider? clock = null)
+    {
+        var dungeon = owner.Execute(() => formalDungeon is { CharacterDead: false,
+            Run.Phase: DfoServer.Game.Dungeons.SinglePlayerDungeonPhase.Dungeon } active
+            ? (DungeonId: active.Entry.DungeonId, InRaid: active.Entry.RaidEntry is not null) : ((uint DungeonId, bool InRaid)?)null);
+        if (dungeon is null) return InventoryResult.Reject(19);
+        return PlanAndCommitInventory(character =>
+        {
+            var item = character.Inventory.Find(source);
+            if (item is null || catalog.ActionConsumable(item.Core.ItemId) is not { Label: "[riding]", Parameters: [> 0, > 0] } definition ||
+                !definition.AllowsDungeon(dungeon.Value.DungeonId, dungeon.Value.InRaid))
+                return InventoryResult.Reject(19);
+            return InventoryActionConsumableService.Plan(character, source, definition, "[dungeon]",
+                clock ?? timeProvider ?? TimeProvider.System);
+        }, 19, requireTown: false, allowSettlement: false, requiredPhase: SessionPhase.Dungeon,
+            additionalGuard: () => formalDungeon is { CharacterDead: false,
+                Run.Phase: DfoServer.Game.Dungeons.SinglePlayerDungeonPhase.Dungeon } active &&
+                active.Entry.DungeonId == dungeon.Value.DungeonId &&
+                (active.Entry.RaidEntry is not null) == dungeon.Value.InRaid,
+            usedItem: source);
+    }
+
     // 在线日切清包：与选角/CMD20 共用 InventoryExpiryService.Plan，审计 item_expired。
     // 6 点可能没开服 → 必须有登录/选角扫兜底；本方法不能当唯一清理通道。A 不追溯：ExpireTime=0 不会被 Plan 删除。
     public InventoryResult ExpireInventory() =>
@@ -59,19 +81,43 @@ internal sealed partial class GameSession
     public InventoryResult DeleteInventory(InventoryDeleteRequest request, InventoryService inventory) => MutateInventory(
         character => inventory.Delete(character,request,preserveMaterials: PreservesDungeonConsumables),
         requireTown: request.List is InventoryListType.PersonalCargo or InventoryListType.AccountCargo);
-    public InventoryResult MoveInventory(InventoryMoveRequest request, InventoryService inventory) => owner.Execute(() =>
+    public InventoryResult MoveInventory(InventoryMoveRequest request, InventoryService inventory)
     {
-        var safety = request.Source.List == InventoryListType.Main && request.Destination.List == InventoryListType.AccountCargo
-            ? FindHelperAssetSafety(request.Source, 1) : null;
-        if (safety is not null && (Selected is not { } selected || !CanUseHelperAssetSafety(safety, selected, request.Source, 1)))
+        var captured = owner.Execute(() => (Selected, Phase, SelectionEpoch));
+        if (captured.Selected is { } expected) inventory.PrepareMove(expected, request);
+        return owner.Execute(() =>
+        {
+            if (!ReferenceEquals(captured.Selected, Selected) || captured.Phase != Phase || captured.SelectionEpoch != SelectionEpoch)
+                return InventoryResult.Reject(1);
+            var safety = request.Source.List == InventoryListType.Main && request.Destination.List == InventoryListType.AccountCargo
+                ? FindHelperAssetSafety(request.Source, 1) : null;
+            if (safety is not null && (Selected is not { } selected || !CanUseHelperAssetSafety(safety, selected, request.Source, 1)))
+                return InventoryResult.Reject(1);
+            var result = MutateInventory(character => inventory.Move(character, request, LoginWearRestatementWindowOpen,
+                allowQuickSlotEquipmentChange: Phase is SessionPhase.Town or SessionPhase.MapSelect),
+                requireTown: (request.Source.List is InventoryListType.PersonalCargo or InventoryListType.AccountCargo ||
+                    request.Destination.List is InventoryListType.PersonalCargo or InventoryListType.AccountCargo) &&
+                    !(CanAccessPortableCargo(request.Source.List) && CanAccessPortableCargo(request.Destination.List)));
+            if (result is { Accepted: true, Plan.Changed: true } && safety is not null) ConsumeHelperAssetSafety(safety, request.Source);
+            return result;
+        });
+    }
+
+    public InventoryResult SortInventory(InventorySortRequest request, InventoryService inventory)
+    {
+        if (request.List is not (InventoryListType.PersonalCargo or InventoryListType.AccountCargo))
+            return MutateInventory(character => inventory.Sort(character, request), requireTown: false);
+        bool Guard() => (Phase == SessionPhase.Town || CanAccessPortableCargo(request.List)) &&
+            formalDungeon?.PendingInventoryDiscard is null && formalDungeon?.AltarSettlement is not { Stage: < 2 };
+        var capture = owner.Execute(() => CanPlanInventory(Phase == SessionPhase.Town, false, null, Guard)
+            ? new InventoryPlanningCapture(Selected!, SelectionEpoch, Phase, formalDungeon, formalDungeon?.Run.Snapshot.Identity) : null);
+        if (capture is null)
             return InventoryResult.Reject(1);
-        var result = MutateInventory(character => inventory.Move(character, request, LoginWearRestatementWindowOpen),
-            requireTown: (request.Source.List is InventoryListType.PersonalCargo or InventoryListType.AccountCargo ||
-                request.Destination.List is InventoryListType.PersonalCargo or InventoryListType.AccountCargo) &&
-                !(CanAccessPortableCargo(request.Source.List) && CanAccessPortableCargo(request.Destination.List)));
-        if (result is { Accepted: true, Plan.Changed: true } && safety is not null) ConsumeHelperAssetSafety(safety, request.Source);
-        return result;
-    });
+        var planned = inventory.Sort(capture.Character, request);
+        return owner.Execute(() => InventoryPlanIsCurrent(capture, Phase == SessionPhase.Town, false, null, Guard)
+            ? CommitInventory(capture.Character, planned, 1)
+            : InventoryResult.Reject(1));
+    }
 
     public InventoryResult MutateInventory(Func<Character, InventoryResult> operation, ushort invalidStateError = 1,
         bool requireTown = true) => owner.Execute(() =>
@@ -92,6 +138,10 @@ internal sealed partial class GameSession
         if (itemCycles is not null && result.Accepted && result.Plan is { } original)
             foreach (var use in original.UsedItems)
                 result = itemCycles.ApplyUsage(character, result, 0, use.ItemId, use.Count);
+        if (character.CloneTitleItemId != 0 && result.Plan is { } titlePlan &&
+            titlePlan.ChangedSlots.Any(slot => titlePlan.BeforeIndex.Find(slot)?.Core.ItemId == character.CloneTitleItemId))
+            result = InventoryCloneAppearanceService.WithOrphanCloneTitleCleanup(character, result,
+                (timeProvider ?? TimeProvider.System).GetUtcNow().ToUnixTimeSeconds());
         try
         {
             Selected = InventoryService.Commit(repository, owner, character, result);
@@ -139,8 +189,10 @@ internal sealed partial class GameSession
 
     public InventoryResult PlanAndCommitShopBuy(int shopId, Func<Character, InventoryResult> plan) =>
         DfoServer.Game.Strongway2019.Strongway2019ShopRules.Handles(shopId) ||
-        shopId == Game.Events.EndlessAdventurePolicy.ShopId ? InventoryResult.Reject(17) :
-        PlanAndCommitInventory(plan, 17, requireTown: shopId is 400000097 or 305, allowSettlement: false,
+        shopId == Game.Events.EndlessAdventurePolicy.ShopId ||
+        DfoServer.Game.EpicRoad2019.EpicRoad2019ShopRules.Handles(shopId) ? InventoryResult.Reject(17) :
+        PlanAndCommitInventory(character => shopId == 400000097 && monsterMockBattle is not null
+            ? monsterMockBattle.ProtectShop(plan(character)) : plan(character), 17, requireTown: shopId is 400000097 or 305, allowSettlement: false,
             additionalGuard: shopId switch
             {
                 400000097 => () => Phase == SessionPhase.Town && Selected is { } character &&
@@ -201,9 +253,9 @@ internal sealed partial class GameSession
         PlanAndCommitInventory(character => repair.Repair(character, request,
             clientBattleWear: Phase == SessionPhase.Dungeon && formalDungeon is not null,
             inDungeon: Phase is SessionPhase.Dungeon or SessionPhase.Settlement), 19,
-            // 已加载副本允许背包／穿戴紧急修理；普通NPC及仓库修理继续要求城镇或结算资格。
+            // 背包／穿戴的普通及快速商店修理均可在已加载副本使用；不借此开放仓库服务。
             requireTown: request.Mode != 1 && request.RepairItemSlot < 0 &&
-                !(request.Quick && request.Position.List is InventoryListType.Main or InventoryListType.Equipment), allowSettlement: true,
+                request.Position.List == InventoryListType.PersonalCargo, allowSettlement: true,
             usedItem: request.RepairItemSlot >= 0 ? new(InventoryListType.Main, request.RepairItemSlot) : null);
 
     public InventoryResult DisjointEquipment(DisjointRequest request, InventoryDisjointService disjoint, out DisjointReceipt? receipt)

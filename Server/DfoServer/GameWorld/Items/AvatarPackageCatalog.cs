@@ -302,6 +302,8 @@ internal sealed class AvatarPackageCatalog
         // Client 04135EE0先插入index0的7天无孔类型，再追加PVF显式行；礼盒直接使用该索引。
         var types = ImmutableArray.CreateBuilder<AvatarPackageType>();
         if (!rawTypes.IsEmpty) types.Add(new(7, default));
+        bool rareTopOrBottom = Tokens(Scalar(text, "grade")) is ["3"] &&
+            Tokens(Scalar(text, "equipment type")) is ["`[coat avatar]`" or "`[pants avatar]`", ..];
         foreach (var raw in rawTypes)
         {
             var sockets = new ushort[5];
@@ -314,7 +316,10 @@ internal sealed class AvatarPackageCatalog
                 };
                 if (sockets[i] == 0) return Reject("未知装扮孔位类型");
             }
-            types.Add(new(raw.Days, new(sockets[0], sockets[1], sockets[2], sockets[3], sockets[4]), raw.Gold, raw.WinPoints, raw.Cera));
+            var parsedSockets = new AvatarSocketTypes(sockets[0], sockets[1], sockets[2], sockets[3], sockets[4]);
+            if (rareTopOrBottom && parsedSockets == new AvatarSocketTypes(4, 4, 0, 0, 0))
+                parsedSockets = new(16, 4, 4, 0, 0);
+            types.Add(new(raw.Days, parsedSockets, raw.Gold, raw.WinPoints, raw.Cera));
         }
         ImmutableHashSet<byte> abilities;
         if (Fields(text, "avatar select ability").Count != 0)

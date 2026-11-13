@@ -13,7 +13,7 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
     DfoServer.GameWorld.Guilds.GuildHongbaoCatalog? hongbao = null,
     ServerItemUsageCatalog? serverItems = null, DfoServer.Game.Events.ServerEventService? events = null, TimeProvider? clock = null,
     IReadOnlySet<int>? marriedOnlyCommodities = null, PrivilegeServiceCatalog? privileges = null,
-    CashShopProduct? deluxeOffer = null)
+    CashShopProduct? deluxeOffer = null, BoosterCatalog? packages = null)
 {
     internal CashShopProduct? BattlePassDeluxeOffer { get; } = deluxeOffer;
     readonly GameDebugSettings debug = debugSettings ?? new();
@@ -67,17 +67,23 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
         ushort cargoCapacity = before.CargoCapacity;
         var serviceWallet = before.AccountWallet;
         var serviceInventory = before;
-        bool unlockSkillTree = false;
+        var shopPurchases = before.ShopPurchases;
+        bool unlockSkillTree = false, cashShopRename = false;
+        int today = ShopPurchaseCount.Today(now);
         foreach (var requested in request.Items)
         {
             var product = shop.Product(requested.CommodityId) ?? shop.Mileage.Products.GetValueOrDefault(requested.CommodityId);
             if (product is null || product.Count <= 0 ||
-                requested.FirstOptionCount != 0 || requested.SecondOptionCount != 0)
+                requested.FirstOptionCount != requested.AvatarChoices.Count || requested.SecondOptionCount != requested.PackageChoices.Count)
                 return InventoryResult.Reject(17);
+            bool selectedPackage = requested.FirstOptionCount != 0 || requested.SecondOptionCount != 0;
+            if (selectedPackage && product.Section is not ("package" or "regular package" or "community package"))
+                return InventoryResult.Reject(17) with { RejectReason = "cash_shop_package_source" };
             bool marriedOnly = marriedOnlyCommodities?.Contains(product.CommodityId) == true;
             if (marriedOnly && (character.Marriage is not { State: 4 } marriage || !marriage.IsMember(character.Id)))
                 return InventoryResult.Reject(17) with { RejectReason = "cash_shop_marriage_required" };
-            bool renameCard = catalog.StackableAction(product.ItemId)?.Label == "[character name change]";
+            bool automaticRename = product.CommodityId == 100902 && product.ItemId == 2682290;
+            bool renameCard = automaticRename || catalog.StackableAction(product.ItemId)?.Label == "[character name change]";
             if (renameCard && !CharacterRenameCard.AllowsMarriage(character.Marriage))
                 return InventoryResult.Reject(17) with { RejectReason = "cash_shop_marriage_rename_blocked" };
             requireMarriageState |= marriedOnly || renameCard;
@@ -116,6 +122,36 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
                 product.CommodityId == deluxe.CommodityId && product.ItemId == deluxe.ItemId;
             bool devilProduct = product.Section is "selectable character premium" or "charac premium package";
             bool privilegeProduct = product.Section == "privilege service";
+            if (!privilegeProduct && shop.BuyRestrictions.TryGetValue(product.CommodityId, out var restriction))
+            {
+                if (restriction.TryGetPeriod(out var period))
+                {
+                    var key = new ShopPurchaseCount(0, product.CommodityId, restriction.AccountWide, false,
+                        ShopPurchaseCount.PeriodDay(today, period), 1) { Period = period };
+                    var previous = shopPurchases.SingleOrDefault(key.SameKey);
+                    int used = previous?.Effective(today) ?? 0;
+                    if (previous?.Day > key.Day || used + 1 > restriction.Maximum)
+                        return InventoryResult.Reject(17) with { RejectReason = "cash_shop_purchase_limit" };
+                    key = key with { Count = used + 1 };
+                    shopPurchases = previous is null ? shopPurchases.Add(key) : shopPurchases.Replace(previous, key);
+                    if (key.NextReset(today) is { } reset) Deadline(reset);
+                }
+                else
+                {
+                    var probe = new ShopPurchaseCount(0, product.CommodityId, restriction.AccountWide, false, today, 1)
+                    { Period = ItemPurchasePeriod.Daily };
+                    var previous = shopPurchases.SingleOrDefault(probe.SameKey);
+                    if (previous is not null && today < previous.Day)
+                        return InventoryResult.Reject(17) with { RejectReason = "cash_shop_purchase_limit" };
+                    bool expired = previous is null || today - previous.Day >= restriction.PeriodCode;
+                    int used = expired ? 0 : previous!.Count;
+                    if (used + 1 > restriction.Maximum)
+                        return InventoryResult.Reject(17) with { RejectReason = "cash_shop_purchase_limit" };
+                    var key = probe with { Day = expired ? today : previous!.Day, Count = used + 1 };
+                    shopPurchases = previous is null ? shopPurchases.Add(key) : shopPurchases.Replace(previous, key);
+                    Deadline(DailyBoosterUsage.NextReset(now).ToUnixTimeSeconds());
+                }
+            }
             if (privilegeProduct)
             {
                 if (privileges is null) return InventoryResult.Reject(17) with { RejectReason = "privilege_catalog_missing" };
@@ -167,6 +203,12 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
                 gold += product.GoldPrice;
                 var template = !devilProduct && !privilegeProduct && CurrencyWallet.RewardKind(product.ItemId) is null && !pieces.ByPiece.ContainsKey(product.ItemId) &&
                     contracts?.Recognizes(product.ItemId) != true ? catalog.Get(product.ItemId) : null;
+                if (automaticRename)
+                {
+                    if (cashShopRename || product.Count != 1 || template is null || character.Level < template.MinimumLevel)
+                        return InventoryResult.Reject(17) with { RejectReason = "cash_shop_rename_unavailable" };
+                    cashShopRename = true;
+                }
                 // 本版红包购买确认只核真实点券；不能使用普通商品的代币券支付顺序。
                 if (template is not null && catalog.StackableAction(product.ItemId) is { Label: "[guild hongbao]" })
                 {
@@ -181,7 +223,7 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
                 if (catalog.IsSkillTreeExpansion(product.ItemId))
                 {
                     if (unlockSkillTree || product.Count != 1 || !character.Learning.Initialized ||
-                        character.Learning.SelectedTree >= 0 || template is null || !template.AllowsUse(character.Level, character.Job) ||
+                        character.Learning.SelectedTree >= 0 || template is null || !template.AllowsActivation(character.Level, character.Job) ||
                         !InventoryMoveService.RequiredSkillSatisfied(character, template)) return InventoryResult.Reject(17);
                     unlockSkillTree = true;
                     // 历史误发的有效背包券优先兑换一张；仓库物品不由商城跨容器消费。
@@ -223,14 +265,14 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
                 else if (template is { AvatarExpansionStage: > 0 })
                 {
                     if (product.Count != 1 || template.AvatarExpansionStage != avatarExpansion / 7 + 1 ||
-                        template.AvatarExpansionStage > 45 || !template.AllowsUse(character.Level, character.Job))
+                        template.AvatarExpansionStage > 45 || !template.AllowsActivation(character.Level, character.Job))
                         return InventoryResult.Reject(17);
                     avatarExpansion = checked((ushort)(template.AvatarExpansionStage * 7));
                 }
                 else if (template is { PersonalCargoUpgradeTarget: > 0 })
                 {
                     if (product.Count != 1 || template.PersonalCargoUpgradeTarget <= cargoCapacity || !CargoCatalog.SupportsPersonalCapacity(template.PersonalCargoUpgradeTarget) ||
-                        !template.AllowsUse(character.Level, character.Job) || !InventoryMoveService.RequiredSkillSatisfied(character, template))
+                        !template.AllowsActivation(character.Level, character.Job) || !InventoryMoveService.RequiredSkillSatisfied(character, template))
                         return InventoryResult.Reject(17);
                     cargoCapacity = template.PersonalCargoUpgradeTarget;
                 }
@@ -252,7 +294,19 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
                             InventoryRewardGrantService.Create(visualTemplate, utcNow: now) with { ExpireTime = (int)expires });
                 }
 
-                else if (!devilProduct && !privilegeProduct && !certificateProduct && !deluxeProduct)
+                else if (selectedPackage)
+                {
+                    if (!TryPackage(character, requested, product, now, shopExpiration, ignoreUsablePeriod,
+                        out var packageRewards, out var packageAvatars, out var packageDeadline, out string? packageError))
+                        return InventoryResult.Reject(17) with { RejectReason = packageError };
+                    if (packageRewards.Any(reward => !AllowsReward(reward.ItemId)))
+                        return InventoryResult.Reject(17) with { RejectReason = "cash_shop_package_reward_unavailable" };
+                    rewards.AddRange(packageRewards);
+                    avatarRewards.AddRange(packageAvatars);
+                    Deadline(packageDeadline);
+                    foreach (var avatar in packageAvatars) Deadline(avatar.ExpireTime);
+                }
+                else if (!automaticRename && !devilProduct && !privilegeProduct && !certificateProduct && !deluxeProduct)
                     rewards.Add(new(product.ItemId, product.Count));
             }
             if (total > int.MaxValue || gold > int.MaxValue || winPoints > int.MaxValue)
@@ -308,7 +362,7 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
             if (!spent.Accepted) return InventoryResult.Reject(10);
             paid = spent.Plan!.After;
         }
-        paid = paid with { AvatarExpansion = avatarExpansion, CargoCapacity = cargoCapacity };
+        paid = paid with { AvatarExpansion = avatarExpansion, CargoCapacity = cargoCapacity, ShopPurchases = shopPurchases };
         // 主商品和附赠按真实货币归属合计；付费购买不能沿普通发奖的上限截断规则少发奖励。
         if (!CanGrantCurrencies(paid, rewards, new CurrencyService(goldLimits).CarryLimit(character)))
             return InventoryResult.Reject(17);
@@ -365,9 +419,9 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
         if (serverItems is not null)
             foreach (var product in products)
             {
-                if (!ServerItemUsageState.TryConsume(after.ServerItems, serverItems, 2, product.ItemId, 1, now, TimeZoneInfo.Local, out var usage))
+                if (!ServerItemUsageState.TryConsume(after.ServerItems, serverItems, 2, product.ItemId, product.Count, now, time.LocalTimeZone, out var usage))
                     return InventoryResult.Reject(17);
-                if (!usage.Same(after.ServerItems)) Deadline(FatigueDailyReset.NextReset(now, TimeZoneInfo.Local).ToUnixTimeSeconds());
+                if (!usage.Same(after.ServerItems)) Deadline(FatigueDailyReset.NextReset(now, time.LocalTimeZone).ToUnixTimeSeconds());
                 after = after with { ServerItems = usage };
             }
         receipt = new(products.ToImmutableArray(), bonuses);
@@ -379,6 +433,7 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
                 cashPaymentPaid, after, paymentLines, actualCera, actualToken, actualHappy, now, time),
             RequiredEvent = requireEvent ? new(activity!.Schedule, time) : null,
             UnlockSkillTree = unlockSkillTree,
+            CashShopRename = cashShopRename,
             GuildHongbaoPurchase = hongbaoCera == 0 ? null : new(character.Guild!.Id, checked((int)hongbaoCera),
                 hongbao!.MinimumMembers, hongbao.DailyCeraLimit, DfoServer.Game.Guild.GuildAttendanceDay.Start(now.ToUnixTimeSeconds()))
         });

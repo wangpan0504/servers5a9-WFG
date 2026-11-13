@@ -4,6 +4,7 @@ using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Items;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Currency;
+using DfoServer.Game.Raids;
 
 namespace DfoServer.Game.Inventory.Services;
 
@@ -15,6 +16,14 @@ internal static class InventoryRewardGrantService
 {
     // 普通创建策略：满耐久、100%品级种子；强化/锻造默认零，显式奖励可指定，期限与部位来自 CHR/PVF。
     public const int InitialQuality = 999_999_998;
+    public const byte GuildMedalMaximumUpgrade = 20;
+    // 勋章仍为独立类型和穿戴槽，不借普通装备资格开放增幅或锻造。
+    internal static int MaximumUpgrade(ItemTemplate template) => template.Kind switch
+    {
+        ItemKind.Equipment => 31,
+        ItemKind.GuildMedal when template.EquipmentSlot == 32 => GuildMedalMaximumUpgrade,
+        _ => 0
+    };
     public static ItemCore Create(ItemTemplate template, int count = 1, DateTimeOffset? utcNow = null, byte upgrade = 0, byte refinement = 0,
         bool shopExpiration = false, bool ignoreUsablePeriod = false, Func<int, int>? talismanColorDraw = null,
         byte? echonGrade = null, Func<int, int>? echonDraw = null, int? quality = null)
@@ -53,7 +62,7 @@ internal static class InventoryRewardGrantService
     {
         if (count <= 0 || count > template.StackLimit || template.Kind is (ItemKind.Equipment or ItemKind.Avatar or ItemKind.Creature or ItemKind.CreatureEquipment or ItemKind.GuildMedal or ItemKind.Talisman) && count != 1)
             throw new InvalidDataException("无效发放数量");
-        if (upgrade > 31 || refinement > 127 || template.Kind != ItemKind.Equipment && (upgrade != 0 || refinement != 0))
+        if (upgrade > MaximumUpgrade(template) || refinement > 127 || template.Kind != ItemKind.Equipment && refinement != 0)
             throw new InvalidDataException("无效装备创建属性");
         // quality 是实例品级种子（999999893+pct / 999999998），只有普通装备有；其它类型带了就拒绝，不静默丢弃。
         if (quality is not null && template.Kind != ItemKind.Equipment)
@@ -63,9 +72,9 @@ internal static class InventoryRewardGrantService
     // 数量是整笔发放量；统一放置器可拆堆并逐件创建装备，不把总量误当单个Core.Count。
     internal static ushort? GrantDefinitionError(ItemTemplate template, InventoryReward reward, bool createsInstance = true)
     {
-        if (reward.Count <= 0 || reward.Upgrade > 31 || reward.Refinement > 127) return 1;
+        if (reward.Count <= 0 || reward.Upgrade > MaximumUpgrade(template) || reward.Refinement > 127) return 1;
         if (createsInstance && (template.IsPremiumService || !template.Expiration.SupportsCreation)) return 19;
-        if (template.Kind != ItemKind.Equipment && (reward.Upgrade != 0 || reward.Refinement != 0)) return 1;
+        if (template.Kind != ItemKind.Equipment && reward.Refinement != 0) return 1;
         if (createsInstance && template.Echon is not null && reward.CustomAbilityGrade is < 0 or > 3) return 19;
         return null;
     }
@@ -82,6 +91,29 @@ internal static class InventoryRewardGrantService
         => Grant(character, instances.Select(item => new InventoryReward(item.Core.ItemId, item.Core.Count)).ToArray(),
             instances, catalog, goldLimits, pieces, utcNow, allowOverflowMail: allowOverflowMail);
 
+    public static InventoryPlan PlanPreMaterializedRewards(Character character, IReadOnlyList<InventoryItem> instances,
+        ItemCatalog catalog, DateTimeOffset utcNow)
+    {
+        var inventory = character.Inventory;
+        var overflow = new List<InventoryItem>();
+        var placement = new RewardPlacement(inventory, instances.Select(item => item.Core.ItemId), allowOverflowMail: true, overflow);
+        long nowSeconds = utcNow.ToUnixTimeSeconds();
+        foreach (var instance in instances)
+        {
+            var template = catalog.Get(instance.Core.ItemId);
+            if (!InventoryKindCompatibility.AcceptsKind(instance.Core.Kind, template) ||
+                instance.Core.Count <= 0 || instance.Core.Count > template.StackLimit ||
+                instance.IsExpired(nowSeconds))
+                throw new InvalidDataException("无效预冻结奖励实例: " + instance.Core.ItemId);
+            var normalized = instance with { Core = InventoryKindCompatibility.Normalize(instance.Core, template) };
+            if (!placement.TryAdd(template, normalized.Core, normalized.Core.Count, normalized))
+                throw new InvalidDataException("预冻结奖励放置失败: " + instance.Core.ItemId);
+        }
+        var after = inventory with { Items = placement.Items() };
+        after.Validate(allocating: true);
+        return new(inventory, after, "reward_grant", overflowItems: overflow);
+    }
+
     static InventoryResult Grant(Character character, IReadOnlyList<InventoryReward> rewards, IReadOnlyList<InventoryItem>? instances,
         ItemCatalog catalog, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, DateTimeOffset? utcNow, bool shopExpiration = false,
         PremiumContractCatalog? contracts = null, bool allowOverflowMail = false, bool ignoreUsablePeriod = false, bool raidReward = false, int? rentalDeadline = null)
@@ -92,7 +124,7 @@ internal static class InventoryRewardGrantService
         var overflow = new List<InventoryItem>();
         var placement = new RewardPlacement(inventory, rewards.Select(row => row.ItemId), allowOverflowMail, overflow);
         var now = utcNow ?? DateTimeOffset.UtcNow;
-        bool acquiredCargo = false;
+        bool acquiredCargo = false, acquiredPersonalCargo = false, noOpPersonalCargo = false;
         int? accountMaterialWeek = null;
         var raidMaterialDefinitions = ImmutableDictionary.CreateBuilder<int, AccountMaterialDefinition>();
         long? acquisitionDeadline = null;
@@ -101,6 +133,8 @@ internal static class InventoryRewardGrantService
         for (int rewardIndex = 0; rewardIndex < rewards.Count; rewardIndex++)
         {
             var reward = rewards[rewardIndex];
+            // 满额不渝之咏保留数量 0 的牌面行，不因此拒绝同批的其他奖励。
+            if (raidReward && reward.ItemId == RaidSongQuota.ItemId && reward.Count == 0) continue;
             if (reward.Count <= 0 || reward.Upgrade > 31 || reward.Refinement > 127 ||
                 reward.EnchantUpgrade != 0 && (!catalog.TryGet(reward.ItemId, out var card) || !card.IsMonsterCard))
                 return InventoryResult.Reject();
@@ -180,11 +214,19 @@ internal static class InventoryRewardGrantService
                     if (effectCore.IsExpired(now.ToUnixTimeSeconds())) return InventoryResult.Reject(19);
                     expires = effectCore.ExpireTime;
                 }
+                bool noOpPersonal = template.PersonalCargoUpgradeTarget > 0 && template.PersonalCargoUpgradeTarget <= wallet.CargoCapacity;
+                if (template.PersonalCargoUpgradeTarget > 0 && acquiredPersonalCargo && (noOpPersonal || noOpPersonalCargo))
+                    return InventoryResult.Reject(19);
                 var acquired = InventoryAcquisitionService.Plan(character with { Inventory = wallet }, template, reward.Count, now);
                 if (!acquired.Accepted) return acquired;
                 if (template.AcquisitionContract is null)
                 {
                     acquiredCargo = true;
+                    if (template.PersonalCargoUpgradeTarget > 0)
+                    {
+                        acquiredPersonalCargo = true;
+                        noOpPersonalCargo |= noOpPersonal;
+                    }
                     if (expires > 0 && (acquisitionDeadline is null || expires < acquisitionDeadline)) acquisitionDeadline = expires;
                 }
                 wallet = acquired.Plan!.After;
@@ -278,6 +320,43 @@ internal static class InventoryRewardGrantService
         return new(true, 0, new(inventory, after, "reward_grant_core"));
     }
 
+    // 针对无需货币/史诗碎片表参与的直接奖励（如特殊地下城通关领主入包材料）：支持同栈合并、新槽放置及满包溢出邮件。
+    public static InventoryResult TryGrantDirectItems(Character character, IReadOnlyList<InventoryReward> rewards, ItemCatalog catalog,
+        DateTimeOffset? utcNow = null, bool allowOverflowMail = false, string reason = "reward_grant",
+        string? overflowMailSender = null, string? overflowMailText = null)
+    {
+        ArgumentNullException.ThrowIfNull(character);
+        ArgumentNullException.ThrowIfNull(rewards);
+        ArgumentNullException.ThrowIfNull(catalog);
+        var inventory = character.Inventory;
+        var overflow = new List<InventoryItem>();
+        var placement = new RewardPlacement(inventory, rewards.Select(row => row.ItemId), allowOverflowMail, overflow);
+        var now = utcNow ?? DateTimeOffset.UtcNow;
+        foreach (var reward in rewards)
+        {
+            if (reward.Count <= 0 || reward.Upgrade != 0 || reward.Refinement != 0 || reward.EnchantUpgrade != 0 ||
+                CurrencyWallet.RewardKind(reward.ItemId) is not null)
+                return InventoryResult.Reject();
+            var template = catalog.Get(reward.ItemId);
+            if (template.AccountMaterial is not null || template.HasAcquisitionEffect || template.IsPremiumService)
+                return InventoryResult.Reject(19);
+            if (GrantDefinitionError(template, reward, createsInstance: true) is { } definitionError)
+                return InventoryResult.Reject(definitionError);
+            var prototype = Create(template, utcNow: now);
+            if (prototype.ItemId != template.Id || prototype.Kind != template.Kind || prototype.IsExpired(now.ToUnixTimeSeconds()))
+                return InventoryResult.Reject(19);
+            if (!placement.TryAdd(template, prototype, reward.Count))
+                return InventoryResult.Reject(17);
+        }
+        var after = inventory with { Items = placement.Items() };
+        after.Validate(allocating: true);
+        return new(true, 0, new(inventory, after, reason, new(character), overflow)
+        {
+            OverflowMailSender = overflowMailSender,
+            OverflowMailText = overflowMailText
+        });
+    }
+
     // 两个grant入口共用一次规划内的放置集合与索引；不是另一份在线背包owner。
     sealed class RewardPlacement
     {
@@ -305,14 +384,19 @@ internal static class InventoryRewardGrantService
         public bool TryAdd(ItemTemplate template, ItemCore prototype, int remaining, InventoryItem? instance = null,
             bool usePickupSlotPolicy = false, bool splitLegacyRune = false)
         {
-            var range = ItemSlotBoundService.Range(template.Kind, inventory);
-            var list = ItemSlotBoundService.List(template.Kind);
-            bool pickupQuickSlots = usePickupSlotPolicy && ItemSlotBoundService.Allows(inventory,
+            // 新发公共物品只进真实45容器，不合旧Main实体或借用快捷栏。
+            (short Start, short End) range = template.AccountCommonItem
+                ? ((short)0, checked((short)(ItemSlotBoundService.AccountCommonCapacity - 1)))
+                : ItemSlotBoundService.Range(template.Kind, inventory);
+            var list = template.AccountCommonItem ? InventoryListType.AccountCommon : ItemSlotBoundService.List(template.Kind);
+            bool pickupQuickSlots = !template.AccountCommonItem && usePickupSlotPolicy && ItemSlotBoundService.Allows(inventory,
                 new(InventoryListType.Main, ItemSlotBoundService.QuickSlotStart), template.Kind);
             if (prototype.IsStackable)
             {
-                // 自动发放只向首个兼容堆叠完整入库，不能靠拆成新格绕过该次入库上限。
-                if (!allowOverflowMail && !splitLegacyRune && remaining > template.StackLimit)
+                // 默认发放只向首个兼容堆完整入库，不能靠拆到后续堆或新格绕过该次上限。
+                // 溢出邮件与旧符文拆堆则按槽号跳过已满堆，把余量补进所有仍有容量的兼容堆，再占新格。
+                bool spill = allowOverflowMail || splitLegacyRune;
+                if (!spill && remaining > template.StackLimit)
                     return false;
                 // 索引只缩小候选范围，完整属性兼容仍由同一个堆叠规则决定。
                 if (stacks is null)
@@ -331,45 +415,69 @@ internal static class InventoryRewardGrantService
                     foreach (var slots in stacks.Values)
                         slots.Sort();
                 }
-                InventoryItem? item = null;
                 int stackLists = pickupQuickSlots && list != InventoryListType.Main ? 2 : 1;
-                for (int pass = 0; item is null && pass < stackLists; pass++)
+                if (spill)
                 {
-                    var stackList = stackLists == 2 && pass == 0 ? InventoryListType.Main : list;
-                    if (stacks.TryGetValue((stackList, prototype.ItemId), out var candidates))
+                    for (int pass = 0; remaining > 0 && pass < stackLists; pass++)
+                    {
+                        var stackList = stackLists == 2 && pass == 0 ? InventoryListType.Main : list;
+                        if (!stacks.TryGetValue((stackList, prototype.ItemId), out var candidates))
+                            continue;
                         foreach (short candidate in candidates)
                         {
-                            var current = planned[new(stackList, candidate)];
+                            if (remaining == 0)
+                                break;
+                            var position = new InventorySlot(stackList, candidate);
+                            var current = planned[position];
                             // 装载槽也是list46真实资产，但不属于自动入包可合堆的背包分页。
                             if (current.Position.List == InventoryListType.Talisman && current.Position.Index >= 210)
                                 continue;
-                            if (InventoryStackRuleService.CanShareStack(prototype, current.Core))
-                            {
-                                item = current;
-                                break;
-                            }
+                            if (!InventoryStackRuleService.CanShareStack(prototype, current.Core))
+                                continue;
+                            int space = template.StackLimit - current.Core.Count;
+                            if (space <= 0)
+                                continue;
+                            int moved = Math.Min(space, remaining);
+                            planned[position] = current with { Core = current.Core with { Value = checked(current.Core.Value + moved) } };
+                            remaining -= moved;
                         }
+                    }
                 }
-                if (item is not null)
+                else
                 {
-                    if (InventoryStackRuleService.CanMerge(prototype, item.Core, remaining, template.StackLimit))
+                    InventoryItem? item = null;
+                    for (int pass = 0; item is null && pass < stackLists; pass++)
                     {
-                        planned[item.Position] = item with { Core = item.Core with { Value = checked(item.Core.Value + remaining) } };
-                        remaining = 0;
+                        var stackList = stackLists == 2 && pass == 0 ? InventoryListType.Main : list;
+                        if (stacks.TryGetValue((stackList, prototype.ItemId), out var candidates))
+                            foreach (short candidate in candidates)
+                            {
+                                var current = planned[new(stackList, candidate)];
+                                if (current.Position.List == InventoryListType.Talisman && current.Position.Index >= 210)
+                                    continue;
+                                if (InventoryStackRuleService.CanShareStack(prototype, current.Core))
+                                {
+                                    item = current;
+                                    break;
+                                }
+                            }
                     }
-                    else if (allowOverflowMail || splitLegacyRune)
+                    if (item is not null)
                     {
-                        int moved = Math.Min(Math.Max(0, template.StackLimit - item.Core.Count), remaining);
-                        planned[item.Position] = item with { Core = item.Core with { Value = checked(item.Core.Value + moved) } };
-                        remaining -= moved;
+                        if (InventoryStackRuleService.CanMerge(prototype, item.Core, remaining, template.StackLimit))
+                        {
+                            planned[item.Position] = item with { Core = item.Core with { Value = checked(item.Core.Value + remaining) } };
+                            remaining = 0;
+                        }
+                        else
+                            return false;
                     }
-                    else
-                        return false;
                 }
             }
 
             // 先合已有兼容堆；消耗品新堆只进所属分页，不能借空快捷槽绕过背包容量。
-            bool allowQuickSlotFallback = pickupQuickSlots && template.Kind != ItemKind.Consumable;
+            // 快捷栏纹章的放入即装备，自动拾取不能绕过城镇装卸和单件资格。
+            bool allowQuickSlotFallback = pickupQuickSlots && template.Kind != ItemKind.Consumable && !template.IsQuickSlotEquipment;
             for (int pass = 0; remaining > 0 && pass < (allowQuickSlotFallback ? 2 : 1); pass++)
             {
                 bool quick = allowQuickSlotFallback && pass == 1;

@@ -58,7 +58,10 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
     DfoServer.Game.Dungeons.RiftNamedEpicDropPolicy? riftNamedEpics = null,
     DfoServer.Game.Events.EndlessAdventurePolicy? endlessAdventure = null,
     DfoServer.Game.Events.DailyAttendanceService? dailyAttendance = null,
-    DfoServer.Game.Events.WeeklyAttendanceService? weeklyAttendance = null) : IConnectionProtocol
+    DfoServer.Game.Events.WeeklyAttendanceService? weeklyAttendance = null,
+    DfoServer.Game.MonsterMockBattle.MonsterMockBattleService? monsterMockBattle = null,
+    DfoServer.GameWorld.Items.EpicPieceBonusDropCatalog? epicPieceBonuses = null,
+    DfoServer.Game.Dungeons.DungeonDropControlSettings? dropControl = null) : IConnectionProtocol
 {
     DfoServer.Game.Dungeons.HostedDungeonEligibilityCoordinator? hostedDungeonEligibility;
 
@@ -120,11 +123,15 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         _ = consumables?.HellLegendEpicDropBuffs;
         _ = consumables?.VillageMoveSpeedBuffs;
         _ = consumables?.EnhancementPotions;
+        GameConnectionContext? preyGuideScene = null;
         await using var sender = new GameConnectionSender(login.Owner, connection.Stream, connection.Lifetime, login.Sequence, (kind, opcode, sequence, body, action) =>
         {
             // 保活回包不逐条记 send；连接心跳由 KeepaliveHandler 的 keepalive 汇总覆盖。
             if (KeepaliveHandler.IsKeepalive(opcode))
                 return;
+            // 城镇 AREA_USERS 写出即本连接场景就绪。义务不在时直接返回，成功搬迁后也不会再排一次。
+            if (kind == 0 && opcode == (ushort)NotiPacketType.AREA_USERS && preyGuideScene is { } scene)
+                RaidCombatProjection.SchedulePreyGuideWaitingRetry(scene, projection);
             log.Write("send", new { Connection = connection.Id, Kind = kind, Opcode = opcode, Name = kind == 1 ? ((CmdPacketType)opcode).ToString() : ((NotiPacketType)opcode).ToString(), Sequence = sequence, Action = action, Body = kind == 1 && PacketCapture.IsSensitiveCommand(opcode) ? PacketCapture.RedactedCommandBody(opcode) : Convert.ToHexString(body.Span) });
         }, connection.CaptureSent, (stage, error) => log.Write("game_send_failed", new
         {
@@ -137,10 +144,15 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
             monsterBattleLevels: monsterBattleLevels, monsterAi: monsterAi, itemCycles: itemCycles, guildNpcBenefits: guildNpcBenefits, promotionStore: promotionStore, consumables: consumables, springTreasure: springTreasure,
             strongway2019Catalog: strongway2019, strongway2019AntiEvil: strongway2019AntiEvil, serverEvents: serverEvents,
             directPickupGoldLimits: goldLimits, pcRoomTimePoint: pcRoomTimePoint, riftNamedEpics: riftNamedEpics,
-            endlessAdventure: endlessAdventure, dailyAttendance: dailyAttendance);
+            endlessAdventure: endlessAdventure, dailyAttendance: dailyAttendance, monsterMockBattle: monsterMockBattle,
+            epicPieceBonuses: epicPieceBonuses, dropControl: dropControl);
         session.AttachHostedDungeonEligibility(hostedDungeonEligibility);
         var context = new GameConnectionContext(connection, login.Owner, session, sender, createActivity?.Invoke(session))
-            { RaidClearLukeCycle = projection.RaidClearLukeCycle };
+            { RaidClearLukeCycle = projection.RaidClearLukeCycle, MarriageAppearance = presence?.MarriageAppearance };
+        preyGuideScene = context;
+        context.PreyGuideWaiting.Bind(connection.Stop);
+        context.PreyGuideWaiting.Diagnostic = detail => log.Write("prey_guide_waiting_failed", new { Connection = connection.Id, Detail = detail });
+        session.PreyGuideWaitingReleased = context.PreyGuideWaiting.Cancel;
         context.ChatEmoticons = settingsProjection?.CreateChatEmoticons(context);
         if (pcRoom is not null)
         {
@@ -175,6 +187,8 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         if (dailyAttendance is not null) context.DailyAttendance = new(context, dailyAttendance, time ?? TimeProvider.System, log);
         if (pcRoomTimePoint is not null) context.PcRoomTimePoint = new(context, pcRoomTimePoint, projection, log, time, SqliteBusyRetry.IsBusy);
         if (weeklyAttendance is not null) context.WeeklyAttendance = new(context, weeklyAttendance, projection, log);
+        if (monsterMockBattle is not null && inventory is not null)
+            context.MonsterMockBattle = new(context, monsterMockBattle, inventory, projection, log);
         session.ReturnToSelectionRequested = async () =>
         {
             await context.CommandGate.WaitAsync(connection.Stop);
@@ -231,12 +245,32 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         session.PartyNoticeArrived = notice => PartyProjection.Notice(context, notice);
         session.RaidNoticeArrived = (change, actor) => RaidProjection.Notice(context, change, actor, enableLukeRaidStart, projection);
         session.RaidBattleNoticeArrived = CreateRaidBattleNotice(context, log,
-            (view, actor) => RaidCombatProjection.Notice(context, view, actor));
+            (view, actor) =>
+            {
+                RaidCombatProjection.Notice(context, view, actor);
+                RaidCombatProjection.SchedulePreyGuideWaitingRetry(context, projection);
+            });
         session.RaidRunClearedArrived = (cleared, actor) => RaidCombatProjection.RunCleared(context, cleared, actor);
         session.AutomaticRaidRewardArrived = async receipt =>
         {
             if (inventory is not null) await inventory.RefreshAsync(context, receipt.Inventory);
             if (!receipt.Commit.MailIds.IsEmpty) session.NotifyMailbox(receipt.Prepared.Character);
+            if (receipt.Prepared is { RaidType: DfoServer.Game.Raids.RaidKind.Prey, Source: DfoServer.Game.Raids.PreyGuideRewards.TeamSource })
+            {
+                // 一阶段600把本人已提交产物装入原生过渡队列，必须先写出再允许切阶段。
+                bool Current() => session.CanPublishRaidReward(receipt) &&
+                    session.RaidCombatView() is { State: DfoServer.Game.Raids.AntonRaidBattleState.Reward } view &&
+                    view.Phase == receipt.Prepared.Phase;
+                if (receipt.Prepared.Phase == 0)
+                    await context.Notify(NotiPacketType.RAID_REWARD_LIST,
+                        PreyRewardPackets.Reward(receipt.Prepared.Character, receipt.Offer), "prey_automatic_reward_result", Current);
+                // 二阶段由原时钟在本批交付后发布完整表，覆盖在线、离线及跨角色恢复分支。
+            }
+            if (receipt.Prepared is { RaidType: DfoServer.Game.Raids.RaidKind.Prey, Source: DfoServer.Game.Raids.PreyGuideRewards.Source })
+            {
+                await RaidCombatProjection.PublishPreyGuideResultsAsync(context, receipt);
+                await RaidCombatProjection.ReturnCompletedPreyGuideWaitingAsync(context, projection, receipt);
+            }
             if (DfoServer.Game.BattlePass.BattlePassUndefeatedSongSource.DeclaresSong(receipt.Prepared) && session.CanPublishRaidReward(receipt))
                 await BattlePassMissionProjection.RefreshAsync(context, (time ?? TimeProvider.System).GetUtcNow());
             if (items is not null && DfoServer.Game.Raids.LukeRewardResults.Bind(receipt, items,
@@ -295,13 +329,14 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         session.RaidStartArrived = (receipt, actor) => RaidProjection.Started(context, projection, receipt, actor);
         session.RaidCostArrived = (rows, actor) => RaidProjection.Cost(context, rows, actor);
         session.RaidRecordNoticeArrived = (party, actor) => sender.Post(0, (ushort)NotiPacketType.RAID_MODIFY,
-            RaidProjection.Record(party, enableLukeRaidStart), "raid_record_updated", () => session.CanPublishRaid(actor, party));
+            RaidProjection.Record(party, enableLukeRaidStart, context), "raid_record_updated", () => session.CanPublishRaid(actor, party));
         session.RaidPeerNoticeArrived = (recipient, peer, peerId, invite) => RaidProjection.Peer(context, recipient, peer, peerId, invite);
         session.RaidDirectoryNoticeArrived = (change, actor) => RaidProjection.Directory(context, change, actor, enableLukeRaidStart);
         session.RaidPeerRefused = actor => sender.Post(1, (ushort)CmdPacketType.RESPONSE_PEER,
             PartyPackets.Failure(133, 10), "raid_peer_refused", () => actor.IsCurrent);
         session.HasMultiplePartyMembers = () => parties?.HasMultipleMembers(session) == true;
         session.CurrentParty = () => parties?.Current(session);
+        session.SkillVariantChanged = (source, guard) => SkillProjection.VariantChanged(context, source, guard);
         session.EvildomWarCleanupFailed = error => log.Write("evildom_war_cleanup_failed", new
             { Connection = connection.Id, Error = error.GetType().Name, error.Message });
         prepareDungeon?.Invoke(context);
@@ -339,7 +374,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
                         bool Guard() => session.CanPublishInventory(receipt);
                         await inventory.RefreshAsync(context, result);
                         await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(receipt.Character, context.Session.ReadPvpGrade(receipt.Character), context.Channel,
-                            adventureName: session.ReadAdventureName(), premiumPcRoom: session.PremiumPcRoom),
+                            adventureName: session.ReadAdventureName(), premiumPcRoom: session.PremiumPcRoom, returningAdventurerType: session.ReturningAdventurerType, marriage: context.MarriageAppearance),
                             "expert_job_customer_owner_actor", Guard);
                         await context.Notify(NotiPacketType.EXPERT_JOB_INFO, info, "expert_job_customer_owner_info", Guard);
                         projection.Refresh(context);
@@ -466,6 +501,21 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
                             mailbox?.Alarm(context,invitation);
                         }
                         await dailyFatigue.RefreshAsync();
+                        if (AdventurerBenefitProjection.Post(context) && session.Selected is { } benefitCharacter &&
+                            session.PublicCharacter(benefitCharacter.Id) is { } benefitIdentity)
+                        {
+                            if (benefitIdentity.Phase == SessionPhase.Town) projection.Refresh(context);
+                            var notices = parties?.FrameChanged(session, benefitIdentity) ?? [];
+                            if (notices.Length > 0) parties!.Publish(notices, presenceChanged: false);
+                            else context.Sender.Post(0, (ushort)NotiPacketType.USERINFO,
+                                TownPackets.Actor(benefitIdentity.Character, benefitIdentity.PvpGrade, benefitIdentity.Channel,
+                                    adventureName: benefitIdentity.AdventureName,
+                                    sceneState: benefitIdentity.Phase is SessionPhase.Dungeon or SessionPhase.Settlement
+                                        ? ActorSceneState.Dungeon : ActorSceneState.Town,
+                                    premiumPcRoom: benefitIdentity.PremiumPcRoom,
+                                    returningAdventurerType: benefitIdentity.ReturningAdventurerType, marriage: context.MarriageAppearance),
+                                "returning_adventurer_actor", benefitIdentity.IsCurrent);
+                        }
                         if (context.PcRoomTimePoint is { } onlineRewards) await onlineRewards.RefreshAsync();
                         if (context.WeeklyAttendance is { } weekly) await weekly.RefreshAsync(force: request.Opcode == (ushort)CmdPacketType.SET_PLAY_RESULT);
                         await revival.RefreshAsync();
@@ -516,6 +566,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
             await elevator.DisposeAsync();
             await altar.DisposeAsync();
             await lostLand.DisposeAsync();
+            if (context.PreyBoarding is { } preyBoarding) await preyBoarding.DisposeAsync();
             if (context.LukePhaseExit is { } lukeExit) await lukeExit.DisposeAsync();
             // 此处不持本人owner；在普通队伍/团名册/Session移除前冻结原身份。
             if (lukeRejoin is not null)

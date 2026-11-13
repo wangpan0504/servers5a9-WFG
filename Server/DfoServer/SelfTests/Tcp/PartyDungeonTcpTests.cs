@@ -31,13 +31,142 @@ internal static partial class PartyDungeonTcpTests
     {
         OrdinaryLukePartyTests.Run(resources);
         DfoServer.Testing.Inventory.SpringTreasureDropTests.RunPartyResources(resources.ItemResources);
+        await RunQuickSlotEnergyAsync(source, root, resources);
         await RunLukeAsync(source, root, resources);
-        await RunPreyNormalAsync(source, root, resources);
+        await RunPreyNormalAsync(source, Path.Combine(root, "party-dungeon"), resources);
         await RunPartyAsync(source, root, resources, 2);
         await RunPartyAsync(source, root, resources, 4);
         await RunPartyAsync(source, root, resources, 2, rollback: true);
         await RunPartyAsync(source, root, resources, 2, rejectRetry: true);
         await RunDeparturesAsync(source, root, resources);
+    }
+
+    static async Task RunQuickSlotEnergyAsync(ServerOptions source, string root, TcpTestResources resources)
+    {
+        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "party-quick-slot-energy"), gm: true, resources: resources);
+        await fixture.StartAsync();
+        foreach (bool entryCost in new[] { false, true })
+        {
+            var entrance = entryCost ? OrdinaryLukePartyTests.Entrance(resources) :
+                (Position: new DfoServer.GameWorld.Towns.Location(38, 2, 1085, 249), Completed: new[] { 3145 });
+            string accountPrefix = entryCost ? "energyluke" : "energyroom";
+            const int memberCount = 2;
+            for (int member = 0; member < memberCount; member++)
+                That(DfoServer.Network.Management.DevelopmentGmClient.TryExecute(fixture.Options.GmPort,
+                    $"account {accountPrefix}{member} infinite-fatigue off", out var energyReply) &&
+                    energyReply == "OK {\"infiniteFatigue\":false}", "组队能量回归使用真实有限疲劳");
+            using var group = new Coop(fixture, resources, accountPrefix, entrance.Position,
+                entrance.Completed, 95, memberCount, rewards: [new(400360000, 1), new(2683829, 1)]);
+            var cores = new DfoServer.Game.Inventory.Models.ItemCore[2];
+            var uids = new long[2];
+            var initialFatigue = new long[2];
+            for (int member = 0; member < 2; member++)
+            {
+                var peer = group.Peers[member];
+                var slot = fixture.Query("""
+                    SELECT s.slot_index,i.item_uid FROM character_inventory_slots s JOIN character_inventory_items i USING(item_uid)
+                    WHERE s.character_id=$p0 AND json_extract(i.item_core,'$.ItemId')=400360000
+                    """, peer.Id).Single();
+                short sourceSlot = Convert.ToInt16(slot[0]);
+                uids[member] = Convert.ToInt64(slot[1]);
+                peer.Send(19, Build(w =>
+                {
+                    w.Write((byte)0); w.Write(sourceSlot); w.Write(400360000); w.Write(0);
+                    w.Write((byte)0); w.Write((short)3); w.Write(0); w.Write(0); w.Write(-1); w.Write((byte)0); w.Write((byte)0);
+                }));
+                peer.Expect(1, 19, Build(w =>
+                { w.Write((byte)1); w.Write((byte)0); w.Write(sourceSlot); w.Write(1); w.Write((byte)0); w.Write((short)3); }));
+                group.All(peer);
+                if (member == 0)
+                {
+                    int chargeSlot = Convert.ToInt32(fixture.Query("""
+                        SELECT s.slot_index FROM character_inventory_slots s JOIN character_inventory_items i USING(item_uid)
+                        WHERE s.character_id=$p0 AND json_extract(i.item_core,'$.ItemId')=2683829
+                        """, peer.Id).Single()[0]);
+                    peer.Send(1113, Build(w => { w.Write(new byte[13]); w.Write(3); w.Write(chargeSlot); }));
+                    peer.Expect(1, 1113, Build(w => { w.Write((byte)1); w.Write(0u); w.Write(3); w.Write(0u); w.Write(100); }));
+                    group.All(peer);
+                }
+                cores[member] = ReadCore(member);
+                initialFatigue[member] = Convert.ToInt64(fixture.Query("SELECT remaining FROM character_fatigue WHERE character_id=$p0", peer.Id)[0][0]);
+            }
+            That(uids[0] != uids[1] && cores[0].Durability == 200 && cores[1].Durability == 100,
+                "两名真实角色持有不同UID和不同能量，避免把队长快照误发队友仍通过");
+            group.Join();
+            group.Open();
+            uint dungeon = entryCost ? 5101u : 3u;
+            group.Peers[0].Send(16, Coop.Selection(dungeon, 0, entryCost ? (byte)2 : (byte)0));
+            var entered = group.All();
+            group.ReadEntry(entered);
+            int charged = entryCost ? 8 : 0;
+            CheckEnergy(entered, charged, entryCost);
+            Load(charged + (entryCost ? 0 : 1), !entryCost);
+            charged += entryCost ? 0 : 1;
+            Replay(charged);
+            if (!entryCost)
+            {
+                var origin = new DungeonPoint(group.Map[0], group.Map[1]);
+                var maze = SelfTestCatalogs.Dungeons(resources.Archive).Get(3).Mazes[group.Information[7]];
+                group.Clear();
+                var next = maze.StaticTopology.Links!.SelectMany(link => new[] { (link.First, link.Second), (link.Second, link.First) })
+                    .First(edge => edge.Item1 == origin).Item2;
+                CheckEnergy(group.Move((byte)next.X, (byte)next.Y), charged, false);
+                Load(++charged, true);
+                Replay(charged);
+                group.Clear();
+                CheckEnergy(group.Move((byte)origin.X, (byte)origin.Y), charged, false);
+                Load(charged, false);
+                Replay(charged);
+            }
+
+            DfoServer.Game.Inventory.Models.ItemCore ReadCore(int member) => System.Text.Json.JsonSerializer.Deserialize<DfoServer.Game.Inventory.Models.ItemCore>(
+                (string)fixture.Query("SELECT item_core FROM character_inventory_items WHERE item_uid=$p0", uids[member])[0][0]!)!;
+            string State() => fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid") +
+                fixture.Snapshot("SELECT * FROM character_fatigue ORDER BY character_id");
+            void CheckEnergy(WirePacket[][] rows, int consumed, bool notified)
+            {
+                for (int member = 0; member < 2; member++)
+                {
+                    var deltas = rows[member].Where(packet => packet is { Kind: 0, Opcode: 14 }).ToArray();
+                    That(deltas.Length == (notified ? 1 : 0), "只在本人真实扣能量提交后发送一次N14，不广播队友差量");
+                    int energy = cores[member].Durability - consumed;
+                    if (notified)
+                    {
+                        byte[] body = deltas[0].Body;
+                        That(body.Length == 126 && body[0] == 0 && U16(body, 1) == 1 && U16(body, 3) == 3 &&
+                            U32(body, 5) == 400360000 && U16(body, 14) == energy && U32(body, 9) == (uint)cores[member].Value,
+                            "每个连接N14独立消费本人快捷格、品级及实际剩余能量");
+                    }
+                    That(ReadCore(member) == cores[member] with { Durability = checked((ushort)energy) } &&
+                        fixture.Query("SELECT item_uid FROM character_inventory_slots WHERE character_id=$p0 AND list_type=0 AND slot_index=3", group.Peers[member].Id)
+                            is [[long uid]] && uid == uids[member] &&
+                        Convert.ToInt64(fixture.Query("SELECT remaining FROM character_fatigue WHERE character_id=$p0", group.Peers[member].Id)[0][0]) == initialFatigue[member] - consumed,
+                        "真实库同时保持本人UID完整核心，能量与疲劳按实际费用一致扣除");
+                }
+            }
+            void Load(int consumed, bool notified)
+            {
+                string before = State();
+                group.Peers[0].Send(37, new byte[8]);
+                var waiting = group.All();
+                That(waiting.All(rows => rows.All(packet => packet is not { Kind: 0, Opcode: 14 or 30 })) && State() == before,
+                    "组队加载屏障未齐不扣能量、不发能量差量或释放帧");
+                group.Peers[1].Send(37, new byte[8]);
+                var loaded = group.All(group.Peers[1]);
+                That(loaded.All(rows => rows.Any(packet => packet is { Kind: 0, Opcode: 30 })), "两个真实连接共同释放加载屏障");
+                CheckEnergy(loaded, consumed, notified);
+            }
+            void Replay(int consumed)
+            {
+                string before = State();
+                foreach (var peer in group.Peers)
+                {
+                    peer.Send(37, new byte[8]);
+                    CheckEnergy(group.All(peer), consumed, false);
+                }
+                That(State() == before, "两连接重复37和旧房回访均不重复扣费或发布能量差量");
+            }
+        }
     }
 
     static async Task RunPartyAsync(ServerOptions source, string root, TcpTestResources resources, int count, bool rollback = false,
@@ -50,13 +179,16 @@ internal static partial class PartyDungeonTcpTests
             Path.Combine(root, "party-dungeon-" + count + (rollback ? "-rollback" : rejectRetry ? "-retry-rejected" : "")),
             gm: checkFatigue, resources: resources, clock: frameClock);
         await fixture.StartAsync();
+        string[] accounts = count == 4 ? ["partyalpha", "partybeta", "partygamma", "partydelta"] : ["partyalpha", "partybeta"];
         if (checkFatigue)
-            That(DfoServer.Network.Management.DevelopmentGmClient.TryExecute(fixture.Options.GmPort, "infinite-fatigue off", out _),
-                "组队入场拒绝使用实际疲劳余额");
-        using var alpha = Open(fixture, "partyalpha");
-        using var beta = Open(fixture, "partybeta");
-        using var gamma = count == 4 ? Open(fixture, "partygamma") : null;
-        using var delta = count == 4 ? Open(fixture, "partydelta") : null;
+            foreach (string account in accounts)
+                That(DfoServer.Network.Management.DevelopmentGmClient.TryExecute(fixture.Options.GmPort,
+                    $"account {account} infinite-fatigue off", out var initialReply) && initialReply == "OK {\"infiniteFatigue\":false}",
+                    "组队入场拒绝使用实际疲劳余额");
+        using var alpha = Open(fixture, accounts[0]);
+        using var beta = Open(fixture, accounts[1]);
+        using var gamma = count == 4 ? Open(fixture, accounts[2]) : null;
+        using var delta = count == 4 ? Open(fixture, accounts[3]) : null;
         var participants = count == 4 ? new[] { alpha, beta, gamma!, delta! } : new[] { alpha, beta };
         for (int i = 0; i < participants.Length; i++) participants[i].Create("PartyMember" + i);
         Dictionary<TcpPeer, WirePacket[]> All(TcpPeer requester)
@@ -70,10 +202,15 @@ internal static partial class PartyDungeonTcpTests
             // 只准备普通路线的前置资格；战斗、奖励和清图均经过真实生产协议。
             fixture.Sql("INSERT INTO character_completed_quests(character_id,quest_id) VALUES($p0,3145)", peer.Id);
             fixture.Sql("UPDATE characters SET revive_coins=1 WHERE id=$p0", peer.Id);
+            // 成功拾取核对完整随机金币；在选角前准备容量，保持等级及生产上限规则不变。
+            int goldCapacity = DfoServer.Game.Currency.CurrencyService.ExpandedLimit(4);
+            fixture.Sql("UPDATE characters SET gold_carry_limit=$p0 WHERE id=$p1", goldCapacity, peer.Id);
+            That(fixture.Query("SELECT gold_carry_limit FROM characters WHERE id=$p0", peer.Id) is [[long capacity]] && capacity == goldCapacity,
+                "组队成功拾取角色已准备独立金币携带容量");
             if (checkFrames)
             {
                 int member = Array.IndexOf(participants, peer);
-                string account = member == 0 ? "partyalpha" : "partybeta";
+                string account = accounts[member];
                 That(DfoServer.Network.Management.DevelopmentGmClient.TryExecute(fixture.Options.GmPort,
                     $"account {account} black-diamond PartyMember{member} 30", out var reply) && reply.StartsWith("OK ", StringComparison.Ordinal),
                     "两名成员沿实际契约入口准备独立黑钻附加牌");
@@ -175,11 +312,16 @@ internal static partial class PartyDungeonTcpTests
             That(rejected[alpha].Any(p => p is { Kind: 1, Opcode: 16 } && p.Body.SequenceEqual(new byte[] { 0, 22, 0, failedSlot })) &&
                 rejected.Values.All(rows => rows.All(p => p.Opcode is not (28 or 29))) && fixture.Snapshot() == before,
                 "组队疲劳不足的拒绝指向实际失败成员槽，整队不扣费或安装实例");
-            That(DfoServer.Network.Management.DevelopmentGmClient.TryExecute(fixture.Options.GmPort, "infinite-fatigue on", out _),
-                "随后开启无限疲劳，验证同一队伍拒绝后仍可重新入场");
+            foreach (string account in accounts)
+                That(DfoServer.Network.Management.DevelopmentGmClient.TryExecute(fixture.Options.GmPort,
+                    $"account {account} infinite-fatigue on", out var enabledReply) && enabledReply == "OK {\"infiniteFatigue\":true}",
+                    "随后开启无限疲劳，验证同一队伍拒绝后仍可重新入场");
         }
         alpha.Send(16, selection);
         var entered = All(alpha); var enteredA = entered[alpha];
+        That(enteredA.Any(p => p is { Kind: 0, Opcode: 29 }),
+            "多人普通路线入场必须成功，实际回应：" + string.Join(";", enteredA.Select(p =>
+                $"{p.Kind}/{p.Opcode}:{Convert.ToHexString(p.Body)}")));
         var map = enteredA.Single(p => p is { Kind: 0, Opcode: 29 }).Body;
         foreach (var rows in entered.Values)
         {
@@ -190,6 +332,7 @@ internal static partial class PartyDungeonTcpTests
             "加载前不提前扣逐房疲劳");
         var maze = SelfTestCatalogs.Dungeons(resources.Archive).Get(3).Mazes[enteredA.Single(p => p.Opcode == 28).Body[7]];
         var visited = new HashSet<DungeonPoint>();
+        var partyExperience = participants.ToDictionary(peer => peer, _ => 0u);
         int consumablePickups = 0;
         for (int room = 0; room < 30; room++)
         {
@@ -289,6 +432,7 @@ internal static partial class PartyDungeonTcpTests
                         U32(experience, 9) == basis - basis / (uint)count && U32(experience, 25) == 0 &&
                         U32(experience, 34) == 0 && U32(experience, 42) == 0,
                         "真实多人击杀按PVF拆出队伍播报，累计经验仍与原奖励账本相同，不串入契约或疲劳分量");
+                    partyExperience[peer] = checked(partyExperience[peer] + U32(experience, 9));
                 }
                 var deaths = reported.ToDictionary(row => row.Key,
                     row => row.Value.Single(p => p is { Kind: 0, Opcode: 38 } && U16(p.Body) == key));
@@ -311,7 +455,10 @@ internal static partial class PartyDungeonTcpTests
                     var pickups = All(peer); var received = pickups[peer];
                     That(received.Any(p => p is { Kind: 1, Opcode: 43, Body: [1] }) &&
                         received.Any(p => p is { Kind: 0, Opcode: 39 } && U32(p.Body) == ground) &&
-                        pickups.Where(row => !ReferenceEquals(row.Key, peer)).All(row => !row.Value.Any(p => p is { Kind: 0, Opcode: 39 })), "每人独立领取，另一客户端的地面物品不被清除");
+                        pickups.Where(row => !ReferenceEquals(row.Key, peer)).All(row => !row.Value.Any(p => p is { Kind: 0, Opcode: 39 })),
+                        $"每人独立领取，另一客户端的地面物品不被清除，角色={peer.Id} 地面={ground} 道具={U32(loot.Body, at + 6)} 回应=" +
+                        string.Join(";", pickups.SelectMany(row => row.Value.Select(p =>
+                            $"{row.Key.Id}:{p.Kind}/{p.Opcode}:{Convert.ToHexString(p.Body)}"))));
                     if (U32(loot.Body, at + 6) == 0)
                     {
                         uint goldAmount = U32(loot.Body, at + 10);
@@ -362,6 +509,9 @@ internal static partial class PartyDungeonTcpTests
                         (member.Id, checked((byte)(99 - index * 20)))).ToArray());
                     peer.Send(46, report);
                     var settledPackets = Drain(peer);
+                    That(U32(settledPackets.Single(p => p is { Kind: 0, Opcode: 35 }).Body, 65) == partyExperience[peer] &&
+                        partyExperience[peer] > 0,
+                        "结果页组队奖励等于本人各次已到账击杀通知的组队分量，重复死亡不累计");
                     var playResult = settledPackets.Single(p => p is { Kind: 0, Opcode: 34 }).Body;
                     That(playResult.Length == 9 + 7 * count && playResult[6] == 99 - slot * 20 && playResult[8] == count &&
                         Enumerable.Range(0, count).All(i => U16(playResult, 9 + 7 * i) == participants[i].Id) &&
@@ -428,8 +578,10 @@ internal static partial class PartyDungeonTcpTests
                 if (checkFrames || count == 4) VerifyIndependentPaidCards();
                 if (rejectRetry)
                 {
-                    That(DfoServer.Network.Management.DevelopmentGmClient.TryExecute(fixture.Options.GmPort, "infinite-fatigue off", out _),
-                        "结算时恢复队员的真实零疲劳，验证再挑战失败");
+                    foreach (string account in accounts)
+                        That(DfoServer.Network.Management.DevelopmentGmClient.TryExecute(fixture.Options.GmPort,
+                            $"account {account} infinite-fatigue off", out var restoredReply) && restoredReply == "OK {\"infiniteFatigue\":false}",
+                            "结算时恢复队员的真实零疲劳，验证再挑战失败");
                     string entries = fixture.Snapshot("SELECT * FROM character_dungeon_state ORDER BY character_id");
                     string fatigue = fixture.Snapshot("SELECT * FROM character_fatigue ORDER BY character_id");
                     string assets = fixture.Snapshot("SELECT * FROM character_inventory_items ORDER BY item_uid");
@@ -498,17 +650,19 @@ internal static partial class PartyDungeonTcpTests
 
         void VerifyIndependentPaidCards()
         {
+            var instanceId = (string)fixture.Query("SELECT instance_id FROM character_dungeon_settlement_receipts WHERE character_id=$p0", alpha.Id).Single()[0]!;
             foreach (var peer in participants) Drain(peer);
             var goldBefore = participants.ToDictionary(peer => peer.Id,
                 peer => (long)fixture.Query("SELECT gold FROM characters WHERE id=$p0", peer.Id)[0][0]!);
             foreach (var peer in participants) peer.Send(71, [1, 1]);
             var published = All(alpha);
             foreach (var peer in participants) published[peer] = [.. published[peer], .. Drain(peer)];
-            var claims = fixture.Query("SELECT character_id FROM character_dungeon_card_options WHERE paid_reward_json IS NOT NULL");
+            var claims = fixture.Query("SELECT character_id FROM character_dungeon_card_options WHERE instance_id=$p0 AND paid_reward_json IS NOT NULL", instanceId);
             That(claims.Length == count && published.Values.All(packets => packets.All(p =>
                 p is not { Kind: 1, Opcode: 71, Body: [0, ..] })),
                 "同时选择同一位置的付费牌全部成功，各人都有独立领取回执");
             var rows = new List<(byte Free, byte Paid, (uint Item, uint Count)[] Items)[]>();
+            var expectedPaid = new List<(uint Item, uint Count)[]>();
             foreach (var peer in participants)
             {
                 var events = published[peer].Where(p => p is { Kind: 1, Opcode: 71, Body: [1, ..] })
@@ -517,16 +671,36 @@ internal static partial class PartyDungeonTcpTests
                     .SequenceEqual(Enumerable.Range(1, count)),
                     "连续快速翻牌时每次提交均向每位成员排队通知，不只收到最后一份汇总快照");
                 rows.Add(events[^1]);
-                var amounts = fixture.Query("SELECT paid_cost,json_extract(paid_reward_json,'$.Gold') FROM character_dungeon_card_options WHERE character_id=$p0", peer.Id);
-                That(amounts is [[long cost, long gain]] && fixture.Query("SELECT gold FROM characters WHERE id=$p0", peer.Id) is [[long after]] &&
+                var amounts = fixture.Query("SELECT paid_cost,json_extract(paid_reward_json,'$.Gold'),paid_reward_json FROM character_dungeon_card_options WHERE character_id=$p0 AND instance_id=$p1", peer.Id, instanceId);
+                That(amounts is [[long cost, long gain, string]] && fixture.Query("SELECT gold FROM characters WHERE id=$p0", peer.Id) is [[long after]] &&
                     after == goldBefore[peer.Id] - cost + gain,
                     "每人只扣自己的费用、增加自己的奖励金币，不影响其他成员");
+                using var reward = System.Text.Json.JsonDocument.Parse((string)amounts.Single()[2]!);
+                var expectedItems = new List<(uint Item, uint Count)>();
+                // 独立读取已提交核心，按合同合并同ID数量；装备Value是品级，不是件数。
+                foreach (var field in new[] { "Item", "ExtraItem", "HopeEquipment", "HopeSealingItem", "TayberrsWish" })
+                {
+                    if (!reward.RootElement.TryGetProperty(field, out var item) || item.ValueKind == System.Text.Json.JsonValueKind.Null) continue;
+                    uint itemId = checked((uint)item.GetProperty("ItemId").GetInt32());
+                    var kind = (DfoServer.GameWorld.Items.ItemKind)item.GetProperty("Kind").GetByte();
+                    bool stackable = kind is DfoServer.GameWorld.Items.ItemKind.Consumable or DfoServer.GameWorld.Items.ItemKind.Material or
+                        DfoServer.GameWorld.Items.ItemKind.Quest or DfoServer.GameWorld.Items.ItemKind.CreatureConsumable or
+                        DfoServer.GameWorld.Items.ItemKind.Emblem or DfoServer.GameWorld.Items.ItemKind.Profession or
+                        DfoServer.GameWorld.Items.ItemKind.GuardianGem or DfoServer.GameWorld.Items.ItemKind.Rune;
+                    uint quantity = stackable ? checked((uint)item.GetProperty("Value").GetInt32()) : 1u;
+                    int index = expectedItems.FindIndex(entry => entry.Item == itemId);
+                    if (index < 0) expectedItems.Add((itemId, quantity));
+                    else expectedItems[index] = (itemId, checked(expectedItems[index].Count + quantity));
+                }
+                uint gold = checked((uint)reward.RootElement.GetProperty("Gold").GetInt32());
+                // 全空牌没有条目；有物品时即使金币为0，也必须保留首项金币槽。
+                expectedPaid.Add(gold == 0 && expectedItems.Count == 0 ? [] : [(0, gold), .. expectedItems]);
             }
             That(rows.All(members => Enumerable.Range(0, count).All(slot => members[slot].Free == slot && members[slot].Paid == slot &&
-                    members[slot].Items.Length > 0)) && rows.All(members => Enumerable.Range(0, 8).All(slot =>
+                    members[slot].Items.SequenceEqual(expectedPaid[slot]))) && rows.All(members => Enumerable.Range(0, 8).All(slot =>
                     members[slot].Free == rows[0][slot].Free && members[slot].Paid == rows[0][slot].Paid &&
                     members[slot].Items.SequenceEqual(rows[0][slot].Items))),
-                "各客户端完整成员归属和付费奖励一致，不因选择相同位置而覆盖结果");
+                "各客户端完整成员归属和付费奖励与各人本实例已提交回执精确一致，不因选择相同位置而覆盖结果");
             foreach (var group in new[] { 0, 2 })
             {
                 var first = DungeonSettlementProtocolTests.CardRewards(published[alpha].Last(p => p is { Kind: 0, Opcode: 35 }).Body)[group];
@@ -542,6 +716,8 @@ internal static partial class PartyDungeonTcpTests
             beta.Send(71, [1, 0]);
             That(Drain(beta).Any(p => p is { Kind: 1, Opcode: 71, Body: [0, 0, 0] }) && fixture.Snapshot() == claimed,
                 "已取得一张付费牌不能改选第二张，拒绝后资产保持不变");
+
+
         }
         throw new InvalidOperationException("FAIL 共享普通副本未在有界路线内完成");
 
@@ -648,7 +824,7 @@ internal static partial class PartyDungeonTcpTests
         {
             var packet = peer.Read();
             if (packet is { Kind: 1, Opcode: 1347 }) { Bytes(packet.Body, [1], "组队TCP屏障"); return rows.ToArray(); }
-            That(packet.Kind == 0 || packet.Opcode is 10 or 11 or 12 or 13 or 14 or 15 or 16 or 29 or 31 or 33 or 34 or 37 or 41 or 43 or 45 or 46 or 69 or 70 or 71 or 72 or 42 or 132 or 905 or 1652 or 1573,
+            That(packet.Kind == 0 || packet.Opcode is 10 or 11 or 12 or 13 or 14 or 15 or 16 or 29 or 31 or 33 or 34 or 37 or 41 or 43 or 45 or 46 or 69 or 70 or 71 or 72 or 42 or 132 or 905 or 1002 or 1652 or 1573 or 1734,
                 $"组队批量投影只包含已登记的应答或通知，实际{packet.Kind}/{packet.Opcode}");
             rows.Add(packet);
         }

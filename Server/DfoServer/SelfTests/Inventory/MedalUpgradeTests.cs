@@ -85,6 +85,20 @@ internal static class MedalUpgradeTests
         That(rules.CoinCost(6, 1) == 18 && rules.CoinCost(6, 2) == 36 && rules.CoinCost(6, 3) == 55 &&
             rules.CoinCost(3, 1) == 10 && rules.CoinCost(0, 5) == 5, "公会硬币按稀有度权重放大后向下取整");
         Reject<InvalidDataException>(() => rules.CoinCost(7, 1), "稀有度超出权重列拒绝");
+        var extended = tokens.ToImmutable().ToList();
+        int tableEnd = extended.FindIndex(token => token.Type == 3 && token.Value == -3);
+        extended.InsertRange(tableEnd - 16, [.. Zeros(16), new(0, 0), new(0, 0), new(0, 1), new(0, 0),
+            new(0, 1), new(0, 0), new(0, Coin), new(0, 21)]);
+        var longer = new MedalUpgradeCatalog(_ => new(extended.ToImmutableArray(), Resolve), Resolve);
+        var medal = new ItemTemplate(Medal, ItemKind.GuildMedal, 32, 1, 0, 1, 0, 0, 0, "[trade]", ushort.MaxValue, 0, "勋章上限");
+        catalog.PrefillTemplates(new[] { coin, medal }.ToDictionary(item => item.Id));
+        var fullMedal = old with { Inventory = new([new(1, BagSlot, new(Medal, ItemKind.GuildMedal, 1) { Attr = 20 }),
+            new(2, new(InventoryListType.Main, 177), new(Coin, ItemKind.Quest, 10000))]) };
+        var rng = new FixedRandom(99999);
+        var service = new InventoryEnhancementService(catalog, null!, longer, rng);
+        That(longer.Rules.Rows.Length == 21 && !service.Plan(fullMedal,
+            new(EnhancementMode.Reinforce, BagSlot, Medal, 177, -1, ReadOnlyMemory<byte>.Empty, -1, -1), out _).Accepted && rng.Calls == 0,
+            "即使资源有21行，勋章+20仍在费用和随机前拒绝，不能开放+21");
         Reject<InvalidDataException>(() => rules.CoinCost(-1, 1), "负稀有度拒绝");
         Console.WriteLine($"PASS {Count - before} 勋章强化表切分、行尾校验与硬币取整断言");
     }
@@ -108,6 +122,17 @@ internal static class MedalUpgradeTests
         That(medal.Kind == ItemKind.GuildMedal && medal.Rarity == 6 && rough.Rarity == 3 && r.Items.Get(Coin).Kind == ItemKind.Quest &&
             r.Items.Get(Coin).StackableType == "[quest] 0",
             "勋章稀有度6/3与PVF一致，公会硬币按最后声明进入任务页，与客户端分类一致");
+        foreach (byte level in new byte[] { 0, 1, 20 })
+            That(InventoryRewardGrantService.Create(medal, upgrade: level).Upgrade == level &&
+                InventoryRewardGrantService.GrantDefinitionError(medal, new(Medal, 2, level)) is null,
+                "真实勋章创建与批量定义均支持强化0/1/20");
+        Reject<InvalidDataException>(() => InventoryRewardGrantService.Create(medal, upgrade: 21), "勋章创建拒绝+21");
+        Reject<InvalidDataException>(() => InventoryRewardGrantService.Create(medal, refinement: 1), "勋章创建不开放锻造");
+        That(InventoryRewardGrantService.GrantDefinitionError(medal, new(Medal, 1, 21)) is not null &&
+            InventoryRewardGrantService.GrantDefinitionError(medal, new(Medal, 1, Refinement: 1)) is not null &&
+            InventoryRewardGrantService.GrantDefinitionError(r.Items.Get(90000), new(90000, 1, 1)) is not null &&
+            InventoryRewardGrantService.Create(r.Items.Get(18400), upgrade: 31).Upgrade == 31,
+            "统一发放拒绝勋章超限/锻造与守护珠强化，普通装备仍保留31上限");
         That(rules.CoinCost(medal.Rarity, 1) == 18 && rules.CoinCost(medal.Rarity, 2) == 36 && rules.CoinCost(medal.Rarity, 3) == 55 &&
             rules.CoinCost(rough.Rarity, 1) == 10, "四次实机读数18/36/55/10由公式复现");
 
@@ -159,6 +184,16 @@ internal static class MedalUpgradeTests
             "失败权重为闭区间下界：roll等于15000仍成功");
         var rng = new FixedRandom(0);
         var guarded = new InventoryEnhancementService(r.Items, r.Enhancements, r.MedalUpgrades, rng);
+        var highest = Bag(level: 0xF3, coins: 1000);
+        var highItem = highest.Inventory.Find(BagSlot)!;
+        highItem = highItem with { Core = highItem.Core with { SortLockFlag = 1, GuardianGemKeys = 1, Extension97 = 71 } };
+        highest = highest with { Inventory = highest.Inventory with { Items = highest.Inventory.Items.SetItem(0, highItem) } };
+        var success = new InventoryEnhancementService(r.Items, r.Enhancements, r.MedalUpgrades, new FixedRandom(99999));
+        var capped = success.Plan(highest, Request(BagSlot), out receipt);
+        That(capped.Accepted && receipt is { OldLevel: 19, NewLevel: 20, OutcomeCode: 0 } &&
+            capped.Plan!.After.Find(BagSlot) == highItem with { Core = highItem.Core with { Attr = 0xF4 } } &&
+            capped.Plan.After.Find(coinStack.Position)!.Core.Count == 1000 - rules.CoinCost(medal.Rarity, rules.Rows[19].MaterialCount),
+            "+19成功升20只改强化低五位，保留UID、排序锁、守护珠及完整扩展字段");
         int calls = rng.Calls;
         foreach (var (role, request) in new[]
         {

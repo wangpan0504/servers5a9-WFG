@@ -1,15 +1,62 @@
 using DfoServer.Network.Builders;
 using DfoServer.Network.Parsers;
+using DfoServer.Game.Raids;
 using static DfoServer.Testing.TestCheck;
 
 namespace DfoServer;
 
 internal static class FiendwarPacketTests
 {
+    // 独立按客户端600分类2读宽消费，供团队和引导TCP核对完整第二页。
+    internal static Dictionary<ushort, byte[]> ReadTeamResults(byte[] body)
+    {
+        That(body.Length >= 2 && body[0] == 3 && body[1] is >= 1 and <= 8, "漩涡第二页为有界wire3完整团队表");
+        var rows = new Dictionary<ushort, byte[]>();
+        int at = 2;
+        for (int index = 0; index < body[1]; index++)
+        {
+            That(body.Length >= at + 4 && body[at + 2] <= 3 && body[at + 3] > 0, "团队行保留owner、卡位和非空物品数量");
+            ushort owner = System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(body.AsSpan(at));
+            int size = 4 + 16 * body[at + 3];
+            That(body.Length >= at + size, "团队行完整消费原生16B物品");
+            That(rows.TryAdd(owner, body.AsSpan(at + 4, size - 4).ToArray()), "完整团队表不重复owner");
+            at += size;
+        }
+        That(at == body.Length, "团队表无截断或尾部未消费字段");
+        return rows;
+    }
+
     internal static void RunCore()
     {
         int before = Count;
         Bytes(FiendwarPackets.State(1, 0x1234), [1, 0x34, 0x12], "漩涡团状态完整3B");
+        var offer = new RaidRewardOffer(0, 0, [new(0x12345678, 3)], [])
+        { PreyDisplay = [new(0, 0x12345678, 3, 0, 0, 0)] };
+        Bytes(PreyRewardPackets.FiendwarTeamResults([(0x1234, offer)]),
+            [3, 1, 0x34, 0x12, 0, 1, 0, 0x78, 0x56, 0x34, 0x12, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            "漩涡第二页完整wire3、owner和16B产物的独立字节预期");
+        var goldOffer = new RaidRewardOffer(0, 0, [new(10306741, 1), new(10306750, 10)], [])
+        {
+            PreyDisplay =
+            [
+                new(1, 10306741, 1, 0, 0, 0),
+                new(1, 10306750, 10, 0, 0, 0)
+            ]
+        };
+        Bytes(PreyRewardPackets.FiendwarTeamResults([(0x1234, goldOffer)]),
+            [3, 1, 0x34, 0x12, 0, 2,
+             1, 0xB5, 0x44, 0x9D, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+             1, 0xBE, 0x44, 0x9D, 0, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            "漩涡金牌双产物团队页为每条16B结果保留code=1");
+        Bytes(PreyRewardPackets.Reward(0x1234, goldOffer with { Card = 3 }, RaidKind.Fiendwar),
+            [0, 1, 0x34, 0x12, 3, 2,
+             1, 0xB5, 0x44, 0x9D, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+             1, 0xBE, 0x44, 0x9D, 0, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            "漩涡金牌本人选牌为每条16B结果保留code=1");
+        Reject<InvalidDataException>(() => PreyRewardPackets.FiendwarTeamResults([(1, offer), (1, offer)]),
+            "完整团队表拒绝重复owner");
+        Reject<InvalidDataException>(() => PreyRewardPackets.FiendwarTeamResults([(1, offer with { Kind = 1 })]),
+            "团队页不能混入本人固定奖励类型");
         Bytes(FiendwarPackets.Warnings([(2, 1), (3, 0)]), [2, 2, 1, 3, 0], "警告每行2B");
         Bytes(FiendwarPackets.Users([new(1, 6, 0x1234, 0)]),
             [1, 1, 0, 0, 0, 6, 0x34, 0x12, 0, 0, 0, 0, 0, 0], "角色ID按u32写入，取消罚站尾列为0");

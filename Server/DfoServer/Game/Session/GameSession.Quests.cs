@@ -1,3 +1,5 @@
+using System.Collections.Immutable;
+using DfoServer.Game.Characters;
 using DfoServer.Game.Quests;
 using DfoServer.Game.Dungeons;
 using DfoServer.GameWorld.Characters;
@@ -8,28 +10,140 @@ namespace DfoServer.Game.Session;
 
 internal sealed partial class GameSession
 {
-    // 只闭合已达成、禁经验且无奖励的真实对话子任务；清图仍复验本次接取的持久通关凭据。
+    // 只闭合已达成、禁经验且无奖励的真实子任务；清图仍复验本次接取的持久通关凭据。
+    // 父任务回调同时补归档范围类零奖励子任务，但必须已由 Matches 写入 scalar 0，并且人还在当前阶段地图的同一 NPC 半径内。
     public QuestCompletionReceipt? FinishReadyQuestChildren(QuestCatalog quests, QuestRewardParameterCatalog parameters,
         ItemCatalog items, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, CharacterGrowthCatalog growth, int? parentQuestId = null)
     {
-        var children = owner.Execute(() => Selected?.ActiveMainQuests.Where(row => row.ConditionState == 0 &&
-            quests.TryGet(row.QuestId,out var quest) && QuestRelationProgress.ZeroRewardChild(quest) &&
-            (parentQuestId is not null || Phase == SessionPhase.Town || !QuestRelationProgress.ClearDialogueChild(quest,quests)) &&
-            (parentQuestId is null || quest.MainQuest == parentQuestId &&
-                (QuestRelationProgress.TownLinkedChild(quest) || QuestRelationProgress.ClearDialogueChild(quest,quests))))
-            .Select(row => row.QuestId).ToArray() ?? []);
+        var children = owner.Execute(() =>
+        {
+            if (Selected is null) return Array.Empty<ushort>();
+            var rows = Selected.ActiveMainQuests.Where(row => row.ConditionState == 0 &&
+                quests.TryGet(row.QuestId,out var quest) && QuestRelationProgress.ZeroRewardChild(quest) &&
+                (parentQuestId is not null || Phase == SessionPhase.Town || !QuestRelationProgress.ClearDialogueChild(quest,quests)) &&
+                (parentQuestId is null || quest.MainQuest == parentQuestId &&
+                    (QuestRelationProgress.TownLinkedChild(quest) || QuestRelationProgress.ClearDialogueChild(quest,quests) ||
+                        QuestClientSceneProgress.SatisfiedTownRange(Selected,quest,towns))))
+                .Select(row => row.QuestId).ToArray();
+            if (parentQuestId is int parentId && quests.TryGet(parentId,out var parent))
+                Array.Sort(rows,(left,right) => ChildOrder(parent.IntData,left).CompareTo(ChildOrder(parent.IntData,right)));
+            return rows;
+        });
         QuestCompletionReceipt? last = null;
+        bool townRange = false;
         foreach (ushort id in children)
         {
             var result = FinishQuest(id,ushort.MaxValue,quests,parameters,items,goldLimits,pieces,growth);
-            if (result.Receipt is { } receipt) last = receipt;
+            if (result.Receipt is { } receipt)
+            {
+                last = receipt;
+                if (quests.TryGet(id,out var child) && QuestClientSceneProgress.TownRange(child)) townRange = true;
+            }
+            // 子任务提交后投影失效时，把这份回执交还给调用方关闭连接，不能继续交付后面的任务。
             if (last is { Commit.ProjectionCurrent: false }) break;
         }
+        if (townRange && last is { Commit.ProjectionCurrent: true })
+            last = last with { ArchivedTownRange = true };
         return last;
     }
 
+    readonly record struct RangeArchiveGate(QuestFinishResult? Stop, ImmutableArray<QuestCompletionReceipt> Committed);
+
+    // 父任务奖励或资格过不了预检时，范围子任务一笔都不归档。预检通过后才逐个提交；
+    // 提交后投影失效必须原样返回，调用方关闭连接，不再交付父任务。
+    private RangeArchiveGate CommitSatisfiedRangeChildren(StoryQuest parent, QuestCatalog quests, QuestRewardParameterCatalog parameters,
+        ItemCatalog items, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, CharacterGrowthCatalog growth, ExpertJobScriptCatalog? expertJobs)
+    {
+        var captured = owner.Execute(() => (
+            Character: !Ready || Selected is null || Phase != SessionPhase.Town ? null : Selected,
+            SelectionEpoch, Phase, Generation: owner.Generation, Pending: pendingQuestCompletion));
+        if (captured.Character is not { } expected) return new(null, []);
+        var ids = new List<ushort>();
+        foreach (int id in parent.IntData)
+        {
+            if (id is < 1 or > ushort.MaxValue || !quests.TryGet(id,out var child) || !QuestRelationProgress.ZeroRewardChild(child) ||
+                !QuestClientSceneProgress.SatisfiedTownRange(expected,child,towns)) continue;
+            ids.Add((ushort)id);
+        }
+        if (ids.Count == 0) return new(null, []);
+        // 父任务自己的精确重试必须沿用冻结计划。此时不能再改子任务，否则原Expected对不上。
+        // 补归档前的活动表在这份计划上，不从已经没有子任务的在线快照重算。
+        if (captured.Pending is { } pending && pending.Plan.QuestId == parent.Id && pending.Plan.RequestedSelector == ushort.MaxValue &&
+            pending.Plan.Multiplier == 1 && pending.Plan.Coupon is null && ReferenceEquals(pending.Plan.Expected, expected) &&
+            pending.SelectionEpoch == captured.SelectionEpoch && pending.Phase == captured.Phase && pending.DungeonIdentity is null)
+            return new(null, []);
+        var rejection = new QuestRefusalReceipt(expected, captured.Generation, captured.SelectionEpoch, null) { Phase = captured.Phase };
+        bool strongwayQuest = QuestStrongway2019Entry.Supports(parent);
+        if (strongwayQuest && !IsCurrentStrongway2019QuestSchedule(CaptureStrongway2019QuestSchedule()))
+            return new(new(QuestFinishOutcome.Rejected, RejectionReceipt: rejection)
+                { Failure = QuestCompletionFailure.EligibilityChanged, Reason = "强者之路活动未开启" }, []);
+        bool epicRoadQuest = QuestEpicRoad2019Entry.Supports(parent);
+        if (epicRoadQuest && !IsCurrentEpicRoad2019QuestSchedule(CaptureEpicRoad2019QuestSchedule()))
+            return new(new(QuestFinishOutcome.Rejected, RejectionReceipt: rejection)
+                { Failure = QuestCompletionFailure.EligibilityChanged, Reason = "星河裂缝活动未开启" }, []);
+        var now = DateTimeOffset.UtcNow;
+        QuestStageState? stageState = stageGraph is null ? null : repository.LoadQuestStageState(owner, expected);
+        QuestClearReceipt? clear = expected.CompletedQuests.Contains(parent.Id) ? null : ReadClearedQuest(checked((ushort)parent.Id))?.Clear;
+        QuestClearReceipt? terminalClear = null;
+        if (QuestRelationProgress.TerminalClearDialogue(parent,quests) is { } terminal && !expected.CompletedQuests.Contains(terminal.Id))
+            terminalClear = ReadClearedQuest(checked((ushort)terminal.Id))?.Clear;
+        var rank = QuestStateProgress.Type(parent) is 5 or 27 ? pvpRatings?.Capture(owner, expected.Id) : null;
+        int? grade = rank is null ? null : pvpRatings!.Grade(rank);
+        var preview = expected;
+        foreach (ushort id in ids)
+        {
+            var childPrep = QuestCompletionPlan.Prepare(preview, quests.Get(id), ushort.MaxValue, quests, parameters, items, goldLimits, pieces,
+                growth, now, null, 1, contracts?.Growth, stageGraph, stageState, experienceBonuses, PremiumPcRoom, expertJobs, null, null);
+            if (childPrep.Outcome != QuestCompletionOutcome.Accepted || childPrep.Plan is null)
+                return new(RejectPrepared(rejection, childPrep), []);
+            preview = childPrep.Plan.ProjectedCharacter;
+        }
+        var parentPrep = QuestCompletionPlan.Prepare(preview, parent, ushort.MaxValue, quests, parameters, items, goldLimits, pieces, growth,
+            now, clear, 1, contracts?.Growth, stageGraph, stageState, experienceBonuses, PremiumPcRoom, expertJobs, grade, terminalClear,
+            strongway2019Active: strongwayQuest, epicRoad2019Active: epicRoadQuest);
+        if (parentPrep.Outcome != QuestCompletionOutcome.Accepted || parentPrep.Plan is null)
+            return new(RejectPrepared(rejection, parentPrep), []);
+        var committed = ImmutableArray.CreateBuilder<QuestCompletionReceipt>();
+        foreach (ushort id in ids)
+        {
+            var result = FinishQuest(id, ushort.MaxValue, quests, parameters, items, goldLimits, pieces, growth, expertJobs: expertJobs, archiveRangeChildren: false);
+            if (result.Receipt is { Commit.ProjectionCurrent: false }) return new(result, []);
+            if (result.Outcome != QuestFinishOutcome.Committed || result.Receipt is null)
+                return new(result with { ArchivedChildren = committed.ToImmutable() }, []);
+            committed.Add(result.Receipt);
+        }
+        return new(null, committed.ToImmutable());
+    }
+
+    static QuestFinishResult RejectPrepared(QuestRefusalReceipt rejection, QuestCompletionPreparation preparation) =>
+        new(preparation.Outcome == QuestCompletionOutcome.InsufficientSpace && preparation.Failure == QuestCompletionFailure.InventoryCapacity
+            ? QuestFinishOutcome.InsufficientSpace : QuestFinishOutcome.Rejected, RejectionReceipt: rejection)
+        { Failure = preparation.Failure, Reason = preparation.Reason };
+
+    static QuestFinishResult WithArchivedChildren(QuestFinishResult result, ImmutableArray<QuestCompletionReceipt> archived)
+    {
+        if (archived.Length == 0 || result.Outcome == QuestFinishOutcome.Committed) return result;
+        if (result.RejectionReceipt is null)
+        {
+            var latest = archived[^1];
+            result = result with { RejectionReceipt = new QuestRefusalReceipt(latest.Commit.Character, latest.Generation, latest.SelectionEpoch, latest.DungeonIdentity) { Phase = latest.Phase } };
+        }
+        return result with { ArchivedChildren = archived };
+    }
+
+    static int ChildOrder(IReadOnlyList<int> ids, int questId)
+    {
+        for (int index = 0; index < ids.Count; index++)
+            if (ids[index] == questId) return index;
+        return int.MaxValue;
+    }
+
     private sealed record PendingQuestCompletion(QuestCompletionPlan Plan, long SelectionEpoch,
-        SessionPhase Phase, DungeonRunIdentity? DungeonIdentity);
+        SessionPhase Phase, DungeonRunIdentity? DungeonIdentity)
+    {
+        // 范围子任务已经提交、父任务结果还没装上会话时，574 的对照表。精确重试不能再向在线快照要这份表。
+        public IReadOnlyList<ActiveMainQuest>? RangePreviousQuests { get; init; }
+    }
     private PendingQuestCompletion? pendingQuestCompletion;
 
     public QuestFinishResult FinishSingleClearQuest(ushort questId, QuestCatalog quests, QuestRewardParameterCatalog parameters,
@@ -38,7 +152,34 @@ internal sealed partial class GameSession
 
     public QuestFinishResult FinishQuest(ushort questId, ushort selector, QuestCatalog quests, QuestRewardParameterCatalog parameters,
         ItemCatalog items, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, CharacterGrowthCatalog growth, ushort multiplier = 1,
-        ExpertJobScriptCatalog? expertJobs = null, ushort? couponSlot = null)
+        ExpertJobScriptCatalog? expertJobs = null, ushort? couponSlot = null, bool archiveRangeChildren = true)
+    {
+        ImmutableArray<QuestCompletionReceipt> archived = [];
+        if (archiveRangeChildren && couponSlot is null && multiplier == 1 && selector == ushort.MaxValue &&
+            quests.TryGet(questId,out var parentOpening) && QuestRelationProgress.SequentialParent(parentOpening,quests))
+        {
+            var gate = CommitSatisfiedRangeChildren(parentOpening,quests,parameters,items,goldLimits,pieces,growth,expertJobs);
+            if (gate.Stop is { } stop) return SealUnpublishedRange(stop);
+            archived = gate.Committed;
+        }
+        // 第一笔子任务提交前的活动表跟父计划一起留下。父提交抛异常或返回丢失时，局部 archived 不在了，精确重试仍用这份表改写 PreviousQuests。
+        var rangePrevious = archived.Length > 0 ? archived[0].Commit.PreviousQuests : null;
+        var prepared = FinishPreparedQuest(questId,selector,quests,parameters,items,goldLimits,pieces,growth,multiplier,expertJobs,couponSlot,rangePrevious);
+        return SealUnpublishedRange(WithArchivedChildren(prepared, archived));
+    }
+
+    // 范围子任务已归档，但这次结果既不是可发布的父回执，也没有可发布的子回执。关闭连接，不把拒绝当成活动表已经对齐。
+    QuestFinishResult SealUnpublishedRange(QuestFinishResult result)
+    {
+        if (result.Outcome == QuestFinishOutcome.Committed || result.ArchivedChildren.Length > 0 || result.CloseForUnpublishedRangeArchive)
+            return result;
+        bool unpublished = owner.Execute(() => pendingQuestCompletion?.RangePreviousQuests is { Count: > 0 });
+        return unpublished ? result with { CloseForUnpublishedRangeArchive = true } : result;
+    }
+
+    QuestFinishResult FinishPreparedQuest(ushort questId, ushort selector, QuestCatalog quests, QuestRewardParameterCatalog parameters,
+        ItemCatalog items, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, CharacterGrowthCatalog growth, ushort multiplier,
+        ExpertJobScriptCatalog? expertJobs, ushort? couponSlot, IReadOnlyList<ActiveMainQuest>? rangePreviousQuests = null)
     {
         var captured = owner.Execute(() =>
         {
@@ -80,6 +221,11 @@ internal sealed partial class GameSession
         if (strongwayQuest && captured.Pending is null && !IsCurrentStrongway2019QuestSchedule(strongwaySchedule))
             return new(QuestFinishOutcome.Rejected, RejectionReceipt: rejection)
                 { Failure = QuestCompletionFailure.EligibilityChanged, Reason = "强者之路活动未开启" };
+        bool epicRoadQuest = QuestEpicRoad2019Entry.Supports(quest);
+        var epicRoadSchedule = epicRoadQuest ? CaptureEpicRoad2019QuestSchedule() : null;
+        if (epicRoadQuest && captured.Pending is null && !IsCurrentEpicRoad2019QuestSchedule(epicRoadSchedule))
+            return new(QuestFinishOutcome.Rejected, RejectionReceipt: rejection)
+                { Failure = QuestCompletionFailure.EligibilityChanged, Reason = "星河裂缝活动未开启" };
         if (QuestEligibility.Completed(expected).Contains(questId))
             return new(QuestFinishOutcome.AlreadyCompleted, RejectionReceipt: rejection) { Failure = QuestCompletionFailure.EligibilityChanged };
         bool dungeonClear = QuestDungeonClearProgress.Supports(quest);
@@ -89,7 +235,8 @@ internal sealed partial class GameSession
                 { Failure = QuestCompletionFailure.EligibilityChanged, Reason = "缺少本次接取的通关凭据" };
         // 地点、NPC和实例目标在进度达成时验证；交付使用本次接取的持久事实，不因离开原场景而失效。
         // 带NPC的末清图子任务保留到结算后对话；原生34可转向父任务，父子在一个领奖事务中关闭。
-        // 顺序父及其末清图子在副本/结算交付时沿父CompleteNpc；城镇NPC须同时出现在当前MAP，否则拒绝。
+        // 末清图对话的NPC是剧情交付人；已完成原实例结算翻牌后，不要求其城镇分身同时出现在MAP。
+        // 其余顺序父保留实体NPC场景限制。
         // 各目标的实际材料、回答、子任务、角色状态及清图凭据仍由统一领奖规划复验。
         bool clearDialogue = couponSlot is null && (QuestRelationProgress.ClearDialogueChild(quest,quests) ||
             QuestRelationProgress.TerminalClearDialogue(quest,quests) is not null);
@@ -102,20 +249,17 @@ internal sealed partial class GameSession
                 !expected.ActiveMainQuests.Any(active => active.QuestId == quest.Id && QuestHuntProgress.Bound(active,dialogueEntry))))
             return new(QuestFinishOutcome.Rejected, RejectionReceipt: rejection)
                 { Failure = QuestCompletionFailure.EligibilityChanged, Reason = "清图对话任务不属于当前原接取实例" };
-        // 末清图子归档推进的是父任务；交付场景沿父声明，子任务的对话NPC不能给无NPC父任务另加城镇门禁。
-        var deliveryQuest = QuestRelationProgress.ClearDialogueChild(quest,quests)
-            ? quests.Get(quest.MainQuest!.Value) : quest;
-        if (couponSlot is null && (QuestRelationProgress.SequentialParent(quest,quests) || clearDialogue) && deliveryQuest.CompleteNpc > 0 &&
+        if (couponSlot is null && !clearDialogue && QuestRelationProgress.SequentialParent(quest,quests) && quest.CompleteNpc > 0 &&
             captured.Phase is SessionPhase.Dungeon or SessionPhase.Settlement)
         {
-            int resolved = QuestClientSceneProgress.ResolveNpc(expected,deliveryQuest.CompleteNpc,deliveryQuest);
+            int resolved = QuestClientSceneProgress.ResolveNpc(expected,quest.CompleteNpc,quest);
             bool townNpc = resolved > 0 && towns.Areas.Values.Any(area =>
                 area.Default.Npcs.Any(npc => npc.Id == (uint)resolved) ||
                 area.Phases.Any(phase => phase.Npcs.Any(npc => npc.Id == (uint)resolved)));
             if (townNpc)
             {
                 bool atNpc = captured.Entry is { } entry && captured.Room is { NpcMetadataError: null } room &&
-                    deliveryQuest.Definition?.Dungeons.Any(row => row.DungeonId == entry.DungeonId) == true &&
+                    quest.Definition?.Dungeons.Any(row => row.DungeonId == entry.DungeonId) == true &&
                     expected.ActiveMainQuests.Any(active => active.QuestId == quest.Id && QuestHuntProgress.Bound(active,entry)) &&
                     room.Npcs.Any(npc => npc.Id == resolved);
                 if (!atNpc)
@@ -163,10 +307,12 @@ internal sealed partial class GameSession
             preparation = QuestCompletionPlan.Prepare(expected, quest, selector, quests, parameters, items, goldLimits, pieces,
                 growth, coupon is null ? DateTimeOffset.UtcNow : DateTimeOffset.FromUnixTimeSeconds(coupon.UtcSeconds), captured.Clear, multiplier,contracts?.Growth, coupon is null ? stageGraph : null,
                 coupon is not null || stageGraph is null ? null : repository.LoadQuestStageState(owner, expected), experienceBonuses, PremiumPcRoom, expertJobs,
-                rank is null ? null : pvpRatings!.Grade(rank), captured.TerminalClear, strongway2019Active: strongwayQuest,coupon:coupon);
+                rank is null ? null : pvpRatings!.Grade(rank), captured.TerminalClear, strongway2019Active: strongwayQuest,coupon:coupon, epicRoad2019Active: epicRoadQuest);
             if (preparation.Plan is { } planned) planned.PvpRating = rank;
             if (strongwayQuest && preparation.Plan is { } strongwayPlan)
                 strongwayPlan.RequiredEvent = new(strongwaySchedule!, timeProvider ?? TimeProvider.System);
+            if (epicRoadQuest && preparation.Plan is { } epicRoadPlan)
+                epicRoadPlan.RequiredEvent = new(epicRoadSchedule!, timeProvider ?? TimeProvider.System);
         }
         return owner.Execute(() =>
         {
@@ -185,9 +331,16 @@ internal sealed partial class GameSession
                 plan.RequiredEvent is not { } required || !required.Matches(strongwaySchedule!)))
                 return new QuestFinishResult(QuestFinishOutcome.Rejected, RejectionReceipt: rejection)
                     { Failure = QuestCompletionFailure.EligibilityChanged, Reason = "强者之路活动前提已变化" };
+            if (epicRoadQuest && captured.Pending is null && (!IsCurrentEpicRoad2019QuestSchedule(epicRoadSchedule) ||
+                plan.RequiredEvent is not { } epicRequired || !epicRequired.Matches(epicRoadSchedule!)))
+                return new QuestFinishResult(QuestFinishOutcome.Rejected, RejectionReceipt: rejection)
+                    { Failure = QuestCompletionFailure.EligibilityChanged, Reason = "星河裂缝活动前提已变化" };
             plan.BattlePassCompletion ??= DfoServer.Game.BattlePass.BattlePassQuestCompletion.Prepare(plan, timeProvider ?? TimeProvider.System);
             // 不明提交结果保留这份冻结计划；精确查询同接取receipt，不生成新的领奖身份。
-            pendingQuestCompletion = new(plan, captured.SelectionEpoch, captured.Phase, captured.Identity);
+            // 范围子任务的补归档前活动表必须在父提交之前写上，异常把局部回执冲掉之后精确重试还拿得到。
+            var remembered = rangePreviousQuests ?? captured.Pending?.RangePreviousQuests;
+            pendingQuestCompletion = new(plan, captured.SelectionEpoch, captured.Phase, captured.Identity)
+                { RangePreviousQuests = remembered };
             DfoServer.Game.Quests.QuestCompletionCommit commit;
             try { commit = repository.CommitQuestCompletion(owner, plan); }
             catch (QuestTicketExpiredException error) when (plan.Coupon is not null)
@@ -196,6 +349,9 @@ internal sealed partial class GameSession
                 return new QuestFinishResult(QuestFinishOutcome.Rejected,RejectionReceipt:rejection)
                     {Failure=QuestCompletionFailure.EligibilityChanged,Reason=error.Message};
             }
+            // 仓储回执的 PreviousQuests 是父计划当时的活动表，子任务已经不在里面。574 要从补归档前的表起比。
+            if (remembered is { Count: > 0 })
+                commit = commit with { PreviousQuests = remembered };
             var result = new QuestFinishResult(QuestFinishOutcome.Committed,
                 new(commit, owner.Generation, captured.SelectionEpoch, captured.Identity)
                 { Phase = captured.Phase, BattlePassMissionAt = (timeProvider ?? TimeProvider.System).GetUtcNow() });

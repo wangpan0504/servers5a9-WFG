@@ -123,12 +123,12 @@ internal static class RepairTcpTests
             peer.Barrier();
             That(Snapshot() == before, "加载阶段不能紧急修理或扣金币");
             FormalDungeonTcpTests.Load(peer);
-            Send(peer, 0, 9, false);
-            peer.Expect(1, 23, [0, 19, 0]);
+            // 正常首房加载已经提交疲劳扣点；拒绝仓库修理须对比加载完成后的严格快照。
+            before = Snapshot();
             Send(peer, 2, 0, true);
             peer.Expect(1, 23, [0, 19, 0]);
             peer.Barrier();
-            That(Snapshot() == before, "战斗中的普通NPC及仓库修理仍按原场景资格拒绝");
+            That(Snapshot() == before, "商店修理放行不开放战斗中的仓库服务；前=" + before + ";后=" + Snapshot());
             Send(peer, 0, 9, true);
             Ack(peer, 760, 0, 9);
             var delta = peer.Expect(0, 14).Body;
@@ -176,6 +176,39 @@ internal static class RepairTcpTests
             peer.Barrier();
             That(fixture.Query("SELECT gold FROM characters WHERE id=$p0", peer.Id) is [[492L]],
                 "重连回放已提交的紧急修理耐久和绝对余额，满耐久免重复扣费");
+        }
+        foreach (bool practice in new[] { false, true })
+        {
+            ushort shopSlot;
+            using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
+                shopSlot = repo.Create(owner,new(practice?"ShopFree":"ShopPaid",towns.Room,towns.InitialReturn)
+                {
+                    Level=60,AcceptedStoryLevel=1,Skills=characters.Get(0).Skills,DungeonState=CharacterDungeonState.NewOrdinary,
+                    Inventory=new([new(0,new(InventoryListType.Main,3),low),new(0,new(InventoryListType.Main,9),high),
+                        new(0,new(InventoryListType.Equipment,14),high)],Gold:1000)
+                }).Slot;
+            using var peer = Open(fixture);
+            peer.Select(shopSlot);
+            FormalDungeonTcpTests.EntryTown(peer);
+            peer.Send(15,new byte[4]);peer.Expect(1,15,[1]);
+            peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id>>8),1]);peer.Expect(0,27,peer.SelectionNoticeBody());
+            byte[] entry=Convert.FromHexString("030000000000000000FFFF0000000000000000000000000000");entry[8]=practice?(byte)1:(byte)0;
+            peer.Send(16,entry);That(peer.Expect(0,28).Body[12]==(practice?1:0),"商店修理分别建立真实普通和练习模式");peer.Expect(0,29);
+            string loading=Snapshot();
+            Send(peer,0,9,false);peer.Expect(1,23,[0,19,0]);peer.Barrier();
+            That(Snapshot()==loading,"加载中的商店修理仍不提交费用或耐久");
+            FormalDungeonTcpTests.Load(peer);
+            Send(peer,0,9,false);Ack(peer,840,0,9);
+            var delta=peer.Expect(0,14).Body;Gold(delta,840);Durability(delta,0,9,10402,33);peer.Barrier();
+            Send(peer,0,-1,false);Ack(peer,661,0,-1);
+            var rows=PartyDungeonTcpTests.Drain(peer);
+            var main=rows.Single(row=>row.Kind==0&&row.Opcode==14&&row.Body[0]==0).Body;
+            Gold(main,661);Durability(main,0,3,10400,33);
+            Durability(rows.Single(row=>row.Kind==0&&row.Opcode==14&&row.Body[0]==3).Body,3,14,10402,33);
+            That(fixture.Query("SELECT gold FROM characters WHERE id=$p0",peer.Id) is [[661L]],
+                "普通及练习副本均接受NPC单件/全部修理，按普通费率扣费而不是免耗");
+            string repaired=Snapshot();Send(peer,0,-1,false);Ack(peer,661,0,-1);peer.Barrier();
+            That(Snapshot()==repaired,"两模式的满耐久重复修理均不重复扣费或写审计");
         }
         await fixture.StopAsync();
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0, "repair TCP database integrity");

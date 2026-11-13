@@ -37,7 +37,7 @@ internal static partial class AntonRaidMapEntryTcpTests
         await VerifyPhaseProgressAsync(source, Path.Combine(root, $"anton-bp-{mission}-{scenario}"), resources, definition, mission, scenario);
     }
 
-    // 两个开关都打开时，沿真实 117 和 585/586 核对阶段 0 里不依赖计时到期的战况。不发送 596/597，也不进阶段 1。
+    // 两个开关都打开时，沿真实死亡/终点加载和585/586核对阶段0战况。不发送596/597，也不进阶段1。
     static async Task VerifyPhaseProgressAsync(ServerOptions source, string root, TcpTestResources resources, RaidDefinition definition, int deathMission = 0, string scenario = "normal")
     {
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "anton-phase-progress"), resources: resources);
@@ -100,7 +100,8 @@ internal static partial class AntonRaidMapEntryTcpTests
                 InventoryService.Commit(repository, owner, character,
                     new InventoryService(resources.ItemResources.Items, resources.ItemResources.GoldLimits, resources.ItemResources.EpicPieces)
                         .Grant(character, [new(10096296, 1)]));
-                var session = new GameSession(repository, resources.Towns, owner, entry: new(new(2, 19), 23, "[raid]"), timeProvider: clock);
+                var session = new GameSession(repository, resources.Towns, owner, entry: new(new(2, 19), 23, "[raid]"), timeProvider: clock,
+                    questCatalog: SelfTestCatalogs.Quests(resources.Archive));
                 session.Select(0); session.MarkReady();
                 session.CurrentParty = () => parties.Current(session);
                 session.HasMultiplePartyMembers = () => parties.HasMultipleMembers(session);
@@ -250,7 +251,12 @@ internal static partial class AntonRaidMapEntryTcpTests
             peers[0].Send(37, new byte[8]); peers[1].Send(37, new byte[8]);
             ReadPhase(peers[0]); ReadPhase(peers[1]);
             var scene = sessions[0].CurrentFormalDungeonScene()!;
-            var route = QuestStoryRouteTests.Path(scene.Entry.Maze.StaticTopology, scene.Entry.StartMap.Position, scene.Entry.BossMap.Position);
+            var start = scene.Entry.StartMap.Position;
+            var terminal = scene.Entry.BossMap.Position;
+            var route = AntonTcpProbe.Route(catalog, dungeon, checked((byte)scene.Entry.Maze.SourceOrdinal),
+                checked((byte)start.X), checked((byte)start.Y), checked((byte)terminal.X), checked((byte)terminal.Y));
+            bool tremor = dungeon is 212 or 214;
+            List<WirePacket>? loadedSettlement = null;
             var party = sessions[0].PartyDungeon!;
             DungeonPlannedMonster? boss = null;
             for (int index = 0; index < route.Length; index++)
@@ -435,20 +441,70 @@ internal static partial class AntonRaidMapEntryTcpTests
                 }
                 if (index + 1 == route.Length) break;
                 var next = route[index + 1];
+                if (tremor && index + 2 == route.Length)
+                {
+                    // 终点走真实45/37发布已提交双支路事实，不击杀场外装置或补造117。
+                    byte[] move = new byte[100];
+                    move[0] = checked((byte)next.X); move[1] = checked((byte)next.Y);
+                    peers[0].Send(45, move);
+                    That(ReadPhase(peers[0]).Any(packet => packet is { Kind: 0, Opcode: 29 }), "震颤真实45进入上方终点");
+                    ReadPhase(peers[1]);
+                    peers[0].Send(37, new byte[8]);
+                    That(ReadPhase(peers[0]).All(packet => packet.Opcode != 31), "只有队长完成加载时不提前签发震颤结算");
+                    peers[1].Send(37, new byte[8]);
+                    loadedSettlement = ReadPhase(peers[0]);
+                    var memberSettlement = ReadPhase(peers[1]);
+                    if (scene.Entry.Maze.ClearConditions.Count != 0)
+                    {
+                        That(scene.Entry.Maze.ClearConditions is [{ Type: "destroy object", TargetId: 15467, Count: 1 }],
+                            "候选震颤的显式终末条件绑定真实15467物件");
+                        That(new[] { loadedSettlement, memberSettlement }.All(rows => rows.All(packet => packet.Opcode is not (31 or 115))) &&
+                            sessions.All(session => session.Phase == SessionPhase.Dungeon),
+                            "显式物件条件下全员加载仅释放屏障，不提前结算");
+                        peers[1].Send(39, QuestPassiveClearTcpTests.PassiveDeath(15467));
+                        That(ReadPhase(peers[1]).All(packet => packet.Opcode is not (31 or 115)), "非host不能完成震颤终末物件");
+                        peers[0].Send(39, QuestPassiveClearTcpTests.PassiveDeath(15470));
+                        That(ReadPhase(peers[0]).All(packet => packet.Opcode is not (31 or 115)), "错误物件不能完成震颤终末条件");
+                        peers[0].Send(39, QuestPassiveClearTcpTests.PassiveDeath(15467));
+                        loadedSettlement = ReadPhase(peers[0]);
+                        memberSettlement = ReadPhase(peers[1]);
+                    }
+                    That(new[] { loadedSettlement, memberSettlement }.All(rows =>
+                            rows.Count(packet => packet is { Kind: 0, Opcode: 31 }) == 1 &&
+                            rows.All(packet => packet.Opcode != 115)) &&
+                        sessions.All(session => session.Phase == SessionPhase.Settlement),
+                        "按候选终末条件完成后各获得一次31，不伪造Boss115；实际 " +
+                        string.Join(" / ", new[] { loadedSettlement, memberSettlement }.Select((rows, member) =>
+                            $"member={member} phase={sessions[member].Phase} packets=" +
+                            string.Join(',', rows.Select(packet => packet.Kind + ":" + packet.Opcode)))));
+                    peers[1].Send(39, QuestPassiveClearTcpTests.PassiveDeath(15467));
+                    That(ReadPhase(peers[1]).All(packet => packet.Opcode != 31 && packet.Opcode != 115), "通关后非host的15467不能再发31或115");
+                    peers[0].Send(39, QuestPassiveClearTcpTests.PassiveDeath(15470));
+                    That(ReadPhase(peers[0]).All(packet => packet.Opcode != 31 && packet.Opcode != 115), "无线电兵不能代替或重复结算");
+                    peers[0].Send(39, QuestPassiveClearTcpTests.PassiveDeath(15467));
+                    That(ReadPhase(peers[0]).All(packet => packet.Opcode != 31 && packet.Opcode != 115), "官方空条件通关后的15467不能再发31或115");
+                    break;
+                }
                 That(party.Move(sessions[0], (byte)next.X, (byte)next.Y, 0).Length == 2, "清房后两名队员进入下一房");
                 That(party.CompleteLoading(sessions[0]).Length == 0 && party.CompleteLoading(sessions[1]).Length == 2, "下一房等两名队员加载");
             }
-            That(boss is not null, dungeon + " 的路线上有真实 Boss");
-            byte[] body = new byte[39];
-            BinaryPrimitives.WriteUInt16LittleEndian(body, sessions[0].Selected!.Id);
-            BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(2), boss!.ObjectKey);
-            BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(13), checked((uint)boss.CandidateLevel));
-            BinaryPrimitives.WriteUInt64LittleEndian(body.AsSpan(17), 504);
-            peers[0].Send(117, body);
-            var result = Until(peers[0], 115);
-            ReadPhase(peers[1]);
+            List<WirePacket> result;
+            if (tremor)
+                result = loadedSettlement ?? throw new InvalidOperationException("震颤没有完成终点加载");
+            else
+            {
+                That(boss is not null, dungeon + " 的路线上有真实 Boss");
+                byte[] body = new byte[39];
+                BinaryPrimitives.WriteUInt16LittleEndian(body, sessions[0].Selected!.Id);
+                BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(2), boss!.ObjectKey);
+                BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(13), checked((uint)boss.CandidateLevel));
+                BinaryPrimitives.WriteUInt64LittleEndian(body.AsSpan(17), 504);
+                peers[0].Send(117, body);
+                result = Until(peers[0], 115);
+                ReadPhase(peers[1]);
+            }
             That(result.Any(packet => packet is { Kind: 0, Opcode: 585 or 586 }),
-                "117 后发布实际585/586状态，实际 " + string.Join(',', result.Select(packet => packet.Kind + ":" + packet.Opcode)));
+                "正式清图后发布实际585/586状态，实际 " + string.Join(',', result.Select(packet => packet.Kind + ":" + packet.Opcode)));
             var battle = sessions[0].CurrentRaidBattle(actors[0])!;
             foreach (var row in battle.DungeonSnapshot(battle.View))
                 That(StateOf(row.Id) == (byte)row.State, "每次清图后客户端累计状态与已提交战况一致：" + row.Id);

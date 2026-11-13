@@ -22,12 +22,16 @@ internal sealed partial class ItemCatalog
         if (!common && raw.DeclaredStackInAccountInventory == 0) return null;
         if (kind != ItemKind.Material || text.Section("attach type").Trim('`', ' ', '\r', '\n') != "[account]")
             throw new InvalidDataException("账号材料类型或归属声明无效：" + id);
+        // 星河两种材料沿已核实的45实体链保留完整核心，不转为账号余额。
+        if (common && id is (490013716 or 490013717)) return null;
         var limits = accountMaterialLimits.Value.GetValueOrDefault(id);
         return new(stackLimit, limits?.WeeklyAccountLimit ?? 0, limits?.WeeklyCharacterLimit ?? 0, common);
     }
 
     static ImmutableDictionary<int, AccountMaterialDefinition> ReadAccountMaterialLimits(PvfArchive archive)
     {
+        // 核心自测用空档案构造目录。没有 PVF 时额度文件不存在，与 Contains 为假相同。
+        if (archive is null) return ImmutableDictionary<int, AccountMaterialDefinition>.Empty;
         var rows = ImmutableDictionary.CreateBuilder<int, AccountMaterialDefinition>();
         foreach (string path in new[] { "etc/raid/raidrewardlimit.etc", "etc/raid/chn_raidrewardlimit.etc" })
         {

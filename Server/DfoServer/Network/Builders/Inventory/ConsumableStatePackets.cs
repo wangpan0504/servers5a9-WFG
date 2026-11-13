@@ -4,6 +4,17 @@ namespace DfoServer.Network.Builders.Inventory;
 
 internal static class ConsumableStatePackets
 {
+    public static byte[] Updates(IReadOnlyList<ConsumableStateUpdate> rows)
+    {
+        if (rows.Count > byte.MaxValue || rows.Any(row => row.ItemId <= 0 || row.RemainingSeconds is < 0 or > int.MaxValue / 1000))
+            throw new InvalidDataException("持续状态更新超过本版字段边界");
+        using var stream = new MemoryStream();
+        using var writer = new BinaryWriter(stream);
+        writer.Write(checked((byte)rows.Count));
+        foreach (var row in rows) { writer.Write(row.ItemId); writer.Write(row.RemainingSeconds); }
+        return stream.ToArray();
+    }
+
     public static byte[] Grant(int itemId, int seconds)
     {
         byte[] body = new byte[9]; body[0] = 1;

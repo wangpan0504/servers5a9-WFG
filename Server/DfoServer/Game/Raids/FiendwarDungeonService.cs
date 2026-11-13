@@ -22,8 +22,7 @@ internal sealed class FiendwarDungeonService(RaidRegistry registry, PartyService
             !definition.Areas.TryGetValue(request.Area, out var target) || target.DungeonId <= 0 ||
             !battle.AllowsFiendwarEntry(target.DungeonId)) return null;
         // 00DEB440在发送36前列出当前地区成员，确认的是这批成员共同进入目标战斗。
-        var members = raid with { Members = raid.Members.Where(row =>
-            battle.FiendwarPosition(row.Actor.Character) == position.Area).ToImmutableArray() };
+        var members = EncounterMembers(session, raid);
         return new(raid, members, battle, position.Area, target.DungeonId, request);
     }
 
@@ -81,8 +80,18 @@ internal sealed class FiendwarDungeonService(RaidRegistry registry, PartyService
     {
         var actor = raid.Members.Single(member => ReferenceEquals(member.Actor.Session, session)).Actor;
         var battle = session.CurrentRaidBattle(actor);
-        return battle is null ? raid : raid with { Members = raid.Members.Where(member =>
-            battle.FiendwarPosition(member.Actor.Character) == battle.FiendwarPosition(actor.Character)).ToImmutableArray() };
+        if (battle is null) return raid;
+        var members = raid.Members.Where(member =>
+            battle.FiendwarPosition(member.Actor.Character) == battle.FiendwarPosition(actor.Character)).ToImmutableArray();
+        if (members.Length > 4)
+        {
+            // 两队可在系统返回的桥上交接；按原遭遇分队进图，不把桥上八人合成一个副本。
+            var party = session.CurrentParty?.Invoke();
+            members = party is { } squad && squad.FiendwarBattleId == battle.Instance
+                ? members.Where(member => squad.Members.Any(peer => ReferenceEquals(peer.Actor.Session, member.Actor.Session))).ToImmutableArray()
+                : members.Where(member => member.Actor.Session.CurrentParty?.Invoke()?.FiendwarBattleId != battle.Instance).ToImmutableArray();
+        }
+        return raid with { Members = members };
     }
     internal PartySnapshot? Group(GameSession initiator, int dungeon, out string? reason, RaidParty? expectedMembers = null)
     {
@@ -92,7 +101,7 @@ internal sealed class FiendwarDungeonService(RaidRegistry registry, PartyService
             initiator.CurrentRaidBattle(anchor.Actor) is not { Kind: RaidKind.Fiendwar } battle || battle.Instance != start.InstanceId ||
             battle.FiendwarAreaForDungeon(dungeon) is not { } area || battle.FiendwarPosition(anchor.Actor.Character) != area ||
             !battle.AllowsFiendwarEntry(dungeon)) return null;
-        var members = raid.Members.Where(member => member.Actor.IsCurrent && battle.FiendwarPosition(member.Actor.Character) == area)
+        var members = EncounterMembers(initiator, raid).Members.Where(member => member.Actor.IsCurrent && battle.FiendwarPosition(member.Actor.Character) == area)
             .OrderBy(member => member == anchor ? 0 : 1).ThenBy(member => member.Slot).ToArray();
         if (members.Length is < 1 or > 4 || members.Any(member => member.Actor.Session.Phase != SessionPhase.Town)) return null;
         if (expectedMembers is not null && (members.Length != expectedMembers.Members.Length ||

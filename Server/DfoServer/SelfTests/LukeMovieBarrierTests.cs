@@ -12,7 +12,7 @@ internal static class LukeMovieBarrierTests
     internal static void Run(RaidActor[] original)
     {
         foreach (int count in new[] { 1, 4, 8 }) Check(original.Take(count).ToArray(), "all");
-        foreach (string mode in new[] { "disconnect", "depart", "confirmed-disconnect", "automatic", "ineligible", "ineligible-depart", "ineligible-timeout" })
+        foreach (string mode in new[] { "disconnect", "depart", "confirmed-disconnect", "automatic", "ineligible", "ineligible-depart", "ineligible-timeout", "revision" })
             Check(original.Take(4).ToArray(), mode);
     }
 
@@ -80,6 +80,27 @@ internal static class LukeMovieBarrierTests
         }
         That(!battle.CompleteLukeFirstMovie(actors[0], view with { Revision = view.Revision + 1 }),
             "复制或过期view不能登记659=1");
+        if (mode == "revision")
+        {
+            var movie = battle.CaptureMovie(actors[0])!.Value;
+            int acknowledgements = 0;
+            bool Ack() { acknowledgements++; return true; }
+            That(battle.ConfirmMovie(actors[0], view, Guid.NewGuid(), true, Ack) is null &&
+                battle.ConfirmMovie(actors[0], view with { Phase = 1 }, movie.Event, true, Ack) is null &&
+                battle.ConfirmMovie(actors[0], view with { Instance = Guid.NewGuid() }, movie.Event, true, Ack) is null && acknowledgements == 0,
+                "旧阶段、另一实例或错误完成事件均不能提交电影事实或排成功ACK");
+            // 明确注入捕获后、确认前的无关显示版本更新；不伪称为真实客户端或正式退场。
+            typeof(AntonRaidBattle).GetField("current", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                .SetValue(battle, view with { Revision = view.Revision + 1 });
+            That(!battle.IsCurrent(view) && battle.CaptureMovie(actors[0])?.Event == movie.Event,
+                "全局精确view守卫仍拒绝旧版本，同阶段已提交电影事件保持不变");
+            That(battle.ConfirmMovie(actors[0], view, movie.Event, true, () => false) is { Changed: true, Acknowledged: false } &&
+                battle.ConfirmMovie(actors[0], view, movie.Event, true, Ack) is { Changed: false, Acknowledged: true } && acknowledgements == 1,
+                "同电影版本变化仍提交真实确认；ACK入队失败后重试只补ACK，不重复完成事实");
+            foreach (var actor in actors.Skip(1)) That(battle.CompleteLukeFirstMovie(actor, battle.View), "其余真实确认解除原屏障");
+            That(battle.LukeMovieCardsReady(battle.View), "重试后不丢确认，不等待185秒兜底才开牌");
+            return;
+        }
         var last = actors[^1];
         That(battle.CanConfirmLukeMovie(last, view), "Present成员有动画确认入口，多人末位无领奖资格仍须确认");
         if (mode == "confirmed-disconnect")

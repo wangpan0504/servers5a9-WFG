@@ -933,9 +933,11 @@ internal static class FormalDungeonPublicationTests
         public OperationHopeRewardCommit CommitOperationHopeReward(AccountOwners.Lease owner, OperationHopeRewardPlan plan) => inner.CommitOperationHopeReward(owner,plan);
         public Character ClearOperationHopeAcceptances(AccountOwners.Lease owner, Character expected,
             DfoServer.GameWorld.Dungeons.OperationHopeCatalog catalog, IReadOnlyList<ActiveMainQuest> removals) => inner.ClearOperationHopeAcceptances(owner,expected,catalog,removals);
-        public Character ConsumeOperationHopeAreaFatigue(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run, TimeProvider? battlePassClock = null) => inner.ConsumeOperationHopeAreaFatigue(owner,expected,run,battlePassClock);
-        public Character ConsumeDungeonRoomFatigue(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run, TimeProvider? battlePassClock = null) =>
-            inner.ConsumeDungeonRoomFatigue(owner, expected, run,battlePassClock);
+        public Character ConsumeOperationHopeAreaFatigue(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run, TimeProvider? battlePassClock = null,
+            DfoServer.Game.Inventory.Models.InventoryItem? energySource = null) => inner.ConsumeOperationHopeAreaFatigue(owner,expected,run,battlePassClock,energySource);
+        public Character ConsumeDungeonRoomFatigue(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run, TimeProvider? battlePassClock = null,
+            DfoServer.Game.Inventory.Models.InventoryItem? energySource = null) =>
+            inner.ConsumeDungeonRoomFatigue(owner, expected, run,battlePassClock,energySource);
         PreparedDungeonDeath? first;
         public int Calls { get; private set; }
         int settlementCalls;
@@ -954,12 +956,13 @@ internal static class FormalDungeonPublicationTests
         public bool PickupDuplicate { get; private set; }
         public DungeonGrowthCommit CommitDungeonGrowth(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run,
             PreparedDungeonDeath prepared, DungeonExperienceReward reward, CharacterGrowthCatalog catalog, FrozenDungeonGroundDeath? loot = null, DfoServer.Game.Quests.QuestDropPlan? questDrops = null, DfoServer.Game.Inventory.Services.EquipmentGrowthPlan? equipmentGrowth = null,
-            DfoServer.Game.Raids.AntonRaidBattle.FiendwarTitleDeath? fiendwarTitle = null, DungeonDirectPickupPlan? directPickup = null)
+            DfoServer.Game.Raids.AntonRaidBattle.FiendwarTitleDeath? fiendwarTitle = null, DungeonDirectPickupPlan? directPickup = null,
+            SpecialDungeonClearRewardPlan? specialClearReward = null)
         {
             Calls++;
             first ??= prepared;
             SamePrepared = ReferenceEquals(first, prepared);
-            var result = inner.CommitDungeonGrowth(owner, expected, run, prepared, reward, catalog, loot, questDrops, equipmentGrowth, fiendwarTitle, directPickup);
+            var result = inner.CommitDungeonGrowth(owner, expected, run, prepared, reward, catalog, loot, questDrops, equipmentGrowth, fiendwarTitle, directPickup, specialClearReward);
             LastDuplicate = result.Duplicate;
             if (Calls == 1 && loseGrowth) throw new IOException("合成SQL已提交但结果丢失");
             return result;
@@ -1005,6 +1008,8 @@ internal static class FormalDungeonPublicationTests
         public Character CommitExpertJobMachine(AccountOwners.Lease owner, Character expected, InventoryPlan wallet, int grade, int endurance) => inner.CommitExpertJobMachine(owner, expected, wallet, grade, endurance);
         public Character ReserveDungeonAttempt(AccountOwners.Lease owner, Character expected, uint nextObjectKey,
             DfoServer.Game.Dungeons.WeeklyDungeonEntry? weekly = null) => inner.ReserveDungeonAttempt(owner, expected, nextObjectKey, weekly);
+        public DfoServer.Game.Dungeons.DungeonQuotaResetResult ResetDungeonLimits(AccountOwners.Lease owner) =>
+            inner.ResetDungeonLimits(owner);
         public DfoServer.Game.Dungeons.DungeonEntryResetResult ResetDungeonEntries(AccountOwners.Lease owner) =>
             inner.ResetDungeonEntries(owner);
         public DfoServer.Game.Dungeons.RewardLimitResetResult ResetRewardLimits(AccountOwners.Lease owner) =>

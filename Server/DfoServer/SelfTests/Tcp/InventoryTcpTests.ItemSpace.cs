@@ -13,8 +13,8 @@ internal static partial class InventoryTcpTests
             peer.Send(870, [255]);
             var rows = AntonTcpProbe.Barrier(peer, "inventory space synchronization");
             That(rows.Count(row => row is { Kind: 0, Opcode: 105 }) == 1 &&
-                rows.Where(row => row is { Kind: 0, Opcode: 13 }).Select(row => row.Body[0]).SequenceEqual(new byte[] { 0, 1, 7, 3 }),
-                "城镇和漩涡1/4/8人图内重复870均收到完整四容器及宠物详情");
+                rows.Where(row => row is { Kind: 0, Opcode: 13 }).Select(row => row.Body[0]).SequenceEqual(new byte[] { 0, 1, 7, 3, 45 }),
+                "城镇和漩涡1/4/8人图内重复870均收到完整五容器及宠物详情");
             var ack = rows.Single(row => row is { Kind: 1, Opcode: 870 });
             Bytes(ack.Body, [1], "原生870成功无额外正文");
             That(rows.FindIndex(row => row == ack) > rows.FindLastIndex(row => row is { Kind: 0, Opcode: 13 or 1449 or 105 or 251 }),

@@ -51,6 +51,6 @@ internal sealed record LevelUpByTableDefinition(ItemTemplate Item, ImmutableArra
         return 0;
     }
 
-    public bool Allows(byte level, byte job, byte growType) => Item.AllowsUse(level, job) &&
+    public bool Allows(byte level, byte job, byte growType) => Item.AllowsActivation(level, job) &&
         (FirstGrowTypes.IsEmpty || FirstGrowTypes.Contains((byte)(growType & 15))) && TargetLevel(level) > level;
 }

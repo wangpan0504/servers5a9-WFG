@@ -10,7 +10,7 @@ namespace DfoServer.GameWorld.Dungeons;
 // 其余段由同一解析器 03FEFA80 存入单例，但客户端没有读者（KB-20261020T165745-34493afd4f），语义只能由服务端约定：
 //   [reset info] 键→值（PVF：0→-1，1→4）；[account dungeon incount info] 每条“重置键 副本 上限 标志”；
 //   [enter add incount dungeon index] 成对“入场副本 连带副本”；[sub incount on clear dungeon] 通关才扣次的副本；
-//   [special weekly reset day] 成对“副本 星期”。[single dungeon]、[event link enterable dungeon]、[send dungeon info account login] 只保留原样，未实现。
+//   [special weekly reset day] 成对“副本 星期”。[single dungeon] 保留独立账号角色绑定周期。
 internal sealed record DungeonIncountRow(int ResetType, ImmutableArray<int> Dungeons, int Limit, bool Flag, int Second)
 {
     // 黎明裂缝复用角色日账本，并通过 1545 + 550 投影真实剩余。
@@ -39,6 +39,9 @@ internal sealed class DungeonIncountCatalog
     public ImmutableDictionary<int, int> SpecialWeeklyResetDay { get; }
     public DimensionDungeonCatalog? Dimension { get; private init; }
     public ImmutableArray<DungeonIncountRow> DaybreakRows { get; private init; } = [];
+    public DungeonIncountRow? ParticularHellRow { get; private init; }
+    public ImmutableHashSet<int>? AvailableDungeons { get; private init; }
+    public ImmutableArray<SingleDungeonGroup> SingleGroups { get; private init; } = [];
 
     DungeonIncountCatalog(ImmutableArray<DungeonIncountRow> rows, ImmutableArray<AccountIncountRow> accountRows, ImmutableDictionary<int, int> resetInfo,
         ImmutableArray<(int, int)> enterAdd, ImmutableHashSet<int> subOnClear, ImmutableDictionary<int, int> specialWeekly)
@@ -53,6 +56,7 @@ internal sealed class DungeonIncountCatalog
 
     public DungeonIncountRow? Find(int dungeon) => Rows.FirstOrDefault(row => row.Dungeons.Contains(dungeon)) ??
         DaybreakRows.FirstOrDefault(row => row.Dungeons.Contains(dungeon)) ??
+        (ParticularHellRow?.Dungeons.Contains(dungeon) == true ? ParticularHellRow : null) ??
         (Dimension?.Contains(dungeon) == true ? Dimension.DailyRow : null);
     public AccountIncountRow? FindAccount(int dungeon) => AccountRows.FirstOrDefault(row => row.Dungeon == dungeon);
     public bool ChargesOnClear(int dungeon) => SubOnClear.Contains(dungeon);
@@ -64,17 +68,41 @@ internal sealed class DungeonIncountCatalog
     public static DungeonIncountCatalog Load(PvfArchive archive)
     {
         var parsed = Parse(archive.ReadTokens(Path), archive.ResolveString);
+        var available = archive.Contains("dungeon/dungeon.lst")
+            ? DungeonCatalog.ParseDirectory(archive.ReadTokens("dungeon/dungeon.lst"), archive.ResolveString, "dungeon").Keys.ToImmutableHashSet()
+            : null;
         var daybreak = ReadDaybreak(archive.ReadText("etc/crackofdaybreak.etc"));
+        var particular = ReadParticularHell(archive.ReadTokens(ParticularHellPartyCatalog.Path), archive.ResolveString);
         if (parsed.Rows.Any(row => row.Dungeons.Any(id => daybreak.Any(other => other.Dungeons.Contains(id)))))
             throw new InvalidDataException("黎明专表与通用次数重复登记");
+        if (parsed.Rows.Any(row => row.Dungeons.Contains(particular.CountKey)) || parsed.FindAccount(particular.CountKey) is not null ||
+            parsed.SubOnClear.Contains(particular.CountKey))
+            throw new InvalidDataException("魔界裂缝专表与通用次数、账号次数或通关计次冲突");
         var catalog = new DungeonIncountCatalog(parsed.Rows, parsed.AccountRows, parsed.ResetInfo,
-            parsed.EnterAdd, parsed.SubOnClear, parsed.SpecialWeeklyResetDay) { DaybreakRows = daybreak };
+            parsed.EnterAdd, parsed.SubOnClear, parsed.SpecialWeeklyResetDay)
+            { DaybreakRows = daybreak, ParticularHellRow = particular, AvailableDungeons = available, SingleGroups = parsed.SingleGroups };
         if (!archive.Contains(DimensionDungeonCatalog.Path)) return catalog;
         var dimension = new DimensionDungeonCatalog(archive);
-        if (catalog.Rows.Concat(daybreak).Any(row => row.Dungeons.Any(dimension.Contains)))
+        if (catalog.Rows.Concat(daybreak).Append(particular).Any(row => row.Dungeons.Any(dimension.Contains)))
             throw new InvalidDataException("异界专表与通用次数重复登记");
         return new(catalog.Rows, catalog.AccountRows, catalog.ResetInfo,
-            catalog.EnterAdd, catalog.SubOnClear, catalog.SpecialWeeklyResetDay) { Dimension = dimension, DaybreakRows = daybreak };
+            catalog.EnterAdd, catalog.SubOnClear, catalog.SpecialWeeklyResetDay)
+            { Dimension = dimension, DaybreakRows = daybreak, ParticularHellRow = particular, AvailableDungeons = available, SingleGroups = parsed.SingleGroups };
+    }
+
+    internal static DungeonIncountRow ReadParticularHell(IReadOnlyList<PvfToken> tokens, Func<int, string> resolve)
+    {
+        var document = new PvfTokenDocument(tokens, resolve);
+        var limits = document.Sections.Where(section => section.Name == "daily open chance").ToArray();
+        if (!document.Diagnostics.IsEmpty || limits.Length != 1 || limits[0].Values is not [{ Type: 0, Value: > 0 and <= byte.MaxValue }])
+            throw new InvalidDataException("魔界裂缝每日次数声明无效");
+        var indexes = document.Sections.Where(section => section.Name == "dungeon")
+            .SelectMany(section => section.Children.Where(child => child.Name == "index")).ToArray();
+        if (indexes.Any(section => section.Values is not [{ Type: 0, Value: > 0 }]) ||
+            indexes.Count(section => section.Values[0].Value == 316) != 1)
+            throw new InvalidDataException("魔界裂缝316副本声明缺失或重复");
+        // 同表中的530等副本各有自己的次数合同，不能把每日开放次数套到它们。
+        return new(0, [316], limits[0].Values[0].Value, false, 0) { HasCountNotification = false };
     }
 
     internal static ImmutableArray<DungeonIncountRow> ReadDaybreak(string text)
@@ -147,8 +175,26 @@ internal sealed class DungeonIncountCatalog
                 if (pairs[at + 1] is < 0 or > 6 || !special.TryAdd(pairs[at], pairs[at + 1])) throw new InvalidDataException("[special weekly reset day] 无效");
         }
 
+        var singles = ImmutableArray.CreateBuilder<SingleDungeonGroup>();
+        foreach (var block in document.Sections.Where(section => section.Name == "single dungeon"))
+            foreach (var group in block.Children)
+            {
+                if (group.Name != "group" || Ints(group, "group") is not [> 0] ||
+                    group.Children.Any(child => child.Name is not ("dungeon index" or "character limit" or "reset day")))
+                    throw new InvalidDataException("单人绑定组声明无效");
+                int[] Field(string name) => group.Children.Where(child => child.Name == name).ToArray() is [var child]
+                    ? Ints(child, name) : [];
+                var ids = Field("dungeon index"); var limit = Field("character limit"); var reset = Field("reset day");
+                if (ids.Length == 0 || ids.Any(id => id <= 0) || ids.Distinct().Count() != ids.Length ||
+                    limit is not [> 0 and <= 100] || reset.Length > 1 || reset.Any(day => day is < 0 or > 6))
+                    throw new InvalidDataException("单人绑定组目标、角色数量或周期无效");
+                singles.Add(new(group.Values[0].Value, [.. ids], limit[0], reset.Length == 1 ? reset[0] : DefaultWeeklyResetDay));
+            }
+        if (singles.Select(group => group.Id).Distinct().Count() != singles.Count ||
+            singles.SelectMany(group => group.Dungeons).GroupBy(id => id).Any(group => group.Count() > 1))
+            throw new InvalidDataException("单人绑定组重复");
         return new(rows.ToImmutable(), accountRows.ToImmutable(), resetInfo.ToImmutable(), enterAdd.ToImmutable(),
-            [.. Sections("sub incount on clear dungeon").SelectMany(list => list)], special.ToImmutable());
+            [.. Sections("sub incount on clear dungeon").SelectMany(list => list)], special.ToImmutable()) { SingleGroups = singles.ToImmutable() };
 
         static IEnumerable<PvfTokenSection> Flatten(IEnumerable<PvfTokenSection> sections) =>
             sections.SelectMany(section => new[] { section }.Concat(Flatten(section.Children)));

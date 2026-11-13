@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using DfoServer.Game.Accounts;
+using DfoServer.Game.Dungeons;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Skills;
 using DfoServer.GameWorld.Towns;
@@ -111,9 +112,9 @@ internal static partial class FormalDungeonTcpTests
             }
             if (slot < 2)
             {
-                // 精确等待本实例600秒到期，不依赖活动边界等其他一次性定时器的总数。
-                await clock.WaitForOneShotTimerAsync(clock.GetUtcNow().AddSeconds(600));
-                clock.Advance(TimeSpan.FromSeconds(599)); peer.Barrier();
+                // 精确等待本实例1800秒到期，不依赖活动边界等其他一次性定时器的总数。
+                await clock.WaitForOneShotTimerAsync(clock.GetUtcNow().AddSeconds(LostLandAdmission.InitialSeconds));
+                clock.Advance(TimeSpan.FromSeconds(LostLandAdmission.InitialSeconds - 1)); peer.Barrier();
                 clock.Advance(TimeSpan.FromSeconds(1)); peer.Expect(0, 31, []);
             }
             if (slot == 0)
@@ -124,8 +125,20 @@ internal static partial class FormalDungeonTcpTests
             }
             if (slot == 1)
             {
-                // 收到31后再等原生30秒宽限注册，只有无42槽推进宽限。
-                await clock.WaitForOneShotTimerAsync(clock.GetUtcNow().AddSeconds(30));
+                // 周签到也有30秒等待；必须确认本角色、本实例的回城宽限已注册，不能借用同期限的活动计时器。
+                That(SpinWait.SpinUntil(() =>
+                {
+                    var events = fixture.Events();
+                    return events.Where(row => row.GetProperty("Kind").GetString() == "formal_dungeon_entry" &&
+                            row.GetProperty("Detail").GetProperty("Accepted").GetBoolean() &&
+                            row.GetProperty("Detail").GetProperty("CharacterId").GetUInt16() == peer.Id)
+                        .Any(entry => events.Any(row => row.GetProperty("Kind").GetString() == "formal_lost_land_timer" &&
+                            row.GetProperty("Detail").GetProperty("State").GetString() == "return_grace_started" &&
+                            row.GetProperty("Detail").GetProperty("Connection").GetInt64() ==
+                                entry.GetProperty("Detail").GetProperty("Connection").GetInt64() &&
+                            row.GetProperty("Detail").GetProperty("InstanceId").GetGuid() ==
+                                entry.GetProperty("Detail").GetProperty("Identity").GetProperty("InstanceId").GetGuid()));
+                }, TimeSpan.FromSeconds(5)), "无42回城只推进当前实例已注册的30秒宽限");
                 clock.Advance(TimeSpan.FromSeconds(30));
             }
             if (slot != 1) { peer.Send(42); peer.Expect(1, 42, [1]); }
@@ -145,7 +158,7 @@ internal static partial class FormalDungeonTcpTests
             That(U32(map, 14) == 11200, "正式起始房使用匹配PVF地图11200");
             peer.Expect(0, 550);
             Load(peer);
-            peer.Expect(0, 603, [0x58, 0x02, 0, 0, 0xB0, 0x04, 0, 0]);
+            peer.Expect(0, 603, [0x08, 0x07, 0, 0, 0xB0, 0x04, 0, 0]);
             return map;
         }
         void Town(TcpPeer peer)

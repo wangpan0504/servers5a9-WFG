@@ -18,12 +18,17 @@ internal sealed record PartySnapshot(ushort Id, PartyMember[] Members, byte Lead
     public PartySettings Settings { get; init; } = PartySettings.Default;
     public Guid? EvildomWarBattleId { get; init; }
     public Guid? FiendwarBattleId { get; init; }
+    public Guid? PreyBattleId { get; init; }
+    public byte PreyBoardingArea { get; init; }
+    public long PreyBoardingOrder { get; init; }
 }
 internal enum PartyNoticeKind { Invite, Accepted, Refused, Updated, Removed, Endpoints, SceneChanged, LeaderChanged, SettlementCard, FrameChanged }
+internal enum PartyRemovalReason { None, Kicked }
 internal sealed record PartyNotice(PartyNoticeKind Kind, PartyMember Recipient, PartyMember? Peer = null,
     PartySnapshot? Party = null, uint PeerId = 0, Func<bool>? Guard = null, PartyDungeonInstance? Dungeon = null)
 {
     public ImmutableArray<DungeonCardView?> CardEvent { get; init; }
+    public PartyRemovalReason RemovalReason { get; init; }
 }
 internal sealed record PartyResult(ushort Error, PartyNotice[] Notices)
 {
@@ -149,7 +154,8 @@ internal sealed partial class PartyService
             if (prepared is null && captured.Any(m => m.Member is null || Find(m.Member) is { } existing && !ReferenceEquals(existing, single))) return null;
             var groups = single is not null ? new[] { new RaidPartyGroup([..single.Members], single.Settings, single) } :
                 prepared?.Groups.ToArray() ?? captured.GroupBy(m => m.Raid.Squad).OrderBy(g => g.Key)
-                .Select(group => new RaidPartyGroup([..group.Select((m, slot) => m.Member! with { Slot = (byte)slot })],
+                .Select(group => new RaidPartyGroup([..group.OrderBy(m => raid is { Type: 3, Guide: false }
+                    ? m.Raid.PreyPosition : m.Raid.Slot).Select((m, slot) => m.Member! with { Slot = (byte)slot })],
                     PartySettings.Default with { TitleCode = 0, Title = $"Party : {group.Key}", Capacity = 4,
                         Dungeon = uint.MaxValue, Difficulty = 5 }, null)).ToArray();
             if (groups.Any(g => g.Members.Length is < 1 or > 4) ||
@@ -204,6 +210,8 @@ internal sealed partial class PartyService
             return Reject(21);
         return member.Actor.Execute(() =>
         {
+            // 普雷实际队伍只由左右空间形成，不能由普通建队请求创建单人队或覆盖空间队伍设置。
+            if (session.CapturePreyBoarding() is { Battle.PreyGuide: false }) return Reject(21);
             if (settings is { Kind: 5, KindArgument: 2 } && guideStore is not null)
                 return SetEvildomWarGuideInformation(session, member, operation, settings);
             lock (gate)
@@ -394,23 +402,34 @@ internal sealed partial class PartyService
                 if (kickSlot is not null && (party.Leader != own.Slot || kickSlot == own.Slot)) return Reject(4);
                 var removed = kickSlot is { } slot ? party.Members.FirstOrDefault(m => m.Slot == slot) : own;
                 if (removed is null) return Reject(19);
-                return new PartyResult(0, Remove(party, [removed]));
+                return new PartyResult(0, Remove(party, [removed], kickSlot is not null ? removed : null));
             }
         });
     }
-    PartyNotice[] Remove(PartySnapshot party, PartyMember[] removed)
+    PartyNotice[] Remove(PartySnapshot party, PartyMember[] removed, PartyMember? kicked = null)
     {
         var remaining = party.Members.Except(removed).ToArray();
+        bool boarding = party.PreyBattleId is not null && remaining.All(m =>
+            m.Actor.Session.Phase == SessionPhase.Town && m.Actor.Session.PartyDungeon is null);
+        // 待机空间只剩一人时双方都退出实际队伍；留场者的进侧顺序仍保存在原Session。
+        if (boarding && remaining.Length == 1)
+        {
+            removed = [..removed, ..remaining];
+            remaining = [];
+        }
         var notices = removed.Select(m =>
         {
             long membership = m.Actor.Session.AdvancePartyMembership();
             return new PartyNotice(PartyNoticeKind.Removed, m, Party: party,
-                Guard: () => m.Actor.IsCurrent() && m.Actor.Session.PartyMembershipVersion == membership && Absent(m));
+                Guard: () => m.Actor.IsCurrent() && m.Actor.Session.PartyMembershipVersion == membership && Absent(m))
+            { RemovalReason = ReferenceEquals(m, kicked) ? PartyRemovalReason.Kicked : PartyRemovalReason.None };
         }).ToList();
         if (remaining.Length == 0) parties.Remove(party.Id);
         else
         {
-            party = party with { Members = remaining, Leader = remaining.Any(m => m.Slot == party.Leader) ? party.Leader : remaining.Min(m => m.Slot),
+            if (boarding) remaining = remaining.Select((member, slot) => member with { Slot = checked((byte)slot) }).ToArray();
+            party = party with { Members = remaining, Leader = boarding ? (byte)0 :
+                remaining.Any(m => m.Slot == party.Leader) ? party.Leader : remaining.Min(m => m.Slot),
                 Revision = ++revision };
             parties.Set(party.Id, party);
             notices.AddRange(remaining.Select(m => Updated(party, m)));

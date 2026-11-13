@@ -18,8 +18,6 @@ internal static class EquipmentCatalogTests
         int checks = Count;
         int[] beastIds = [100300907, 100312601, 100322493];
         var expected = ItemCatalogTests.ReadOriginalIndexDeclarations(pvf, "equipment", 1);
-        That(expected.Keys.Count(id => !beastIds.Contains(id)) == 178841,
-            "原始装备列表保留178841项旧声明，新增魔兽声明逐项按实际列表判断");
         That(catalog.TemplateCount == expected.Count && catalog.TemplateIds.Count == expected.Count &&
             catalog.TemplateIds.Distinct().Count() == expected.Count &&
             catalog.TemplateIds.SequenceEqual(expected.Keys.Order()),

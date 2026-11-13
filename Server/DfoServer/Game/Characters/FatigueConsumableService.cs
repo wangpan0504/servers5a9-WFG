@@ -22,8 +22,8 @@ internal sealed class FatigueConsumableService(ItemCatalog items, TimeProvider? 
             !ItemSlotBoundService.Allows(expected.Inventory, slot, ItemKind.Consumable))
             throw new InvalidDataException("疲劳药剂源实例无效");
         var definition = items.FatigueConsumable(source.Core.ItemId);
-        if (definition is null || !definition.Item.AllowsUse(expected.Level, expected.Job))
-            throw new InvalidDataException("疲劳药剂资源、等级或职业资格不符");
+        if (definition is null || !definition.Item.AllowsActivation(expected.Level, expected.Job))
+            throw new InvalidDataException("疲劳药剂资源或等级资格不符");
         if (expected.Inventory.ConsumableStates.Any(state => state.Kind == ConsumableStateKind.Cooldown &&
             state.CoolGroup == definition.CoolGroup && state.Active(now.ToUnixTimeMilliseconds())))
             throw new InvalidDataException("疲劳药剂的持久冷却尚未结束");

@@ -134,6 +134,21 @@ internal static class QuestModuleSchemaTests
         That(QuestEventProgress.Inventory([active[1]], cubeCatalog, new(InventorySnapshot.Empty, wallet, "grant_cube"))[0].ConditionState == 0 &&
             QuestEventProgress.Inventory([active[1]], cubeCatalog, new(wallet, wallet, "query_cube"))[0].ConditionState == 1,
             "小晶块等已有物品编号的钱包净增加可推进，不把历史余额当作新获取");
+        var uiQuest = basis with { Id = 102, Condition = "[ui click]", IntData = [42] };
+        var coinQuest = basis with { Id = 103, Condition = "[use fortune coin]", IntData = [2058, 1] };
+        var treasureQuest = basis with { Id = 104, Condition = "[clear treasure dungeon]", SubType = 1, IntData = [2, 100, 101] };
+        var powerWinQuest = basis with { Id = 105, Condition = "[powerwar win]", IntData = [] };
+        var assaultQuest = basis with { Id = 106, Condition = "[assault count]", IntData = [] };
+        var extendedCatalog = new QuestCatalog(new[] { uiQuest, coinQuest, treasureQuest, powerWinQuest, assaultQuest }.ToDictionary(row => row.Id));
+        var extendedActive = extendedCatalog.All.Select((q, idx) => new ActiveMainQuest((byte)idx, (ushort)q.Id, 1) { AcceptanceId = Guid.NewGuid() }).ToArray();
+        That(extendedCatalog.All.All(q => QuestTargetRules.Supports(q, extendedCatalog)),
+            "UI点击、幸运币、宝藏地下城、势力战胜利与突袭次数目标均已接入");
+        That(QuestEventProgress.UiClicked(extendedActive, extendedCatalog, 42)[0].ConditionState == 0 &&
+            QuestEventProgress.FortuneCoinUsed(extendedActive, extendedCatalog, 2058)[1].ConditionState == 0 &&
+            QuestEventProgress.TreasureDungeonCleared(extendedActive, extendedCatalog, 101)[2].ConditionState == 0 &&
+            QuestEventProgress.PowerWarRecorded(extendedActive, extendedCatalog, true, 0)[3].ConditionState == 0 &&
+            QuestEventProgress.AssaultCleared(extendedActive, extendedCatalog)[4].ConditionState == 0,
+            "扩展事件目标按各自领域触发推进条件");
     }
 
     static void Relations(StoryQuest basis)

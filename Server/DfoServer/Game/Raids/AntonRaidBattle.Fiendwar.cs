@@ -47,6 +47,7 @@ internal sealed partial class AntonRaidBattle
     {
         if (current.Fiendwar is not { } field) return;
         var now = lukeClock.GetUtcNow();
+        lukePhaseAnchor = lukeClock.GetTimestamp();
         var shift = now - field.Started;
         current = current with { Fiendwar = field with { Started = now, Deadline = field.Deadline + shift,
             Timers = field.Timers.ToImmutableDictionary(row => row.Key,
@@ -177,9 +178,8 @@ internal sealed partial class AntonRaidBattle
             if (actors.Length is < 1 or > 4 || actors.Select(actor => actor.Character).Distinct().Count() != actors.Length ||
                 source == destination || fiendwarAreaTravels.Contains(source) || fiendwarAreaTravels.Contains(destination) ||
                 fiendwarMovements.Values.Any(move => move.Destination == source || move.Destination == destination) ||
-                current.FiendwarPositions.Any(row => row.Value == destination) ||
-                current.FiendwarPositions.Where(row => row.Value == source).Select(row => row.Key).Order()
-                    .SequenceEqual(actors.Select(actor => actor.Character).Order()) == false)
+                destination is not (30 or 31) && current.FiendwarPositions.Any(row => row.Value == destination) ||
+                actors.Any(actor => current.FiendwarPositions.GetValueOrDefault(actor.Character, -1) != source))
                 return null;
             var held = new List<FiendwarMovement>();
             foreach (var actor in actors)
@@ -221,7 +221,8 @@ internal sealed partial class AntonRaidBattle
                      field.Dungeons.GetValueOrDefault(source.DungeonId) is not ("clear" or "hide"))) return null;
             }
             if (destination is 30 or 31 && field.Symbols.GetValueOrDefault("[movie command center on]") != 1) return null;
-            int maximum = Math.Min(4, target.MemberMax);
+            // 黑白桥允许两队交接，副本容量仍由遭遇预留和原分队的四人上限约束。
+            int maximum = destination is 30 or 31 ? 8 : Math.Min(4, target.MemberMax);
             if (destination != FiendwarBaseArea && current.FiendwarPositions.Count(row => row.Key != actor.Character &&
                 (fiendwarMovements.GetValueOrDefault(row.Key)?.Destination ?? row.Value) == destination) >= maximum)
                 return null;
@@ -296,6 +297,7 @@ internal sealed partial class AntonRaidBattle
         {
             if (Kind != RaidKind.Fiendwar || pendingTransition is not null || TerminalRequested(current) || facts.Length is < 1 or > 4 ||
                 !dungeonRuns.TryGetValue(facts[0].Fact.Identity.InstanceId, out var run) || !run.Installed || run.Cleared ||
+                current.FiendwarExpiredRuns.Contains(run.Id) ||
                 run.Active.Count != facts.Length || facts.Select(row => row.Actor).Distinct().Count() != facts.Length ||
                 !fiendwarEncounters.TryGetValue(run.Id, out var encounter) || lukeClock.GetUtcNow() >= encounter.Deadline) return null;
             foreach (var row in facts)
@@ -305,10 +307,35 @@ internal sealed partial class AntonRaidBattle
                     row.Fact.Identity.CharacterId != binding.Identity.CharacterId || row.Fact.Identity.InstanceId != binding.Identity.InstanceId ||
                     row.Fact.Identity.QuestId != binding.Identity.QuestId || row.Fact.Identity.TaskAttempt != binding.Identity.TaskAttempt ||
                     row.Fact.Identity.Epoch < binding.Identity.Epoch) return null;
-            // 双侧四元素与窗口结果汇合后仍须当前本体的真实终图死亡；单侧clear不可代替机制。
             bool bossClear = encounter.Area is 30 or 31;
-            if (bossClear && current.FiendwarBoss is not { Joined: true, RemainingHp: 0 }) return null;
             var before = current;
+            if (bossClear && current.FiendwarBoss is not { Joined: true, RemainingHp: 0 })
+            {
+                // 39的权威死亡可能先于1554到达。仅输出窗口中的死亡保存本侧零血量；
+                // 提前击杀只退回战场供重试，绝不能跳过四元素或另一世界而生成整团通关。
+                var side = BossSide(encounter.Area);
+                if (current.FiendwarBoss is { Joined: false } boss &&
+                    boss.Side(side) is { Stage: FiendwarWorldStage.DamageWindow, WindowEnd: { } end } progress &&
+                    lukeClock.GetUtcNow() <= end + FiendwarBossReportGrace)
+                {
+                    progress = progress with { Stage = FiendwarWorldStage.Saved, Damage = boss.RemainingHp };
+                    boss = side == FiendwarWorld.Black ? boss with { Black = progress } : boss with { White = progress };
+                    boss = boss.Join() ?? boss;
+                    current = FiendwarBossSnapshot(current, boss, lukeClock.GetUtcNow());
+                }
+                if (current.FiendwarBoss is not { Joined: true, RemainingHp: 0 })
+                {
+                    CommitBattleCandidate(before, current with
+                    {
+                        FiendwarExpiredRuns = current.FiendwarExpiredRuns.Add(run.Id),
+                        FiendwarBridgeReturns = current.FiendwarBoss?.Side(side).Stage == FiendwarWorldStage.Saved
+                            ? current.FiendwarBridgeReturns.SetItem(run.Id, encounter.Area == 30 ? 31 : 30)
+                            : current.FiendwarBridgeReturns,
+                        FiendwarDungeonTimers = current.FiendwarDungeonTimers.Remove(encounter.Area)
+                    });
+                    return new(before, current);
+                }
+            }
             var field = current.Fiendwar!;
             if (bossClear)
             {
@@ -324,7 +351,7 @@ internal sealed partial class AntonRaidBattle
                 lukeParticipation[key] = checked(lukeParticipation.GetValueOrDefault(key) + 1);
             }
             run.FreezeClearedMembers();
-            var candidate = ProjectFiendwar(before with { FiendwarDungeonTimers = before.FiendwarDungeonTimers.Remove(encounter.Area) }, field);
+            var candidate = ProjectFiendwar(current with { FiendwarDungeonTimers = current.FiendwarDungeonTimers.Remove(encounter.Area) }, field);
             if (bossClear) candidate = candidate with { FiendwarExpiredRuns = candidate.FiendwarExpiredRuns.Add(run.Id) };
             CommitBattleCandidate(before, candidate);
             return new(before, current);

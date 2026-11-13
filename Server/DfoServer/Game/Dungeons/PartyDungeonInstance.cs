@@ -19,6 +19,7 @@ internal sealed record PartyDungeonNotice(PartyDungeonNoticeKind Kind, PartyMemb
     EvildomWarView? WarView = null, bool SceneTransition = false, AntonHpDisplay? AntonHp = null)
 {
     public ImmutableArray<ushort> AntonRejoinDeaths { get; init; } = [];
+    public ImmutableArray<EvildomWarPartyReward> EvildomWarRewards { get; init; } = [];
 }
 
 internal sealed record AntonHpDisplay(ushort Squad, ImmutableArray<ushort> Members, uint UsedCoins, uint Context, ImmutableArray<uint> Values);
@@ -139,6 +140,13 @@ internal sealed partial class PartyDungeonInstance(Guid id, PartySnapshot party,
         epicPieceShopAvailable ??= roll();
         return epicPieceShopAvailable.Value;
     }
+    int? secretShopMerchant;
+    internal int ResolveSecretShop(Func<int> roll)
+    {
+        if (!IsExecuting) throw new InvalidOperationException("普通商人出场必须由当前共享副本owner冻结");
+        secretShopMerchant ??= roll();
+        return secretShopMerchant.Value;
+    }
     sealed record CinematicCompletion(uint Quest, DungeonMap Map);
     CinematicCompletion? cinematicCompletion;
     public bool HasCompletedCinematic(uint quest, DungeonMap map) => Volatile.Read(ref cinematicCompletion) is { } completed &&
@@ -213,7 +221,7 @@ internal sealed partial class PartyDungeonInstance(Guid id, PartySnapshot party,
 
     internal DfoServer.Game.Raids.AntonRaidBattleChange? ReportFiendwarBoss(GameSession reporter, uint operation, uint value) => Execute(current =>
         pendingDeath is null && pendingScene is null && loaded.Count == 0 &&
-        current.Any(member => member.Slot == Leader && ReferenceEquals(member.Actor.Session, reporter)) &&
+        current.Any(member => ReferenceEquals(member.Actor.Session, reporter)) &&
         current.All(member => member.Actor.Session.CanMoveWithParty()) ? reporter.ReportFiendwarBoss(operation, value) : null);
 
     public LukeFacilityReportReceipt? ReportLukeFacility(GameSession reporter, int symbol, uint value, byte operation) => Execute(current =>
@@ -263,7 +271,11 @@ internal sealed partial class PartyDungeonInstance(Guid id, PartySnapshot party,
             return rejoining ? AntonRejoinLoadedNotice(m, current, scene) : new PartyDungeonNotice(PartyDungeonNoticeKind.Loaded, m, current, scene);
         }).ToArray();
         loaded.Clear();
-        return GameSession.ObserveRaidPartyRun(current, Id, notices, observeMap: true);
+        // 震颤等终点在全员完成加载后才生成ClearFact，不能只在死亡请求路径登记团本贡献。
+        var completed = notices.ToList();
+        if (notices.Any(notice => notice.Scene is { Entry.RaidEntry: not null, Snapshot.Phase: SinglePlayerDungeonPhase.Settlement }))
+            AppendBattleNotices(current, completed);
+        return GameSession.ObserveRaidPartyRun(current, Id, completed.ToArray(), observeMap: true);
     }
 
     public PartyDungeonNotice[] Move(GameSession reporter, byte x, byte y, byte kind) => Execute(current =>
@@ -301,7 +313,13 @@ internal sealed partial class PartyDungeonInstance(Guid id, PartySnapshot party,
     {
         if (!current.Any(m => ReferenceEquals(m.Actor.Session,reporter)) || pendingDeath is not null ||
             reporter.CurrentFormalDungeonScene() is not { } scene) return [];
+        bool tremor = scene.Entry.RaidEntry is { Kind: DfoServer.Game.Raids.RaidKind.Anton, Phase: 0 } &&
+            scene.Entry.DungeonId is 212 or 214;
         bool energy = current.Any(member => member.Actor.Session.IsLukeEnergyDungeon);
+        bool requireAll = energy || tremor;
+        if (tremor && (loaded.Count != 0 || !current.Any(member => member.Slot == Leader && ReferenceEquals(member.Actor.Session, reporter)) ||
+            current.Any(member => member.Actor.Session.CurrentFormalDungeonScene() is not { } own ||
+                own.Snapshot.CurrentMap != scene.Snapshot.CurrentMap || own.Snapshot.Identity.InstanceId != Id))) return [];
         if (energy && (loaded.Count != 0 || current.Any(member => !member.Actor.Session.IsLukeEnergyDungeon ||
             member.Actor.Session.CurrentFormalDungeonScene() is not { Snapshot.Phase: SinglePlayerDungeonPhase.Dungeon or SinglePlayerDungeonPhase.Settlement } loadedScene ||
             loadedScene.Snapshot.CurrentMap != scene.Snapshot.CurrentMap))) return [];
@@ -324,10 +342,10 @@ internal sealed partial class PartyDungeonInstance(Guid id, PartySnapshot party,
             {
                 var receipt = pending.Observe(member.Actor.Session);
                 // 能源图必须全员持久化；SQL失败保留已提交成员，重放只补剩余事务。
-                if (!energy || receipt is not null) pending.Completed.Add(id, receipt);
+                if (!requireAll || receipt is not null) pending.Completed.Add(id, receipt);
             }
         }
-        if (energy && pending.Completed.Count != current.Length)
+        if (requireAll && pending.Completed.Count != current.Length)
         {
             // 无成员提交的非法报告不得占住事件；部分提交仍保留原候选供重放补齐。
             if (pending.Completed.Count == 0) pendingScene = null;

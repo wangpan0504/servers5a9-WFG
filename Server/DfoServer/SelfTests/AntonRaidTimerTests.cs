@@ -46,6 +46,7 @@ internal static class AntonRaidTimerTests
             "匹配PVF的PARTY MAX原值216=1、其它P1图=5，不解释并发语义");
         foreach (int dungeon in new[] { 221, 222, 223, 224 }) Hatchery(dungeon);
         Energy();
+        foreach (int dungeon in new[] { 221, 222, 223, 224 }) HatcheryTransfer(dungeon);
         BatteryEnergy();
         PhaseReset();
         foreach (int dungeon in new[] { 212, 214 }) TimedPhaseReset(dungeon);
@@ -53,6 +54,40 @@ internal static class AntonRaidTimerTests
         TimeoutRetry();
         IntermissionPreparation();
         RewardWaitDetached();
+
+        void HatcheryTransfer(int target)
+        {
+            var clock = new LukeRaidClockTests.Clock(); var store = new Store();
+            var battle = Battle(clock, false, target);
+            var clocks = new LukeRaidClocks(clock, store, (_, _) => { });
+            try
+            {
+                using var lease = clocks.Reserve(battle)!; lease.Activate();
+                Clear(battle, actor, 210); Clear(battle, actor, 213); Clear(battle, actor, 215);
+                Settle(battle, store); Rewards(battle, clock);
+                var identity = new RaidDungeonIdentity(battle.Instance, 1, 1);
+                var source = new DungeonRunIdentity(actor.Character, 0, 1, Guid.NewGuid(), 1);
+                using var old = battle.ReserveDungeon(identity, 218, [(actor, source)])!; old.Install();
+                var destination = source with { InstanceId = Guid.NewGuid() };
+                using (var early = battle.ReserveDungeon(identity, (uint)target, [(actor, destination)], replacingAntonRun: source.InstanceId))
+                    That(early is null, "孵化未开放不允许替换能量Run");
+                clock.Advance(180);
+                using (var cancelled = battle.ReserveDungeon(identity, (uint)target, [(actor, destination)], replacingAntonRun: source.InstanceId))
+                    That(cancelled is not null, "精确同分队218允许预留孵化转场");
+                using (var occupied = battle.ReserveDungeon(identity, 218, [(actor, destination)]))
+                    That(occupied is null, "未安装的新预留撤销后，旧Run仍占原成员及分队");
+                using (var invalid = battle.ReserveDungeon(identity, 219, [(actor, destination)], replacingAntonRun: source.InstanceId))
+                    That(invalid is null, "内部替换能力不能跨到火山");
+                using var accepted = battle.ReserveDungeon(identity, (uint)target, [(actor, destination)], replacingAntonRun: source.InstanceId);
+                That(accepted is not null, "撤销准备后可按原Run重试"); accepted!.Install();
+                That(battle.ReleaseDungeon(actor, source.InstanceId) is null && battle.ReleaseDungeon(actor, destination.InstanceId) is not null,
+                    "安装替换后旧Run释放不能误释放新Run");
+                int map = target switch { 221 => 19103, 222 => 19119, 223 => 19116, _ => 19100 };
+                That(GameSession.IsAntonHatcheryEntrance(map, (uint)target) && !GameSession.IsAntonHatcheryEntrance(map, 219),
+                    "四角MAP与目标精确绑定");
+            }
+            finally { clocks.DisposeAsync().AsTask().GetAwaiter().GetResult(); }
+        }
 
         void Energy()
         {
@@ -64,6 +99,9 @@ internal static class AntonRaidTimerTests
                 using var lease = service.Reserve(battle)!; lease.Activate();
                 Clear(battle, actor, 210); Clear(battle, actor, 213); Clear(battle, actor, 215);
                 Settle(battle, store); Rewards(battle, clock);
+                That(battle.AllowsAntonEntry(219) && battle.SymbolSnapshot(battle.View).Single(row => row.Id == 111).Value == 0,
+                    "火山可提前进入，原生111初始闭合");
+                var initialBarrier = battle.View;
                 for (int index = 0; index < 4; index++)
                 {
                     var identity = new DungeonRunIdentity(actor.Character, 0, 1, Guid.NewGuid(), 1);
@@ -78,19 +116,25 @@ internal static class AntonRaidTimerTests
                     That(battle.ConfirmAntonEnergy(actor, snapshot) && battle.ConfirmAntonEnergy(actor, snapshot) &&
                         battle.View.Symbols["[black volcano barrier]"] == Math.Max(0, 10000 - 3000 * (index + 1)),
                         "每个可信Run只接受一次Last，钳制0且不从117重复扣能量");
+                    That(battle.SymbolSnapshot(battle.View).Single(row => row.Id == 111).Value == (index == 3 ? 1 : 0),
+                        "部分削减不破防，归零由111解除原生屏障");
                     battle.ReleaseDungeon(actor, identity.InstanceId);
                     That(!battle.ConfirmAntonEnergy(actor, snapshot), "已释放Run不能再次报告");
                 }
                 That(battle.View.Symbols["[movie barrier break]"] == 1, "归零执行PVF破壁规则");
                 clock.Advance(1);
                 That(battle.View.Symbols["[black volcano barrier]"] == 17, "首次归零后沿86每秒恢复17");
+                That(battle.View.AntonVolcanoBarrierOpen && !initialBarrier.AntonVolcanoBarrierOpen,
+                    "回充17仍保持破防，先前不可变快照不被改写");
                 clock.Advance(179);
                 int previous = battle.View.Symbols["[black volcano barrier]"];
                 clock.Advance(1);
                 That(battle.View.Symbols["[black volcano barrier]"] == previous + 34, "感染场开放后恢复34");
                 for (int tick = 0; tick < 600; tick++) clock.Advance(1);
                 That(battle.View.Symbols["[black volcano barrier]"] == 10000 &&
-                    battle.View.Symbols["[movie barrier recover]"] == 1, "充电钳制满值并执行PVF恢复规则");
+                    battle.View.Symbols["[movie barrier recover]"] == 1 &&
+                    battle.SymbolSnapshot(battle.View).Single(row => row.Id == 111).Value == 0,
+                    "充电钳制满值，111恢复无敌并执行PVF恢复规则");
                 Clear(battle, actor, 219);
                 int stopped = battle.View.Symbols["[black volcano barrier]"];
                 clock.Advance(240); clock.FireQueued();
@@ -365,6 +409,8 @@ internal static class AntonRaidTimerTests
                     battle.View.Symbols["[kill all character]"] == 0, "299秒前不得提前重置或签发强杀符号");
                 clock.Advance(1);
                 var reset = battle.View;
+                That(reset.AntonKillAllEvent > 0 && battle.SymbolSnapshot(reset).All(row => row.Id != 102),
+                    "炸团强杀记录一次事件，重进黑雾的状态快照不得携带102");
                 That(reset.Dungeons[210] == RaidDungeonState.Open && reset.Symbols["[210 dgn hp]"] == 4 &&
                     new[] { 211, 212, 213, 214, 215, 216 }.All(id => reset.Dungeons[id] == RaidDungeonState.Hide) &&
                     reset.Symbols["[kill all character]"] == 1 && reset.Symbols["[1phase fail]"] == 0 &&

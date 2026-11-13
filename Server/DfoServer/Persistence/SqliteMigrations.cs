@@ -284,7 +284,7 @@ internal static class SqliteMigrations
         new(153, "艾肯每日循环通关进度", static (db, tx) => Execute(db, tx, EkernCycleSchema.Definition)),
         new(154, "商城累计规则期与原子订单", CashShopPromotionSchema.EnsureBase),
         new(155, "商城常驻累计精确前驱衔接", CashShopPromotionSchema.EnsureContinuation),
-        new(156, "角色更名卡待改名资格", static (db, tx) => Execute(db, tx, CharacterRenameCardSchema.Definition)),
+        new(156, "角色更名卡待改名资格", static (db, tx) => Execute(db, tx, CharacterRenameCardSchema.OriginalDefinition)),
         new(157, "账号聊天表情指令", static (db, tx) => Execute(db, tx, ChatEmoticonSchema)),
         new(158, "账号最近聊天表情", static (db, tx) => Execute(db, tx, RecentEmoticonSchema)),
         new(159, "守护者五位盾牌配置", AddKnightShieldDeckColumn),
@@ -371,7 +371,77 @@ internal static class SqliteMigrations
         new(196, "周签到冻结赛季与账号进度", static (db, tx) => Execute(db, tx,
             WeeklyAttendanceSchema.Definition.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal))),
         new(197, "战令豪华044一次性订单", BattlePassDeluxeSchema.Upgrade),
+        new(198, "账号公共物品容器45", UpgradeAccountCommon45),
+        new(199, "怪物模拟战账号卡册与匹配索引", MonsterMockBattleSchema.Upgrade),
+        new(200, "改版魔兽阶段与终局奖励凭据", static (db, tx) =>
+        {
+            Execute(db, tx, RevisedBeastRewardSchema.Definition.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal));
+            Execute(db, tx, RevisedBeastRewardSchema.StageDefinition.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal));
+        }),
+        new(201, "人物辞典角色收藏", static (db, tx) => Execute(db, tx, NpcBookmarkSchema)),
+        new(202, "普通清图奖励限次刷新标记", static (db, tx) => Execute(db, tx,
+            DungeonCardRewardSchema.ResetSql.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal))),
+        new(203, "追加券账号与奖励额度", DungeonTicketQuotaSchema.Upgrade),
+        new(204, "通用Buff动态状态", static (db, tx) => Execute(db, tx, VariousBuffSchema.Definition.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal))),
+        new(205, "商城自动更名资格来源", static (db, tx) => ReplaceTableConstraint(db, tx, "character_rename_pending",
+            "CHECK(source_uid>0)", "CHECK(source_uid>=0)")),
+        new(206, "回归账本与已发布本地205兼容", UpgradeReturningAdventurer206),
+        new(207, "账号冒险团四组名称与图标", SocialSchema.UpgradeGroups),
+        new(208, "角色独立键位", UpgradeCharacterHotkeys),
+        new(209, "角色键位与本地蓄电池208兼容", UpgradeFatigueBattery209),
+        new(210, "冒险团好友最近在线时刻", static (db, tx) => Execute(db, tx,
+            SocialSchema.PresenceSql.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal))),
     ];
+
+    static void UpgradeFatigueBattery209(SqliteConnection db, SqliteTransaction tx)
+    {
+        // 上游208已有角色键位，不再次回填后来新建的角色；本地208只有电池时才补齐键位。
+        if (!KnownTable(db, tx, "character_hotkey_settings", CharacterHotkeySettingsSchema))
+            UpgradeCharacterHotkeys(db, tx);
+        FatigueBatterySchema.Upgrade(db, tx);
+    }
+
+    static void UpgradeReturningAdventurer206(SqliteConnection db, SqliteTransaction tx)
+    {
+        // 本地85/86曾以205追加回归两表；仅完整已知结构允许补齐上游205的更名约束。
+        if (!KnownTable(db, tx, "character_rename_pending", CharacterRenameCardSchema.Definition.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)))
+        {
+            bool returning = ReturningAdventurerSchema.Definition
+                .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .All(sql => KnownTable(db, tx, sql["CREATE TABLE ".Length..sql.IndexOf('(')], sql));
+            if (!returning || !KnownTable(db, tx, "character_rename_pending", CharacterRenameCardSchema.OriginalDefinition.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)))
+                throw new InvalidDataException("回归账本升级拒绝未知205结构");
+            ReplaceTableConstraint(db, tx, "character_rename_pending", "CHECK(source_uid>0)", "CHECK(source_uid>=0)");
+        }
+        Execute(db, tx, ReturningAdventurerSchema.Definition.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal));
+    }
+
+    const string AccountCommon45ListConstraint = "CHECK(list_type IN (0,1,2,3,7,12,38,45,46))";
+    const string AccountCommon45OwnershipConstraint = "CHECK((list_type=12 AND character_id IS NULL AND slot_index<240) OR (list_type=45 AND character_id IS NULL AND slot_index<50) OR (list_type NOT IN(12,45) AND character_id IS NOT NULL AND (list_type<>2 OR slot_index<264)))";
+    const string AccountCommon45SlotIndex = "CREATE UNIQUE INDEX account_common45_slot ON character_inventory_slots(account,slot_index) WHERE list_type=45";
+
+    static void UpgradeAccountCommon45(SqliteConnection db, SqliteTransaction tx)
+    {
+        ReplaceTableConstraint(db, tx, "character_inventory_slots",
+            "CHECK(list_type IN (0,1,2,3,7,12,38,46))", AccountCommon45ListConstraint);
+        ReplaceTableConstraint(db, tx, "character_inventory_slots",
+            "CHECK((list_type=12 AND character_id IS NULL AND slot_index<240) OR (list_type<>12 AND character_id IS NOT NULL AND (list_type<>2 OR slot_index<264)))", AccountCommon45OwnershipConstraint);
+        Execute(db, tx, AccountCommon45SlotIndex.Replace("CREATE UNIQUE INDEX ", "CREATE UNIQUE INDEX IF NOT EXISTS ", StringComparison.Ordinal));
+    }
+
+    static void ValidateAccountCommon45(SqliteConnection db, SqliteTransaction tx)
+    {
+        using var query = db.CreateCommand();
+        query.Transaction = tx;
+        query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name='character_inventory_slots'";
+        if (query.ExecuteScalar() is not string slots || !slots.Contains(AccountCommon45ListConstraint, StringComparison.Ordinal) ||
+            !slots.Contains(AccountCommon45OwnershipConstraint, StringComparison.Ordinal))
+            throw new InvalidDataException("账号公共物品容器45的槽位或归属约束不兼容");
+        query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='index' AND name='account_common45_slot'";
+        if (query.ExecuteScalar() is not string index || NormalizeTable(index, "character_inventory_slots") !=
+            NormalizeTable(AccountCommon45SlotIndex, "character_inventory_slots"))
+            throw new InvalidDataException("账号公共物品容器45的唯一槽位索引不兼容");
+    }
 
     const string KnightShieldDeckColumn = "knight_shield_deck TEXT NOT NULL DEFAULT '[0,0,0,0,0]' CHECK(json_valid(knight_shield_deck) AND json_type(knight_shield_deck)='array' AND json_array_length(knight_shield_deck)=5)";
 
@@ -1327,6 +1397,27 @@ internal static class SqliteMigrations
           PRIMARY KEY(character_id,quest_id),
           FOREIGN KEY(character_id,operation_id) REFERENCES character_quest_effect_receipts(character_id,operation_id));
         """;
+
+    internal const string CharacterHotkeySettingsSchema = """
+        CREATE TABLE character_hotkey_settings(
+          character_id INTEGER NOT NULL,account TEXT NOT NULL,profile INTEGER NOT NULL CHECK(profile IN (0,1)),
+          hotkeys BLOB NOT NULL CHECK(typeof(hotkeys)='blob' AND length(hotkeys) BETWEEN 1 AND 1399),
+          PRIMARY KEY(character_id,profile),FOREIGN KEY(character_id,account) REFERENCES characters(id,account));
+        """;
+
+    static void UpgradeCharacterHotkeys(SqliteConnection db, SqliteTransaction tx)
+    {
+        Execute(db, tx, CharacterHotkeySettingsSchema.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal));
+        if (!KnownTable(db, tx, "character_hotkey_settings", CharacterHotkeySettingsSchema))
+            throw new InvalidDataException("角色键位迁移拒绝未知结构");
+        // 只为迁移时已有角色保留原配置。后续新建角色不再从账号表回退或复制。
+        Execute(db, tx, """
+            INSERT INTO character_hotkey_settings(character_id,account,profile,hotkeys)
+            SELECT r.id,r.account,h.profile,h.hotkeys FROM characters r
+            JOIN account_hotkey_settings h ON h.account=r.account AND h.profile=CASE WHEN r.job=10 THEN 1 ELSE 0 END
+            WHERE NOT EXISTS(SELECT 1 FROM character_hotkey_settings c WHERE c.character_id=r.id AND c.profile=h.profile)
+            """);
+    }
 
     internal const string HotkeySettingsSchema = """
         CREATE TABLE account_hotkey_settings(
@@ -2581,6 +2672,7 @@ internal static class SqliteMigrations
         }
         ValidateTeleportCooldownColumn(db, tx, "privilege_until");
         InventoryItemRevisionSchema.Validate(db, tx);
+        ValidateAccountCommon45(db, tx);
         BeastDungeonReservationSchema.Validate(db, tx);
         BeastStageRewardSchema.Validate(db, tx);
         // 基线标识不能代替必需列检查；损坏或残缺结构不得进入监听阶段。
@@ -2604,17 +2696,31 @@ internal static class SqliteMigrations
             if (query.ExecuteScalar() is not string actual || NormalizeTable(actual, table) != NormalizeTable(expected, table))
                 throw new InvalidDataException("社交表的约束或外键不是已确认结构: " + table);
         }
-        foreach (var (table,expected) in new[] { ("character_quest_completion_receipts",QuestCompletionSchemaV180),
+        using (var query = db.CreateCommand())
+        {
+            query.Transaction = tx;
+            query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name=$table";
+            query.Parameters.AddWithValue("$table", SocialSchema.PresenceTable);
+            if (query.ExecuteScalar() is not string actual ||
+                NormalizeTable(actual, SocialSchema.PresenceTable) != NormalizeTable(SocialSchema.PresenceSql, SocialSchema.PresenceTable))
+                throw new InvalidDataException("冒险团好友在线历史表的约束或外键不是已确认结构");
+        }
+        foreach (var (table,expected) in new[] { (SocialSchema.GroupsTable,SocialSchema.GroupsSql),
+            ("character_hotkey_settings",CharacterHotkeySettingsSchema),
+            ("character_quest_completion_receipts",QuestCompletionSchemaV180),
             ("character_epic_wishes",EpicWishSchema.Definition),
             ("account_battle_pass_deluxe_orders",BattlePassDeluxeSchema.Definition),
             ("character_privilege_service",PrivilegeServiceSchema.Definition),
+            ("character_npc_bookmarks",NpcBookmarkSchema.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("character_quest_notify",QuestNotifySchema.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("character_boss_selection_buff",BossSelectionBuffSchema.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
+            ("character_various_buffs",VariousBuffSchema.Definition),
             ("character_quest_clear_receipts",QuestClearSchemaV40),
             ("character_quest_lifecycle_receipts",PartyQuestLifecycleSql),
             ("character_quest_daily_clear",QuestDailyClearSchema.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("character_dungeon_scene_clear_receipts",DungeonSceneSettlementSchema.SceneSql),
             ("character_dungeon_settlement_receipts",ZeroExperienceDungeonSchema.SettlementSql),
+            ("character_clear_reward_resets",DungeonCardRewardSchema.ResetSql),
             ("character_dungeon_loot_receipts",DungeonLootSchema),
             ("character_dungeon_pickup_receipts",DungeonPickupSchemaV45),
             ("character_dungeon_drop_batches",DungeonDropCollectionSchema.Definition.Split(';').Single(sql => sql.Contains("CREATE TABLE character_dungeon_drop_batches(", StringComparison.Ordinal))),
@@ -2655,6 +2761,7 @@ internal static class SqliteMigrations
             (PvpMissionSchema.ClaimTable,PvpMissionSchema.Claims),
             (PvpDailyMissionSchema.Table,PvpDailyMissionSchema.Sql),
             (FatigueDailyResetSchema.Table,FatigueDailyResetSchema.Definition),
+            (FatigueBatterySchema.Table,FatigueBatterySchema.Definition),
             (ServerItemUsageSchema.StateTable,ServerItemUsageSchema.StateDefinition),
             (ServerItemUsageSchema.AccountTable,ServerItemUsageSchema.AccountDefinition),
             ("marriage_records",MarriageSameAccountSchema.Definition),
@@ -2690,6 +2797,9 @@ internal static class SqliteMigrations
             ("guild_dungeon_clear_receipts",GuildDungeonProgressSchema.Definition.Split(';')[1].Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("character_guild_hongbao_purchases",GuildHongbaoPurchaseSchema.Definition.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             (DungeonIncountExtraSchema.Table,DungeonIncountExtraSchema.Definition.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
+            ("account_dungeon_incount_extra",DungeonTicketQuotaSchema.AccountDefinition),
+            ("character_dungeon_reward_extra",DungeonTicketQuotaSchema.RewardDefinition),
+            ("account_single_dungeon_bindings",DungeonTicketQuotaSchema.SingleDefinition),
             ("guild_hongbao_records",GuildHongbaoSchema.Records.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("guild_hongbao_claims",GuildHongbaoSchema.Claims.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("guild_ranking_party_clears",GuildRankingSchema.Parties.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
@@ -2717,6 +2827,7 @@ internal static class SqliteMigrations
                 throw new InvalidDataException("关键表的约束或外键不是已确认结构: " + table);
         }
         PvpRatingSchema.ValidateIndex(db, tx);
+        MonsterMockBattleSchema.Validate(db, tx);
         AccountMaterialSchema.ValidateIndex(db, tx);
         RaidQuotaSchema.ValidateIndexes(db, tx);
         PvpTotalRatingSchema.ValidateIndex(db, tx);
@@ -2733,6 +2844,8 @@ internal static class SqliteMigrations
 
     private static readonly string[] RequiredColumns =
     [
+        "SELECT character_id,account,instance_id,task_attempt,epoch,dungeon_id,difficulty,success,day_key,week_key,awarded,before_revision,revision,plan_snapshot FROM character_revised_beast_rewards LIMIT 0",
+        "SELECT character_id,account,instance_id,task_attempt,epoch,dungeon_id,difficulty,success,day_key,week_key,awarded,before_revision,revision,plan_snapshot FROM character_revised_beast_stage_rewards LIMIT 0",
         "SELECT inventory_items_revision FROM characters LIMIT 0",
         "SELECT inventory_items_revision FROM account_cargo LIMIT 0",
         "SELECT character_id,account,instance_id,attempt,entry_epoch,day,dungeon_id,expected_used,state FROM character_beast_dungeon_reservations LIMIT 0",
@@ -2741,6 +2854,7 @@ internal static class SqliteMigrations
         "SELECT owner_id,target_id,kind,created,memo FROM character_social_links LIMIT 0",
         "SELECT owner_account,target_account,created,memo,group_id FROM account_social_links LIMIT 0",
         "SELECT source_account,target_account,message,created,memo,group_id FROM account_social_requests LIMIT 0",
+        "SELECT account,slot,icon,name FROM account_social_groups LIMIT 0",
         "SELECT character_id,account,source_acceptance_id,source_quest_id,source_revision,target_level,rule_version,status,proof FROM character_quest_stage_witnesses LIMIT 0",
         "SELECT character_id,account,source_acceptance_id,trigger_acceptance_id,target_level,before_experience,after_experience,amount,revision FROM character_quest_stage_claims LIMIT 0",
         "SELECT character_id,account,ground_key,instance_id,task_attempt,epoch,picked_core,gold_amount,destination_slot,item_uid,after_core,currency_kind,amount,after_balance,account_revision,revision FROM character_dungeon_passive_pickups LIMIT 0",
@@ -2799,6 +2913,7 @@ internal static class SqliteMigrations
         "SELECT blacklist_count FROM characters LIMIT 0",
         "SELECT charac_no,selected,cube_type FROM cube_premium LIMIT 0",
         "SELECT account,profile,hotkeys FROM account_hotkey_settings LIMIT 0",
+        "SELECT character_id,account,profile,hotkeys FROM character_hotkey_settings LIMIT 0",
         "SELECT account,bank,quick_chat FROM account_quick_chat LIMIT 0",
         "SELECT account,emoticon_id,macro FROM account_chat_emoticons LIMIT 0",
         "SELECT account,claim_day FROM account_pcroom_claims LIMIT 0",
@@ -2818,6 +2933,7 @@ internal static class SqliteMigrations
         "SELECT character_id,account,service_day,used FROM character_gold_card_uses LIMIT 0",
         "SELECT character_id,account,instance_id,options_json,black_diamond_reward_json,bonus_mail_id,paid_reward_json,paid_mail_id,paid_cost,paid_revision,paid_day FROM character_dungeon_card_options LIMIT 0",
         "SELECT character_id,account,instance_id,plan_json,reward_json,mail_id,revision,claimed FROM character_dungeon_card_rewards LIMIT 0",
+        "SELECT character_id,instance_id FROM character_clear_reward_resets LIMIT 0",
         "SELECT event_id,revision,starts_at,ends_at,override_active FROM server_events LIMIT 0",
         "SELECT account,day,elapsed_ms,qualified FROM account_pcroom_timepoint_days LIMIT 0",
         "SELECT account,day,earned FROM account_endless_adventure_days LIMIT 0",
@@ -2845,6 +2961,9 @@ internal static class SqliteMigrations
         "SELECT character_id,account,potion_until,aura_until,upgrade_aura_until,party_aura_until,privilege_until FROM character_teleport_cooldowns LIMIT 0",
         "SELECT character_id,account,until_unix,permille FROM character_exp_bonus LIMIT 0",
         "SELECT character_id,account,kind,item_id,until_ms,maintenance,cool_group FROM character_consumable_states LIMIT 0",
+        "SELECT character_id,account,buffs FROM character_various_buffs LIMIT 0",
+        "SELECT account,period_until,mission_id,progress FROM account_returning_mission_progress LIMIT 0",
+        "SELECT account,period_until,action,argument,day,recipient_id,item_id,item_count,claimed_at FROM account_returning_reward_claims LIMIT 0",
         "SELECT character_id,account,state_json FROM character_boss_selection_buff LIMIT 0",
         "SELECT character_id,account,job_type,expertness,learned_recipes FROM character_expert_job LIMIT 0",
         "SELECT character_id,account,giveup_state,machine_grade,machine_endurance FROM character_expert_meta LIMIT 0",
@@ -2868,6 +2987,7 @@ internal static class SqliteMigrations
         "SELECT [account],[game_options] FROM [account_client_settings] LIMIT 0",
         "SELECT [character_id],[account],[character_options] FROM [character_client_settings] LIMIT 0",
         "SELECT character_id,account,entries FROM character_quest_notify LIMIT 0",
+        "SELECT character_id,account,entries FROM character_npc_bookmarks LIMIT 0",
         "SELECT character_id,started_at,expires_at,purchase_season,reward_season,last_login_day,login_days,daily_claim_day,claimed_milestones FROM character_privilege_service LIMIT 0",
         "SELECT [character_id],[account],[game_options] FROM [character_game_settings] LIMIT 0",
         "SELECT [id],[account],[slot],[name],[revision],[town],[area],[x],[y],[direction],[return_town],[return_area],[return_x],[return_y],[return_direction],[job],[grow_type],[level],[accepted_story_level],[gold],[experience],[inventory_expansion],[revive_coins],[win_points],[gold_carry_limit],[auction_gold_limit],[cargo_capacity],[quest_cycle_day],[equipment_slot_flags] FROM [characters] LIMIT 0",
@@ -2985,6 +3105,15 @@ internal static class SqliteMigrations
             character_id INTEGER PRIMARY KEY,
             account TEXT NOT NULL,
             entries BLOB NOT NULL CHECK(typeof(entries)='blob' AND length(entries)=16),
+            FOREIGN KEY(character_id,account) REFERENCES characters(id,account)
+        );
+        """;
+
+    internal const string NpcBookmarkSchema = """
+        CREATE TABLE IF NOT EXISTS character_npc_bookmarks(
+            character_id INTEGER PRIMARY KEY,
+            account TEXT NOT NULL,
+            entries BLOB NOT NULL CHECK(typeof(entries)='blob' AND length(entries)<=4096 AND length(entries)%4=0),
             FOREIGN KEY(character_id,account) REFERENCES characters(id,account)
         );
         """;

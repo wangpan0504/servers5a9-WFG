@@ -18,7 +18,8 @@ internal static class AntonSymbolProjectionTests
         var script = AntonRaidBattleTests.Script(210) with
         {
             Symbols = ImmutableDictionary<string, int>.Empty.Add("[hp]", 50)
-                .Add("[is exist infection dungeon]", 7).Add("[infection dungeon index]", 8)
+                .Add("[is exist infection dungeon]", 7).Add("[infection dungeon index]", 8).Add("[movie smoke in]", 121)
+                .Add("[kill all character]", 102)
         };
         var battle = new AntonRaidBattle(script);
         using var owner = new AccountOwners().Acquire("anton-symbol-test", () => { });
@@ -68,11 +69,44 @@ internal static class AntonSymbolProjectionTests
         RaidCombatProjection.PostAntonSnapshot(context2, battle, battle.View, () => true);
         await sender2.DrainAsync();
         That(frames2.Single()[0] == 3, "新成员或重连独立全量");
+        frames.Clear();
+        RaidCombatProjection.PostAntonSceneSymbols(context, battle, battle.View, () => true);
+        await sender.DrainAsync();
+        That(frames.Single(row => row.Opcode == 583).Body[0] == 3 && frames.Count == 1,
+            "30后恢复普通状态，即使值未变化也补发，排除影片事件与585");
         var key = context.AntonSymbols.Key!.Value;
         That(context.AntonSymbols.Changed(key with { Phase = key.Phase + 1 }, 50, 0) &&
             context.AntonSymbols.Changed(key with { Instance = Guid.NewGuid() }, 50, 0) &&
             context.AntonSymbols.Changed(key with { SelectionEpoch = key.SelectionEpoch + 1 }, 50, 0),
             "换阶段、换团及换角色均不继承旧符号基线");
+        frames.Clear();
+        battle.SetMechanism(battle.Instance, battle.View.Revision, "[kill all character]", 1);
+        await Post(valid: false);
+        That(frames.Count == 0, "失效炸团事件不投递或消费");
+        await Post(); await Post();
+        That(Kills(frames.Select(row => (row.Opcode, row.Body))) == 1, "同场景炸团只执行一次，不丢失正常失败效果");
+        frames.Clear();
+        await Post(restore: true);
+        await sender.ClearScene(); await Post();
+        RaidCombatProjection.PostAntonSceneSymbols(context, battle, battle.View, () => true);
+        await sender.DrainAsync();
+        That(Kills(frames.Select(row => (row.Opcode, row.Body))) == 0 &&
+            battle.SymbolSnapshot(battle.View).All(row => row.Id != 102), "进图、恢复和完整状态快照不重播旧杀全员");
+        frames2.Clear();
+        await sender2.ClearScene();
+        RaidCombatProjection.PostAntonSnapshot(context2, battle, battle.View, () => true);
+        await sender2.DrainAsync();
+        That(Kills(frames2.Select(body => ((ushort)583, body))) == 0, "重连接收者不继承旧炸团执行事件");
+        frames.Clear();
+        long previousEvent = battle.View.AntonKillAllEvent;
+        battle.SetMechanism(battle.Instance, battle.View.Revision, "[kill all character]", 1);
+        await Post(); await Post();
+        That(battle.View.AntonKillAllEvent > previousEvent && Kills(frames.Select(row => (row.Opcode, row.Body))) == 1,
+            "再次炸团即使仍SET1也执行新事件一次");
         Console.WriteLine($"PASS 安徒恩符号增量投影：{Count - before}项断言");
+
+        static int Kills(IEnumerable<(ushort Opcode, byte[] Body)> packets) => packets.Count(row =>
+            row.Opcode == 583 && Enumerable.Range(0, row.Body[0]).Any(index =>
+                System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(row.Body.AsSpan(1 + index * 8)) == 102));
     }
 }

@@ -65,7 +65,7 @@ internal sealed class InventoryUpgradeChronicleService(UpgradeChronicleCatalog r
         if (recipe.RequiredGrowthExperience > 0 && target.Core.Extension90 < recipe.RequiredGrowthExperience)
             return InventoryResult.Reject(Rejection);
         var sourceTemplate = items.Get(blueprintItemId);
-        if (sourceTemplate.Id != blueprintItemId || !sourceTemplate.AllowsUse(character.Level, character.Job) ||
+        if (sourceTemplate.Id != blueprintItemId || !sourceTemplate.AllowsActivation(character.Level, character.Job) ||
             definition.TicketType == 7 && !character.IsPvpPrivate ||
             recipe.Materials.Any(material => material.ItemId == targetItemId))
             return InventoryResult.Reject(Rejection);

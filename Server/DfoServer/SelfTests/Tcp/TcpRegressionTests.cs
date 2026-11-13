@@ -7,6 +7,9 @@ internal static class TcpRegressionTests
 {
     static readonly (string Name, Func<ServerOptions, string, TcpTestResources, Task> Run)[] Groups =
     [
+        ("revised-beast", RevisedBeastTcpTests.RunAsync),
+        ("quickslot-equipment", QuickSlotEquipmentTcpTests.RunAsync),
+        ("monster-mock-battle", MonsterMockBattleTcpTests.RunAsync),
         ("weekly-attendance", WeeklyAttendanceTcpTests.RunAsync),
         ("knight-shield", KnightShieldTcpTests.RunAsync),
         ("daily-attendance-rules", (_, _, resources) =>
@@ -64,9 +67,46 @@ internal static class TcpRegressionTests
             await PreyGuideTests.RunBattlePassNoticeAsync(options, Path.Combine(root, "battle-pass-notice"), resources);
         }),
         ("prey-guide-flow", PreyGuideTcpTests.RunAsync),
+        ("prey-team-flow", PreyTeamTcpTests.RunAsync),
+        ("prey-potion-limit", PreyTeamTcpTests.RunPotionLimitAsync),
+        ("prey-team-lobby", PreyTeamTcpTests.RunLobbyAsync),
+        ("prey-team-landing", PreyTeamTcpTests.RunLandingAsync),
+        ("prey-team-landing-squads", PreyTeamTcpTests.RunTeamLandingAsync),
+        ("prey-team-defence-landing", PreyTeamTcpTests.RunDefenceLandingAsync),
+        ("prey-team-lobby-squads", PreyTeamTcpTests.RunTeamLobbyAsync),
+        ("prey-team-exit", PreyTeamTcpTests.RunExitAsync),
+#if DEBUG
+        ("debug-dungeon-kill", DebugDungeonKillTcpTests.RunAsync),
+#endif
+        ("prey-team-rejoin-party", PreyTeamTcpTests.RunRejoinPartyAsync),
+        ("prey-team-side-capacity", PreyTeamTcpTests.RunSideCapacityAsync),
+        ("prey-normal-party", PartyDungeonTcpTests.RunPreyNormalAsync),
+        ("prey-team-squads", PreyTeamTcpTests.RunTeamAsync),
+        ("prey-team-phase1", PreyTeamTcpTests.RunPhaseOneAsync),
+        ("prey-team-auto-reward", (_, root, resources) => PreyAutomaticRewardTests.RunAsync(root, resources)),
+        ("prey-team-phases", PreyTeamTcpTests.RunPhasesAsync),
+        ("prey-team-rejoin", (_, root, resources) =>
+        {
+            PreyTeamRejoinTests.Run(root, resources);
+            return Task.CompletedTask;
+        }),
+        ("prey-team-core", (_, _, _) =>
+        {
+            PreyTeamResourceTests.RunCore();
+            PreyTeamBattleTests.RunCore();
+            PreyTeamProtocolTests.RunCore();
+            return Task.CompletedTask;
+        }),
+        ("prey-team-rules", (_, _, resources) =>
+        {
+            PreyTeamResourceTests.Run(resources.Archive);
+            PreyTeamResourceTests.RunRewards(resources.Archive, resources.ItemResources);
+            return Task.CompletedTask;
+        }),
         ("prey-guide-battlepass-death", PreyGuideTcpTests.RunBattlePassDeathAsync),
         ("battle-pass-luke-raid-death", LukeRaidRunTcpTests.RunBattlePassDeathAsync),
         ("anton-symbol-rules", (_, _, _) => AntonSymbolProjectionTests.RunAsync()),
+        ("raid-failure-refund", (_, root, resources) => RaidFailureRefundTests.RunAsync(root, resources)),
         ("anton-raid-phase-timer-221-224", AntonRaidGapTcpTests.RunPhaseTimersAsync),
         ("anton-raid-reward-formal", (_, _, resources) =>
         {
@@ -94,6 +134,7 @@ internal static class TcpRegressionTests
             await QuestCompletionPublicationTests.RunStageAsync(resources);
             await QuestLifecycleTcpTests.RunStageAsync(options,root,resources);
         }),
+        ("quest-catalog-resources", (_, _, resources) => { QuestCatalogTests.Run(resources.Archive); return Task.CompletedTask; }),
         ("quest-live-progress", QuestLifecycleTcpTests.RunLiveProgressAsync),
         ("settings-snapshot-rules", (_, _, _) => { ClientSettingsSnapshotsTests.Run(); return Task.CompletedTask; }),
         ("equipment-power-rules", (_, _, _) => { EquipmentPowerScoreTests.RunCore(); return Task.CompletedTask; }),
@@ -128,9 +169,11 @@ internal static class TcpRegressionTests
         }),
         ("packet-http", PacketCaptureTcpTests.RunHttpAsync),
         ("town", TownProtocolTcpTests.RunAsync),
+        ("raid-npc-travel", RaidChannelLandingTcpTests.RunNpcTravelAsync),
         ("party-dungeon", PartyDungeonTcpTests.RunAsync),
         ("helper-hell-rotation", PartyDungeonTcpTests.RunHelperHellAsync),
         ("guild-dungeon-party", PartyDungeonTcpTests.RunGuildPartyBuffAsync),
+        ("adventurer-benefits", PartyDungeonTcpTests.RunAdventurerBenefitsAsync),
         ("monster-battle-level", FormalDungeonTcpTests.RunBattleLevelsAsync),
         ("monster-ai", FormalDungeonTcpTests.RunMonsterAiAsync),
         ("dungeon-tournament", FormalDungeonTcpTests.RunTournamentAsync),
@@ -140,6 +183,7 @@ internal static class TcpRegressionTests
         ("marriage", MarriageTcpTests.RunAsync),
         ("marriage-wedding", MarriageWeddingTcpTests.RunAsync),
         ("marriage-home", MarriageHomeTcpTests.RunAsync),
+        ("marriage-channel", RaidChannelLandingTcpTests.RunMarriageAsync),
         ("marriage-dungeon", PartyDungeonTcpTests.RunMarriageAsync),
         ("tutorial", TutorialTcpTests.RunAsync),
         ("channel-entry", ChannelEntryTcpTests.RunAsync),
@@ -170,6 +214,12 @@ internal static class TcpRegressionTests
         ("growup-change", GrowUpChangeTcpTests.RunAsync),
         ("stadium-quest", MetroQuestEntryTcpTests.RunStadiumAsync),
         ("titles", TitleTcpTests.RunAsync),
+        ("collectbox-rules", (_, _, resources) =>
+        {
+            CollectBoxTests.RunCore();
+            CollectBoxTests.RunResources(resources.Towns, resources.ItemResources);
+            return Task.CompletedTask;
+        }),
         ("collectbox", CollectBoxTcpTests.RunAsync),
         ("epic-production", EpicProductionTcpTests.RunAsync),
         ("epic-production-rules", (_, _, resources) =>
@@ -179,6 +229,7 @@ internal static class TcpRegressionTests
         }),
         ("clear-avatar", ClearAvatarTcpTests.RunAsync),
         ("adventure", AdventureCoreTcpTests.RunAsync),
+        ("adventure-gm", AdventureGmTcpTests.RunAsync),
         ("adventure-names", AdventureNameTcpTests.RunAsync),
         ("adventure-representatives", AdventureRepresentativeTcpTests.RunAsync),
         ("adventure-expeditions", AdventureExpeditionTcpTests.RunAsync),
@@ -254,6 +305,11 @@ internal static class TcpRegressionTests
             QuestNpcMappingTests.RunResources(resources.Towns,resources.Quests);
             return Task.CompletedTask;
         }),
+        ("quest-range-recovery", async (options, root, resources) =>
+        {
+            QuestTownSceneTests.RunSmanyRangeRecovery(resources.Towns,resources.Archive,resources.Characters,resources.ItemResources,resources.Quests,resources.Learning);
+            await QuestRangeRecoveryTcpTests.RunAsync(options,root,resources);
+        }),
         ("quest-hidden", (_, _, resources) => QuestHiddenEntryTests.RunAsync(resources.Towns,resources.Archive,
             resources.Characters,resources.ItemResources,resources.Quests,resources.Learning)),
         ("quest-replay", (_, _, resources) => QuestReplayPublicationTests.RunAsync(resources.Archive,
@@ -270,6 +326,11 @@ internal static class TcpRegressionTests
             QuestCinematicSettlementTests.Run(resources.Towns,resources.Archive,resources.Characters,resources.ItemResources,resources.Quests,resources.Learning);
             QuestAdventureSettlementTests.Run(resources.Towns,resources.Archive,resources.Characters,resources.ItemResources,resources.Quests,resources.Learning);
             await FormalDungeonTcpTests.RunTrainQuestAsync(options,root,resources);
+        }),
+        ("quest-mainline", (_, _, resources) =>
+        {
+            QuestMainlineTests.Run(resources.Towns,resources.Archive,resources.Characters,resources.ItemResources,resources.Quests,resources.Learning);
+            return Task.CompletedTask;
         }),
         ("story-scenes", (_, _, resources) =>
         {
@@ -341,6 +402,9 @@ internal static class TcpRegressionTests
         {
             QuestReplayTests.RunCore();
             DungeonEntryPlanTests.Run(resources.Archive);
+            DisasterDungeonTests.RunCore();
+            DisasterDungeonTests.Run(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources,
+                resources.Quests, resources.Learning);
             DungeonEntryCostTests.Run(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources,
                 resources.Quests, resources.Learning);
             return Task.CompletedTask;
@@ -351,7 +415,27 @@ internal static class TcpRegressionTests
                 resources.Quests, resources.Learning);
             return Task.CompletedTask;
         }),
+        ("rift-daily-rules", (_, _, _) =>
+        {
+            RiftDailyPacketTests.Run();
+            ParticularHellPartyTests.Run();
+            WorldMapHoverTests.Run();
+            return Task.CompletedTask;
+        }),
+        ("particular-hell-entry", (_, _, resources) =>
+        {
+            RiftDailyPacketTests.RunResources(resources.Archive);
+            ParticularHellEntryTests.Run(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources,
+                resources.Quests, resources.Learning);
+            return Task.CompletedTask;
+        }),
+        ("particular-hell-socket", FormalDungeonTcpTests.RunParticularHellAsync),
         ("sleepy-hollow-socket", FormalDungeonTcpTests.RunSleepyHollowAsync),
+        ("week-dungeon-rewards", (_, _, resources) =>
+        {
+            WeekDungeonRewardTests.Run(resources);
+            return Task.CompletedTask;
+        }),
         ("pandemonium-regional-drops", FormalDungeonTcpTests.RunRegionalDropsAsync),
         ("sleepy-hollow-materials", (_, _, resources) =>
         {
@@ -365,6 +449,22 @@ internal static class TcpRegressionTests
         {
             TayberrsCardRewardTests.RunCore();
             TayberrsCardRewardTests.RunResources(resources.Archive, resources.ItemResources);
+            return Task.CompletedTask;
+        }),
+        ("tayberrs-settlement", (_, _, resources) =>
+        {
+            DungeonSpecificCardRewardsTests.RunTayberrsResources(resources.Towns, resources.Archive, resources.Characters,
+                resources.ItemResources, resources.Quests, resources.Learning);
+            return Task.CompletedTask;
+        }),
+        ("champion-policy", (_, _, resources) =>
+        {
+            DungeonChampionPolicyTests.RunResources(resources.Archive);
+            return Task.CompletedTask;
+        }),
+        ("epic-road-admission", (_, _, resources) =>
+        {
+            EpicRoadAdmissionSessionTests.RunResources(resources.Archive, resources.ItemResources);
             return Task.CompletedTask;
         }),
         ("dungeon-clear-battle-pass", (_, _, resources) =>
@@ -401,6 +501,11 @@ internal static class TcpRegressionTests
                 resources.ItemResources, resources.Quests, resources.Learning);
             await FormalDungeonPublicationTests.RunAsync(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources);
         }),
+        ("dungeon-settlement-session", (_, _, resources) =>
+        {
+            DungeonSettlementSessionTests.Run(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources);
+            return Task.CompletedTask;
+        }),
         ("dungeon-drop-storage", (_, _, resources) =>
         {
             EquipmentAmplificationDropTests.RunResources(resources.ItemResources);
@@ -414,6 +519,7 @@ internal static class TcpRegressionTests
         ("talisman", TalismanTcpTests.RunAsync),
         ("consumable-use", ConsumableUseTcpTests.RunAsync),
         ("consumable-effects", ConsumableUseTcpTests.RunEffectsAsync),
+        ("treasure-hunter-potions", ConsumableUseTcpTests.RunTreasureHunterAsync),
         ("consumable-disguise", ConsumableUseTcpTests.RunDisguiseAsync),
         ("consumable-random-disguise", ConsumableUseTcpTests.RunRandomDisguiseAsync),
         ("teleport", TeleportTcpTests.RunAsync),
@@ -428,6 +534,16 @@ internal static class TcpRegressionTests
             ConsumableUseTests.RunResources(resources.ItemResources);
             ConsumableUseSessionTests.Run(resources.Towns, resources.Characters, resources.Archive);
             ConsumableUseSessionTests.RunPortableCargo(resources.Towns, resources.Characters, resources.Archive, resources.ItemResources);
+            return Task.CompletedTask;
+        }),
+        ("various-buff-rules", (_, root, resources) =>
+        {
+            VariousBuffAssociationTests.RunCore();
+            VariousBuffAssociationTests.RunResources(resources.ItemResources);
+            DungeonEpicDropBuffTests.RunCore();
+            DungeonDropGenerationPlanTests.RunCore();
+            DungeonDropControlTests.RunCore();
+            DatabaseSchemaTests.VariousBuffUpgrade(root);
             return Task.CompletedTask;
         }),
         ("inventory-persistence", (_, _, resources) =>
@@ -481,6 +597,7 @@ internal static class TcpRegressionTests
         ("cargo", CargoTcpTests.RunAsync),
         ("cargo-purchase", CargoPurchaseTcpTests.RunAsync),
         ("shop", ShopTcpTests.RunAsync),
+        ("anton-entry-material", ShopTcpTests.RunAntonEntryMaterialAsync),
         ("cash-shop", CashShopTcpTests.RunAsync),
         ("battle-pass-skill-material", async (_, _, resources) =>
         {
@@ -491,6 +608,7 @@ internal static class TcpRegressionTests
         {
             await global::DfoServer.TownTravelPublicationTests.RunServerEventPublicationAsync(resources);
             await global::DfoServer.BattlePassRewardTests.RunRewardSuccessPublicationAsync(resources);
+            await global::DfoServer.BattlePassRewardTests.RunClaimAllOverflowPublicationAsync(resources);
             await global::DfoServer.BattlePassRewardTests.RunMissionSuccessPublicationAsync(resources);
             await global::DfoServer.BattlePassRewardTests.RunMissionPublicationBusyAsync(resources);
             await global::DfoServer.BattlePassRaidRecipientFailureTests.RunAsync(resources);
@@ -539,6 +657,7 @@ internal static class TcpRegressionTests
         ("amplification-options", AmplificationTcpTests.RunAsync),
         ("amplification-upgrade", AmplifyUpgradeTcpTests.RunAsync),
         ("creature-egg", CreatureEggTcpTests.RunAsync),
+        ("creature-seal", CreatureSealTcpTests.RunAsync),
         ("creature-skin", CreatureSkinTcpTests.RunAsync),
         ("aura-skin", AuraSkinTcpTests.RunAsync),
         ("inventory-expansion", InventoryExpansionTcpTests.RunAsync),
@@ -585,6 +704,7 @@ internal static class TcpRegressionTests
         ("equipment-upgrade", EquipmentUpgradeTcpTests.RunAsync),
         ("echon-equipment", EchonEquipmentTcpTests.RunAsync),
         ("equipment-transmission", EquipmentTransmissionTcpTests.RunAsync),
+        ("equipment-effect", EquipmentEffectTcpTests.RunAsync),
         ("weapon-skin", WeaponSkinTcpTests.RunAsync),
         ("emoticon", EmoticonTcpTests.RunAsync),
         ("skin-recent", SkinRecentTcpTests.RunAsync),
@@ -601,6 +721,7 @@ internal static class TcpRegressionTests
         ("item-daily-expire", ItemDailyExpireTcpTests.RunAsync),
         ("epic-book", EpicBookTcpTests.RunAsync),
         ("epic-piece-drops", FormalDungeonTcpTests.RunEpicPiecesAsync),
+        ("secret-shop", FormalDungeonTcpTests.RunSecretShopAsync),
         ("material-exchange", MaterialExchangeTcpTests.RunAsync),
         ("recipe-craft", RecipeCraftTcpTests.RunAsync),
         ("upgrade-chronicle", UpgradeChronicleTcpTests.RunAsync),
@@ -619,6 +740,7 @@ internal static class TcpRegressionTests
             return Task.CompletedTask;
         }),
         ("booster-selection", BoosterSelectionTcpTests.RunAsync),
+        ("returning-adventurer-items", ReturningAdventurerItemTcpTests.RunAsync),
         ("booster-equipment", BoosterEquipmentTcpTests.RunAsync),
         ("authentication", AuthenticationTcpTests.RunAsync),
         ("native-login", NativeLoginTcpTests.RunAsync),
@@ -665,6 +787,7 @@ internal static class TcpRegressionTests
         ("xian-village-door", RaidChannelLandingTcpTests.RunXianDoorAsync),
         ("presence", TownPresenceTcpTests.RunAsync),
         ("gm-events", GmEventTcpTests.RunAsync),
+        ("server-event-publication", (_, _, resources) => global::DfoServer.TownTravelPublicationTests.RunServerEventPublicationAsync(resources)),
         ("gm-web-accept", GmWebAcceptTcpTests.RunAsync)
     ];
 
@@ -680,6 +803,10 @@ internal static class TcpRegressionTests
     static readonly HashSet<string> TargetedOnly = new(StringComparer.Ordinal)
     {
         "otherverse-drop-rules",
+        "week-dungeon-rewards",
+        "rift-daily-rules", "particular-hell-entry",
+        "tayberrs-settlement",
+        "champion-policy", "epic-road-admission",
         "fiendwar-reward-rules",
         "fiendwar-recovery-movie",
         "fiendwar-shared-limits",
@@ -696,12 +823,13 @@ internal static class TcpRegressionTests
         "levelup-ticket-rules",
         "levelup-table-rules",
         "experience-consumable-rules",
+        "returning-adventurer-items",
         "legacy-status-rules",
         "stackable-actions",
         "gift-selection-tcp", "gift-selection-resources", "sea-rage-weapon-gift", "similar-gift-type", "dungeon-entry-plan", "assault-hunt-quest", "hosted-dungeon-eligibility", "quest-continuation", "quest-manual-skip", "quest-ticket", "quest-specified-ticket", "quest-awakening-ticket",
-        "quest-play-only", "quest-auto-meet", "quest-npc-mapping", "quest-hidden", "quest-replay", "quest-initialization",
+        "quest-play-only", "quest-auto-meet", "quest-npc-mapping", "quest-range-recovery", "quest-hidden", "quest-replay", "quest-initialization",
         "story-cinematic", "story-scenes", "story-quest-entry", "story-publication", "quest-core-rewards", "dungeon-settlement",
-        "dungeon-drop-storage", "inventory-persistence", "resource-survey", "consumable-use-rules", "dungeon-entry-cost", "dungeon-incount-retry",
+        "dungeon-drop-storage", "inventory-persistence", "resource-survey", "consumable-use-rules", "various-buff-rules", "dungeon-entry-cost", "dungeon-incount-retry",
         "item-daily-expire", "battle-pass-skill-material"
     };
     internal static IEnumerable<string> DefaultGroupNames => Groups.Select(group => group.Name).Where(name => !TargetedOnly.Contains(name));

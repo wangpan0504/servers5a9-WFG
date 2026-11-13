@@ -1,5 +1,6 @@
 using DfoServer.Infrastructure;
 using DfoServer.GameWorld.Characters;
+using DfoServer.GameWorld.Dungeons;
 using DfoServer.GameWorld.Towns;
 using PvfLib;
 
@@ -12,6 +13,7 @@ internal sealed class TcpTestResources : IDisposable
     readonly Lazy<CharacterCatalog> characters;
     readonly Lazy<ItemResources> items;
     readonly Lazy<TownCatalog> towns;
+    readonly Lazy<DungeonCatalog> dungeons;
     readonly Lazy<SkillLearningCatalog> learning;
     readonly Lazy<CharacterGrowthCatalog> growth;
     readonly Lazy<DfoServer.GameWorld.Quests.QuestCatalog> quests;
@@ -20,11 +22,13 @@ internal sealed class TcpTestResources : IDisposable
     readonly Lazy<TutorialCatalog> tutorials;
     readonly Lazy<TutorialScenes> tutorialScenes;
     internal string PvfPath { get; }
+    internal bool EpicRoad2019Enabled { get; }
     readonly Lazy<ChatEmoticonCatalog> chatEmoticons;
     public PvfArchive Archive => archive.Value;
     public ItemResources ItemResources => items.Value;
     public CharacterCatalog Characters => characters.Value;
     public TownCatalog Towns => towns.Value;
+    public DungeonCatalog Dungeons => dungeons.Value;
     public SkillLearningCatalog Learning => learning.Value;
     public CharacterGrowthCatalog Growth => growth.Value;
     public DfoServer.GameWorld.Quests.QuestCatalog Quests => quests.Value;
@@ -41,6 +45,7 @@ internal sealed class TcpTestResources : IDisposable
     public TcpTestResources(ServerOptions options)
     {
         PvfPath = Path.GetFullPath(options.PvfPath);
+        EpicRoad2019Enabled = options.EpicRoad2019Enabled;
         archive = new(() => Timed(() =>
         {
             var pvf = PvfArchive.Open(PvfPath);
@@ -51,13 +56,17 @@ internal sealed class TcpTestResources : IDisposable
         items = new(() => Timed(() => new ItemResources(Archive)));
         characters = new(() => Timed(() => CharacterCatalog.Load(Archive, ItemResources.Items)));
         towns = new(() => Timed(() => TownCatalog.Load(Archive)));
+        // 普通测试复用已有缓存；补充目录模式也只创建一份，供场景和Runtime共同使用。
+        dungeons = new(() => Timed(() => EpicRoad2019Enabled
+            ? DungeonCatalog.Load(Archive, EpicRoadResourcePaths.Dungeons, EpicRoadResourcePaths.Maps)
+            : SelfTestCatalogs.Dungeons(Archive)));
         learning = new(() => Timed(() => SkillLearningCatalog.Load(Archive, ItemResources.Contracts.ExpertSkillLevels)));
         growth = new(() => Timed(() => CharacterGrowthCatalog.Load(Archive,Learning)));
         quests = new(() => Timed(() => SelfTestCatalogs.Quests(Archive).WithCreatures(ItemResources.Creatures)));
         adventure = new(() => Timed(() => new DfoServer.GameWorld.Adventure.AdventureCatalog(Archive)));
         expeditions = new(() => Timed(() => new DfoServer.GameWorld.Adventure.AdventureExpeditionCatalog(Archive)));
         tutorials = new(() => Timed(() => new TutorialCatalog(Archive)));
-        tutorialScenes = new(() => Timed(() => new TutorialScenes(Archive, Tutorials, SelfTestCatalogs.Dungeons(Archive))));
+        tutorialScenes = new(() => Timed(() => new TutorialScenes(Archive, Tutorials, Dungeons)));
         chatEmoticons = new(() => Timed(() => ChatEmoticonCatalog.Load(Archive,ItemResources.Contracts)));
     }
 

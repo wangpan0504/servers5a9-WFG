@@ -23,7 +23,8 @@ internal static class QuestEligibility
         (required is null or "[all]" || required == Jobs[job]);
 
     // 两端普通列表的分类合同；本版新增专用分类仍保留定义，等待对应入口确认。
-    public static QuestResourceAccess InspectResource(StoryQuest quest, bool strongway2019Active = false)
+    public static QuestResourceAccess InspectResource(StoryQuest quest, bool strongway2019Active = false,
+        bool epicRoad2019Active = false)
     {
         if (quest.Definition is not { } definition || definition.Diagnostics.Length != 0)
             return new(QuestResourceEntry.Invalid, "资源声明存在未确认项");
@@ -31,6 +32,8 @@ internal static class QuestEligibility
             return new(QuestResourceEntry.OutsideLevels, "原始等级不属于Lv1–95普通任务；保留特殊标记");
         if (strongway2019Active && QuestStrongway2019Entry.Supports(quest))
             return new(QuestResourceEntry.Ordinary, "强者之路首步通过活动312启用事实；仍走原资格、接取及完成事务");
+        if (epicRoad2019Active && QuestEpicRoad2019Entry.Supports(quest))
+            return new(QuestResourceEntry.Ordinary, "星河裂缝8712通过活动10005启用事实；仍走原资格、接取及完成事务");
         if (definition.IsEvent)
             return new(QuestResourceEntry.Event, "活动任务需要本版活动启用与期限配置");
         if (definition.HardcoreOnly)
@@ -59,12 +62,13 @@ internal static class QuestEligibility
         "[realization]" or "[training]" or "[achievement]" or "[mission]" or "[daily]" or "[daily random]" or
         "[normaly repeat]" or "[special daily]" or "[common unique]" or "[system]";
 
-    public static ImmutableArray<int> Visible(Character character, QuestCatalog catalog, bool strongway2019Active = false)
+    public static ImmutableArray<int> Visible(Character character, QuestCatalog catalog, bool strongway2019Active = false,
+        bool epicRoad2019Active = false)
     {
         var completed = Completed(character);
         var active = character.ActiveMainQuests.Select(quest => (int)quest.QuestId).ToHashSet();
         return catalog.All.Where(quest => Evaluate(character, quest, catalog, completed, active, includeActive: true,
-                strongway2019Active: strongway2019Active).Visible)
+                strongway2019Active: strongway2019Active, epicRoad2019Active: epicRoad2019Active).Visible)
             .Select(quest => quest.Id).ToImmutableArray();
     }
 
@@ -80,30 +84,34 @@ internal static class QuestEligibility
     }
 
     // 21同时携带可见任务与等待客户端884的合格隐藏候选；候选本身不生成822或接取槽。
-    public static ImmutableArray<int> Candidates(Character character, QuestCatalog catalog, bool strongway2019Active = false)
+    public static ImmutableArray<int> Candidates(Character character, QuestCatalog catalog, bool strongway2019Active = false,
+        bool epicRoad2019Active = false)
     {
         var completed = Completed(character);
         var active = character.ActiveMainQuests.Select(quest => (int)quest.QuestId).ToHashSet();
         return catalog.All.Where(quest => Evaluate(character,quest,catalog,completed,active,includeActive:true,
-                strongway2019Active:strongway2019Active).Visible ||
+                strongway2019Active:strongway2019Active, epicRoad2019Active: epicRoad2019Active).Visible ||
             !active.Contains(quest.Id) && QuestHiddenEntry.Direct(quest,catalog) &&
             !quest.Definition!.HideOnCompletedQuests.Any(completed.Contains) &&
-            Evaluate(character,quest,catalog,completed,active,strongway2019Active:strongway2019Active).Eligible).Select(quest => quest.Id).ToImmutableArray();
+            Evaluate(character,quest,catalog,completed,active,strongway2019Active:strongway2019Active,
+                epicRoad2019Active: epicRoad2019Active).Eligible).Select(quest => quest.Id).ToImmutableArray();
     }
 
     public static QuestEligibilityResult Evaluate(Character character, StoryQuest quest, QuestCatalog catalog,
-        bool allowAboveMaximum = false, QuestEligibilityMode mode = QuestEligibilityMode.Ordinary, bool strongway2019Active = false) =>
+        bool allowAboveMaximum = false, QuestEligibilityMode mode = QuestEligibilityMode.Ordinary,
+        bool strongway2019Active = false, bool epicRoad2019Active = false) =>
         Evaluate(character, quest, catalog, Completed(character),
             character.ActiveMainQuests.Select(active => (int)active.QuestId).ToHashSet(), allowAboveMaximum: allowAboveMaximum, mode: mode,
-            strongway2019Active: strongway2019Active);
+            strongway2019Active: strongway2019Active, epicRoad2019Active: epicRoad2019Active);
 
     public static HashSet<int> Completed(Character character) => character.CompletedQuests.Concat(character.AccountCompletedQuests).ToHashSet();
 
     private static QuestEligibilityResult Evaluate(Character character, StoryQuest quest, QuestCatalog catalog,
         IReadOnlySet<int> completed, IReadOnlySet<int> active, bool includeActive = false, bool allowAboveMaximum = false,
-        QuestEligibilityMode mode = QuestEligibilityMode.Ordinary, bool strongway2019Active = false)
+        QuestEligibilityMode mode = QuestEligibilityMode.Ordinary, bool strongway2019Active = false,
+        bool epicRoad2019Active = false)
     {
-        var access = InspectResource(quest, strongway2019Active);
+        var access = InspectResource(quest, strongway2019Active, epicRoad2019Active);
         if (access.Entry is QuestResourceEntry.Invalid or QuestResourceEntry.OutsideLevels or QuestResourceEntry.Event)
             return Reject(access.Reason);
         if (access.Entry == QuestResourceEntry.Profession && !QuestExpertJobProgress.MatchesLevel(character, quest))
@@ -161,6 +169,9 @@ internal static class QuestEligibility
             access.Entry == QuestResourceEntry.Profession && definition.ExposedByNpc && OrdinaryGrade(quest.Grade) ||
             access.Entry == QuestResourceEntry.Creature && definition.ExposedByNpc && OrdinaryGrade(quest.Grade)) &&
             !definition.HideOnCompletedQuests.Any(completed.Contains);
+        // 6929必须留在NOTI21候选中供客户端打开266窗口，但绝不能占用持久任务槽。
+        if (ClientJobChangePrompt(quest))
+            return new(false, visible, "客户端转职选择占位任务不能接取");
         return new(true, visible, visible ? "资格满足" : "需要专用任务入口");
     }
 
@@ -184,7 +195,7 @@ internal static class QuestEligibility
             return Reject("旧外传主线觉醒只面向尚未觉醒角色");
         bool selfAwakening = character.Job is 9 or 10 && quest.Grade == "[realization]";
         if (definition.JobChange == 1 && (quest.RewardType == "[grow type]" && grow != 0 ||
-                quest.RewardType != "[grow type]" && ((TransferredStoryAlternative(quest,catalog,character.Job) || TransferredAutoMeet(quest)) ? grow == 0 : grow != 0)) ||
+                quest.RewardType != "[grow type]" && (TransferredAutoMeet(quest) ? grow == 0 : !TransferredStoryAlternative(quest,catalog,character.Job) && grow != 0)) ||
             definition.JobChange == 2 && ((!selfAwakening && grow == 0) || awakening != 0) ||
             definition.JobChange == 3 && ((!selfAwakening && grow == 0) || awakening != 1) ||
             definition.GrowType != -1 && definition.JobChange is not (1 or 10 or 20) &&
@@ -212,7 +223,14 @@ internal static class QuestEligibility
                 definition.PrerequisiteGroups.Length==other.PrerequisiteGroups.Length &&
                 definition.PrerequisiteGroups.Zip(other.PrerequisiteGroups).All(pair=>pair.First.SequenceEqual(pair.Second)));
 
-    // 转职主线的零奖励互斥替代仅服务已转职角色；GM设置状态也不要求伪造旧转职任务记录。
+    // 本版6929由客户端拦截打开转职选择窗；精确资源身份和形状避免误清同号的自定义任务。
+    internal static bool ClientJobChangePrompt(StoryQuest quest) => quest is
+        { Id: 6929, Grade: "[epic]", Condition: "[meet npc]", CompleteNpc: -1, RewardType: "[item]", Rewards.Count: 0,
+          Definition: { JobChange: 1, GrowType: -1, SelectRewards.IsEmpty: true, AcceptanceRewards.IsEmpty: true } } &&
+        quest.Path == "n_quest/quest_renewal/epic_quest/elvengard/elvengard_epic_10_dummy.qst";
+
+    // 转职主线的零奖励互斥替代也用于窗口的“保留转职”，允许未转职角色继续主线。
+    // 已转职（包括GM设置状态）仍可走同一衔接，不要求伪造旧转职任务记录。
     public static bool TransferredStoryAlternative(StoryQuest quest,QuestCatalog catalog,byte job)
         => job<Jobs.Length && quest is {Grade:"[epic]",Condition:"[clear map]",RewardType:"[item]",Definition:{JobChange:1} definition} &&
             quest.Rewards is [{Type:0,Text:null,Value:0},{Type:0,Text:null,Value:0}] && definition.SelectRewards.IsEmpty &&

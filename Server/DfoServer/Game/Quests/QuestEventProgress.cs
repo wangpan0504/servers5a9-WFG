@@ -12,7 +12,11 @@ internal static class QuestEventProgress
 {
     public static bool Supports(StoryQuest quest) => QuestTargetSchema.Read(quest).State == QuestParameterState.Parsed && quest.TargetKind switch
     {
-        QuestTargetKind.QuestAccept or QuestTargetKind.ClearQuestByGrade or QuestTargetKind.UseItem or QuestTargetKind.GetItemCheckIndex => true,
+        QuestTargetKind.QuestAccept or QuestTargetKind.ClearQuestByGrade or QuestTargetKind.UseItem or QuestTargetKind.GetItemCheckIndex
+            or QuestTargetKind.DisjointItem or QuestTargetKind.AmplifyItem or QuestTargetKind.UseFortuneCoin
+            or QuestTargetKind.SendChatting or QuestTargetKind.UiClick or QuestTargetKind.CheckTime or QuestTargetKind.CheckLife
+            or QuestTargetKind.ClearTreasureDungeon or QuestTargetKind.PowerWarWin or QuestTargetKind.PowerWarPoint
+            or QuestTargetKind.AssaultCount => true,
         QuestTargetKind.GetItem => quest.IntData[0] == -1,
         _ => false
     };
@@ -43,7 +47,7 @@ internal static class QuestEventProgress
             (quest.IntData[0] == -1 || quest.IntData[0] == grade));
     }
 
-    static int? EffectiveGrade(StoryQuest quest, QuestCatalog quests)
+    internal static int? EffectiveGrade(StoryQuest quest, QuestCatalog quests)
     {
         var visited = new HashSet<int>();
         while (quest.MainQuest is > 0 && visited.Add(quest.Id) && quests.TryGet(quest.MainQuest.Value, out var parent)) quest = parent;
@@ -64,7 +68,8 @@ internal static class QuestEventProgress
     {
         if (plan.PreserveMaterials) return active.ToImmutableArray();
         var relevant = active.Where(row => row.AcceptanceId != Guid.Empty && row.ConditionState > 0 &&
-            quests.TryGet(row.QuestId, out var quest) && quest.TargetKind is QuestTargetKind.UseItem or QuestTargetKind.GetItemCheckIndex or QuestTargetKind.GetItem).ToArray();
+            quests.TryGet(row.QuestId, out var quest) && quest.TargetKind is QuestTargetKind.UseItem or QuestTargetKind.GetItemCheckIndex
+                or QuestTargetKind.GetItem or QuestTargetKind.DisjointItem or QuestTargetKind.AmplifyItem).ToArray();
         if (relevant.Length == 0) return active.ToImmutableArray();
         var wanted = relevant.Select(row => quests.Get(row.QuestId)).Where(quest => quest.TargetKind == QuestTargetKind.GetItemCheckIndex)
             .SelectMany(quest => quest.IntData).ToHashSet();
@@ -81,9 +86,61 @@ internal static class QuestEventProgress
                 template.Kind == ItemKind.Equipment && (quest.SubType == 1
                     ? QuestItemProgress.AtLeastRarity(template.Rarity, quest.IntData[1]) && template.MinimumLevel >= quest.IntData[2]
                     : QuestItemProgress.AtMostRarity(template.Rarity, quest.IntData[1]) && (quest.IntData[2] == -1 || template.MinimumLevel <= quest.IntData[2]))),
+            QuestTargetKind.DisjointItem => MatchesDisjoint(quest, quests, plan.EquipmentDisjoint),
+            QuestTargetKind.AmplifyItem => MatchesAmplify(quest, quests, plan.EquipmentEnhancement),
             _ => false
         });
     }
+
+    static bool MatchesDisjoint(StoryQuest quest, QuestCatalog quests, EquipmentDisjointFact? disjoint)
+    {
+        if (disjoint is null) return false;
+        if (quest.SubType == 1)
+            return QuestTargetSchema.Read(quest).Pairs.Any(pair =>
+                disjoint.Rewards.Any(reward => reward.ItemId == pair.Key && reward.Count >= pair.Value));
+        if (quest.SubType != 0 || quest.IntData.Count < 3) return false;
+        ItemTemplate? template = null;
+        if (quests.Items is { } items) _ = items.TryGetLoaded(disjoint.Source.Core.ItemId, out template);
+        int rarity = template?.Rarity ?? 0;
+        int level = template?.MinimumLevel ?? 1;
+        return (quest.IntData[1] == -1 || QuestItemProgress.AtLeastRarity(rarity, quest.IntData[1])) &&
+            (quest.IntData[2] == -1 || level >= quest.IntData[2]);
+    }
+
+    static bool MatchesAmplify(StoryQuest quest, QuestCatalog quests, EquipmentEnhancementFact? enhancement)
+    {
+        if (enhancement is not { Result.Succeeded: true }) return false;
+        if (quest.IntData.Count < 3) return false;
+        if (quest.IntData[0] != -1 && enhancement.Result.NewLevel < quest.IntData[0]) return false;
+        ItemTemplate? template = null;
+        if (quests.Items is { } items) _ = items.TryGetLoaded(enhancement.Target.Core.ItemId, out template);
+        int rarity = template?.Rarity ?? 0;
+        int level = template?.MinimumLevel ?? 1;
+        return (quest.IntData[1] == -1 || QuestItemProgress.AtLeastRarity(rarity, quest.IntData[1])) &&
+            (quest.IntData[2] == -1 || level >= quest.IntData[2]);
+    }
+
+    public static ImmutableArray<ActiveMainQuest> FortuneCoinUsed(IReadOnlyList<ActiveMainQuest> active, QuestCatalog quests, int itemId = -1) =>
+        Apply(active, quests, quest => quest.TargetKind == QuestTargetKind.UseFortuneCoin &&
+            (itemId <= 0 || QuestTargetSchema.Read(quest).Pairs.Any(pair => pair.Key == itemId)));
+
+    public static ImmutableArray<ActiveMainQuest> ChatSent(IReadOnlyList<ActiveMainQuest> active, QuestCatalog quests, int channel, string message) =>
+        Apply(active, quests, quest => quest.TargetKind == QuestTargetKind.SendChatting &&
+            (quest.IntData.Contains(channel) || quest.IntData.Contains(0)) &&
+            QuestTargetSchema.ReadStrings(quest).Any(expected => message.Contains(expected, StringComparison.Ordinal)));
+
+    public static ImmutableArray<ActiveMainQuest> UiClicked(IReadOnlyList<ActiveMainQuest> active, QuestCatalog quests, int uiId) =>
+        Apply(active, quests, quest => quest.TargetKind == QuestTargetKind.UiClick && quest.IntData.Contains(uiId));
+
+    public static ImmutableArray<ActiveMainQuest> TreasureDungeonCleared(IReadOnlyList<ActiveMainQuest> active, QuestCatalog quests, int dungeonId) =>
+        Apply(active, quests, quest => quest.TargetKind == QuestTargetKind.ClearTreasureDungeon && quest.IntData.Skip(1).Contains(dungeonId));
+
+    public static ImmutableArray<ActiveMainQuest> PowerWarRecorded(IReadOnlyList<ActiveMainQuest> active, QuestCatalog quests, bool won, int points) =>
+        Apply(active, quests, quest => quest.TargetKind == QuestTargetKind.PowerWarWin && won ||
+            quest.TargetKind == QuestTargetKind.PowerWarPoint && quest.IntData is [var required] && points >= required);
+
+    public static ImmutableArray<ActiveMainQuest> AssaultCleared(IReadOnlyList<ActiveMainQuest> active, QuestCatalog quests) =>
+        Apply(active, quests, quest => quest.TargetKind == QuestTargetKind.AssaultCount);
 
     static Dictionary<int, long> Totals(InventorySnapshot inventory, HashSet<int> wanted, bool equipment)
     {

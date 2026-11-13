@@ -20,18 +20,29 @@ internal static class AdventureRepresentativeTcpTests
             peer.Create("RepFirst"); first = peer.Id;
             peer.Create("RepSecond"); second = peer.Id;
             Execute("UPDATE characters SET level=95,grow_type=33 WHERE id IN(" + first + "," + second + ")");
+            Execute("UPDATE character_dungeon_state SET proficiency_level=197 WHERE character_id=" + second);
             peer.Select();
+            Execute("UPDATE characters SET grow_type=35 WHERE id=" + second + ";" +
+                "INSERT INTO account_adventure_representatives VALUES('representative',0,3," + second + ");" +
+                "UPDATE characters SET grow_type=33 WHERE id=" + second);
             peer.Send(1476, [0, 33]);
             var candidates = peer.Expect(1, 1476).Body;
             That(candidates.Length == 108 && candidates[1] == 1 && candidates[2] == 2 && candidates[3] == 2 &&
                 U32(candidates, 16) == first && U32(candidates, 68) == second, "真实候选包含两个独立UID和52B行，不用UI序号冒充角色");
             peer.Send(1477, Set(second));
             var ack = peer.Expect(1, 1477).Body;
-            That(ack.Length == 64 && U32(ack, 1) == 3 && U32(ack, 8) == 52 && DecodeName(ack, 24, 9) == "RepSecond",
+            That(ack.Length == 64 && U32(ack, 1) == 3 && U32(ack, 8) == 52 && DecodeName(ack, 24, 9) == "RepSecond" && ack[54] == 2 && U32(ack, 16) == 197,
                 "真实1477成功先返回职业和收藏记录，再同步完整账号信息");
-            peer.Expect(0, 1345); peer.Expect(0, 1343); peer.Expect(0, 1349); peer.Barrier();
+            peer.Expect(0, 1345);
+            var information = peer.Expect(0, 1343).Body;
+            Bytes(ack.AsSpan(12, 52).ToArray(), information.AsSpan(18 + 72, 52).ToArray(),
+                "真实1477与1343收藏行一致，熟练197不再写成服务器197");
+            peer.Expect(0, 1349); peer.Barrier();
             That(fixture.Query("SELECT character_id FROM account_adventure_representatives WHERE account='representative'") is [[long chosen]] && chosen == second,
                 "账号绑定真实第二名角色，不仍使用第一候选");
+            peer.Send(1476, [0, 33]); peer.Expect(1, 1476); peer.Barrier();
+            That(fixture.Query("SELECT count(*) FROM account_adventure_representatives WHERE grow=3") is [[0L]],
+                "旧转职代表被清理，完整1477刷新后同连接继续查询，不因旧绑定断线");
             string state = fixture.Snapshot("SELECT revision,name,level,experience FROM account_adventures");
             peer.Send(1477, Set(second)); peer.Expect(1, 1477); peer.Expect(0, 1345); peer.Expect(0, 1343); peer.Expect(0, 1349); peer.Barrier();
             That(fixture.Snapshot("SELECT revision,name,level,experience FROM account_adventures") == state, "合法重复设置应答但不重复writer或revision");
@@ -41,7 +52,7 @@ internal static class AdventureRepresentativeTcpTests
             peer.Expect(0, 1345);
             var removed = peer.Expect(0, 1343).Body;
             peer.Expect(0, 1349); peer.Barrier();
-            That(removed[18 + 72] == 0 && removed[18 + 73] == 1 && U32(removed, 18 + 72 + 48) == 0 &&
+            That(removed[18 + 72] == 0 && removed[18 + 73] == 1 && U32(removed, 18 + 72 + 48) == 0 && removed[18 + 72 + 42] == 0 &&
                 fixture.Query("SELECT character_id FROM account_adventure_representatives") is [[DBNull]],
                 "解除返回职业空收藏格，保留NULL绑定，不重新回到默认第一角色");
             string removedState = fixture.Snapshot("SELECT revision FROM account_adventures");

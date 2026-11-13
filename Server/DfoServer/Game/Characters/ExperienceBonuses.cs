@@ -53,13 +53,16 @@ internal sealed record ExperienceBonuses(uint Ordinary, ImmutableArray<Experienc
     {
         var actual = Applied(gained);
         uint A(ExperienceBonusSource source) => actual.Amount(source);
-        // 仅映射匹配ARAD已证的独立分量；Equipment/BlackDiamond/Avatar/Creature等仍在基础余项中。
+        // 装备与普通Buff共用客户端的“Buff”显示行，真实奖励来源仍分别保留。
+        // 023C5747只从基础余项扣offset55，不自动扣Buff字段；两项须同步，不能重复显示基础。
+        uint buff = checked(A(ExperienceBonusSource.Equipment) + A(ExperienceBonusSource.Buff) +
+            A(ExperienceBonusSource.LuckyCharacter) + A(ExperienceBonusSource.LuckyParty));
         // Bonuses的ID由客户端角色Buff目录解释，不是物品ID或dstr号；不能用它伪造装备、活动或师徒标签。
         return CharacterExperienceDisplay.Ordinary with
         {
             GrowthContractExperience = A(ExperienceBonusSource.GrowthContract),
             PotionExperience = checked(A(ExperienceBonusSource.Potion) + A(ExperienceBonusSource.QuestPotion)),
-            BuffExperience = A(ExperienceBonusSource.Buff),
+            BuffExperience = buff, DeductedExperienceComponent = buff,
             PartyExperience = A(ExperienceBonusSource.Party), InternetCafeExperience = A(ExperienceBonusSource.InternetCafe),
             GuildExperience = A(ExperienceBonusSource.Guild), FatigueBurningExperience = A(ExperienceBonusSource.FatigueBurning),
             FatigueBuffExperience = A(ExperienceBonusSource.FatigueBuff), SeriaBlessingExperience = A(ExperienceBonusSource.SeriaBlessing),

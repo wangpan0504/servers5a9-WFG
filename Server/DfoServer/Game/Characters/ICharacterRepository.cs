@@ -23,6 +23,8 @@ internal interface IExpertJobSetter
 
 internal interface ICharacterRepository
 {
+    DfoServer.GameWorld.Characters.FatigueBatteryCatalog? FatigueBatteryCatalog => null;
+    DfoServer.GameWorld.Adventure.AdventureCatalog? AdventureCatalog => null;
     QuestStageState LoadQuestStageState(AccountOwners.Lease owner, Character expected);
     string ReadAdventureName(AccountOwners.Lease owner);
     bool AdventureNameExists(AccountOwners.Lease owner, string name);
@@ -53,8 +55,10 @@ internal interface ICharacterRepository
     OperationHopeRewardCommit CommitOperationHopeReward(AccountOwners.Lease owner, OperationHopeRewardPlan plan);
     Character ClearOperationHopeAcceptances(AccountOwners.Lease owner, Character expected,
         DfoServer.GameWorld.Dungeons.OperationHopeCatalog catalog, IReadOnlyList<ActiveMainQuest> removals);
-    Character ConsumeOperationHopeAreaFatigue(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run, TimeProvider? battlePassClock = null);
-    Character ConsumeDungeonRoomFatigue(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run, TimeProvider? battlePassClock = null);
+    Character ConsumeOperationHopeAreaFatigue(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run, TimeProvider? battlePassClock = null,
+        DfoServer.Game.Inventory.Models.InventoryItem? energySource = null);
+    Character ConsumeDungeonRoomFatigue(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run, TimeProvider? battlePassClock = null,
+        DfoServer.Game.Inventory.Models.InventoryItem? energySource = null);
     Character GrantBlackDiamondFatigue(AccountOwners.Lease owner, Character expected, DateTimeOffset now);
     Character ResetDailyFatigue(AccountOwners.Lease owner, Character expected, int day, DateTimeOffset now);
     System.Collections.Immutable.ImmutableDictionary<int, AccountItemRefillState> ReadAccountItemRefills(AccountOwners.Lease owner);
@@ -107,8 +111,10 @@ internal interface ICharacterRepository
     Character CommitFatigueConsumable(AccountOwners.Lease owner, FatigueConsumablePlan plan, DateTimeOffset now);
     Character ReserveDungeonAttempt(AccountOwners.Lease owner, Character expected, uint nextObjectKey,
         WeeklyDungeonEntry? weekly = null);
+    FatigueBatteryFillResult FillFatigueBatteries(AccountOwners.Lease owner, Character? expected = null) => throw new NotSupportedException();
     DungeonEntryResetResult ResetDungeonEntries(AccountOwners.Lease owner);
     RewardLimitResetResult ResetRewardLimits(AccountOwners.Lease owner);
+    DungeonQuotaResetResult ResetDungeonLimits(AccountOwners.Lease owner);
     DungeonEntryCommit ReserveDungeonEntry(AccountOwners.Lease owner, Character expected, uint nextObjectKey,
         WeeklyDungeonEntry? weekly = null);
     // #510/#511 入场票、入场一次性疲劳与尝试号预留同一写事务提交。
@@ -138,7 +144,8 @@ internal interface ICharacterRepository
     Character AdvanceQuestCycle(AccountOwners.Lease owner, Character expected, int day, QuestAutoDailyPlan? daily = null);
     DungeonGrowthCommit CommitDungeonGrowth(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run,
         PreparedDungeonDeath prepared, DungeonExperienceReward reward, CharacterGrowthCatalog catalog, FrozenDungeonGroundDeath? loot = null, QuestDropPlan? questDrops = null, DfoServer.Game.Inventory.Services.EquipmentGrowthPlan? equipmentGrowth = null,
-        DfoServer.Game.Raids.AntonRaidBattle.FiendwarTitleDeath? fiendwarTitle = null, DungeonDirectPickupPlan? directPickup = null);
+        DfoServer.Game.Raids.AntonRaidBattle.FiendwarTitleDeath? fiendwarTitle = null, DungeonDirectPickupPlan? directPickup = null,
+        SpecialDungeonClearRewardPlan? specialClearReward = null);
     DungeonSettlementCommit CommitDungeonSettlement(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run,
         PreparedDungeonSettlement prepared, CharacterGrowthCatalog catalog, InventoryPlan? cardInventory = null, bool mailCardItem = false,
         DungeonCardDelivery? premiumDelivery = null, bool grantLuckyStar = false, int luckyStarLimit = 0,
@@ -168,6 +175,13 @@ internal interface ICharacterRepository
         System.Collections.Immutable.ImmutableArray<AccountIncountCharge> account = default, bool increment = true, bool check = true) =>
         throw new NotSupportedException("仓库不支持副本进入次数");
     int LoadAccountDungeonIncount(AccountOwners.Lease owner, int dungeon, int period) => throw new NotSupportedException("仓库不支持账号副本进入次数");
+    int LoadAccountDungeonIncountExtra(AccountOwners.Lease owner, int dungeon, int period) => throw new NotSupportedException("仓库不支持账号追加次数");
+    DungeonIncountUsage LoadClearRewardLimitUsage(AccountOwners.Lease owner, ushort characterId,
+        DfoServer.GameWorld.Dungeons.ClearRewardDungeonLimit limit, DungeonIncountPeriod period, int? containerItemId = null) => default;
     DfoServer.Game.Dungeons.CrackDailyState LoadCrackDaily(DfoServer.Game.Accounts.AccountOwners.Lease owner, ushort characterId, int day);
     DfoServer.Game.Dungeons.CrackDailyCommit CommitCrackClear(DfoServer.Game.Accounts.AccountOwners.Lease owner, Character expected, int day, DfoServer.Game.Dungeons.CrackDailyState state, DfoServer.Game.Inventory.Models.InventoryPlan? reward);
+    Character ClaimGrowthCapsule(AccountOwners.Lease owner, Character expected, uint requiredExperience = 10_000_000) =>
+        throw new NotSupportedException("仓库不支持角色成长胶囊");
+    Character ConvertPvpPrivateToNormal(AccountOwners.Lease owner, Character expected) =>
+        throw new NotSupportedException("仓库不支持决斗专用角色转普通角色");
 }

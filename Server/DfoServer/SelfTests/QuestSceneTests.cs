@@ -191,7 +191,7 @@ internal static class QuestSceneTests
         QuestPassiveClearTests.Run(towns,characters,items,quests,skills,growth,dungeons,rooms,kills,
             global::DfoServer.Testing.SelfTestCatalogs.ClearExperience(pvf),parameters,global::DfoServer.Testing.SelfTestCatalogs.DropRules(pvf),global::DfoServer.Testing.SelfTestCatalogs.CardPrices(pvf));
         Issue153CinematicLayerTests.Run(towns,characters,items,quests,skills,growth,dungeons,rooms,
-            global::DfoServer.Testing.SelfTestCatalogs.ClearExperience(pvf),parameters);
+            kills,global::DfoServer.Testing.SelfTestCatalogs.ClearExperience(pvf),parameters);
         Issue153RemainingTests.Run(towns,characters,items,quests,skills,growth,dungeons,rooms,
             global::DfoServer.Testing.SelfTestCatalogs.ClearExperience(pvf),parameters);
         Issue153MermaidClearTests.Run(towns,characters,items,quests,skills,growth,dungeons,rooms,kills,
@@ -973,7 +973,8 @@ internal static class QuestSceneTests
             Func<PreparedDungeonDeath,bool>? growthLossCondition = null,PremiumContractCatalog? contracts = null,
             TimeProvider? timeProvider = null,long? growthContractExpiresAt = null,bool loseSettlement = false,(int Id,int Count)[]? items = null,QuestStageGraph? stages = null,ushort? fatigueRemaining = null,byte growType = 0,
             DungeonIncountCatalog? incounts = null,bool loseTournament = false,Func<Character,InventoryPlan>? inventorySetup = null,
-            DfoServer.Game.Settings.GameDebugSettings? debugSettings = null)
+            DfoServer.Game.Settings.GameDebugSettings? debugSettings = null, RecoveryConsumableCatalog? consumables = null,
+            ItemCatalog? itemCatalog = null)
         {
             path = Path.Combine(root,"game.db"); Repository = new(path,quests); Owner = owners.Acquire("scene-quest",() => { });
             var candidate = CharacterCreation.Prepare("SceneQuest",characters.Get(job),position ?? towns.Room,position ?? towns.InitialReturn,skills.Get);
@@ -1008,7 +1009,8 @@ internal static class QuestSceneTests
                 repository = new FormalDungeonPublicationTests.LostResultRepository(repository,loseGrowth:false,loseSettlement:loseSettlement,
                     loseTournament:loseTournament);
             Session = new(repository,towns,Owner,questCatalog: quests,
-                contracts: contracts,timeProvider: timeProvider,stageGraph: stages,incounts: incounts,debugSettings: debugSettings);
+                contracts: contracts,timeProvider: timeProvider,stageGraph: stages,incounts: incounts,debugSettings: debugSettings,consumables: consumables,
+                items: itemCatalog);
             Session.Select(0, resumeTown: position is not null); Session.MarkReady();
         }
         public Character Read() => Repository.LoadCharacter(Owner,0);

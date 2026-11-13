@@ -46,6 +46,13 @@ internal static class MetroQuestEntryTcpTests
                     conditionUpdates[peer.Id]=conditionUpdates.GetValueOrDefault(peer.Id)+1;
                     continue;
                 }
+                if (packet is { Kind: 1, Opcode: 1002 })
+                {
+                    That(packet.Body.Length == 13 && packet.Body[0] == 1 &&
+                        System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(packet.Body.AsSpan(1, 8)) == 1,
+                        "推荐地下城结算幸运星充值应答");
+                    continue;
+                }
                 if (packet.Kind==0 && packet.Opcode==1760) { peer.ReadCardMembershipState(packet); continue; }
                 That(packet.Kind==0,"竞技场事件后无遗漏失败ACK");
                 observe?.Invoke(packet);
@@ -146,7 +153,8 @@ internal static class MetroQuestEntryTcpTests
                 "真实地区每日资源仍为两个目标及15份奖励，不替换PVF："+id);
             var done=new HashSet<int>(); var entrance=Entrance(id,dungeonId,done);
             var created=Create(account,name,0,level,done,entrance);
-            using var peer=Open(fixture,account);
+            using var originalPeer=Open(fixture,account);
+            TcpPeer peer=originalPeer;
             Select(peer,created);
             string acceptance=Identity(peer.Id,id);
             That(Scalar(peer.Id,id)==((uint)quest.IntData[4]|(uint)quest.IntData[9]<<9),"真实选角自动创建每日任务，无测试预填目标进度");
@@ -154,6 +162,23 @@ internal static class MetroQuestEntryTcpTests
             peer.Send(34,[34,0,(byte)id,(byte)(id>>8),255,255,1,0,255,255]);
             var denied=peer.Expect(1,34).Body;
             That(denied[0]==0,"未击杀不能提前手动领奖"); drain(peer,null);
+            if (id==13041)
+            {
+                That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort,"account "+account+" level "+name+" 95",out string reply) &&
+                    reply.StartsWith("OK ",StringComparison.Ordinal),"未完成地区每日时经真实GM等级事务升至95级");
+                drain(peer,null);
+                peer.Send(7); peer.Expect(1,7,[1]); peer.Expect(0,2);
+                peer.Dispose();
+            }
+            using var resumedPeer=id==13041 ? Open(fixture,account) : null;
+            if (resumedPeer is not null)
+            {
+                peer=resumedPeer;
+                Select(peer,created);
+                That(Identity(peer.Id,id)==acceptance && Scalar(peer.Id,id)>0 &&
+                    fixture.Query("SELECT level FROM characters WHERE id=$p0",peer.Id) is [[95L]] && Position(peer.Id)==entrance,
+                    "95级重连保留原每日接取和未完成计数，后续显式任务入场不能按新分配上限拒绝");
+            }
             int normal=0,boss=0;
             for(int attempt=0;attempt<12 && Scalar(peer.Id,id)!=0;attempt++)
             {
@@ -201,13 +226,10 @@ internal static class MetroQuestEntryTcpTests
             That(Scalar(peer.Id,id)==0 && normal==quest.IntData[4] && boss==quest.IntData[9],"真实多实例合成死亡累计原PVF普通与Boss数量，未预填完成状态："+id);
             if (id==13041)
             {
-                That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort,"account "+account+" level "+name+" 71",out string reply) &&
-                    reply.StartsWith("OK ",StringComparison.Ordinal),"完成安特贝鲁每日后经真实GM等级事务升至71级");
-                drain(peer,null);
                 peer.Send(7); peer.Expect(1,7,[1]); peer.Expect(0,2);
                 peer.Select(RoleIndex(peer.Roster,created),prepared:true);
                 That(Identity(peer.Id,id)==acceptance && Scalar(peer.Id,id)==0 &&
-                    fixture.Query("SELECT level FROM characters WHERE id=$p0",peer.Id) is [[71L]],
+                    fixture.Query("SELECT level FROM characters WHERE id=$p0",peer.Id) is [[95L]],
                     "跨地区升级及重连保留旧每日完成进度与原接取，不用SQL预填完成");
             }
             long rewardBefore=Reward();
@@ -643,28 +665,22 @@ internal static class MetroQuestEntryTcpTests
                     FormalDungeonTcpTests.Load(peer); Drain();
                     if (x==4)
                     {
-                        That(map.Length==89 && map[18]==3 && plan.Monsters.Count==3 &&
-                            plan.Room.AiCharacters is [{Id:5409,Faction:"[character]",RankKind:"[normal]",Level:70,
-                                Path:"aicharacter/fighter/28/28.aic"} native] &&
-                            native.RawValues.SequenceEqual([5409,983,242,0,0,0]) &&
-                            !DungeonCompanion.IsCompanionRow(plan.Room,0) &&
-                            plan.Monsters[2] is {MonsterId:5409,SourceOrdinal:0,Source:null,SpawnType:5,
-                                IsFriendly:true,IsBlocking:false,CanReportDeath:false,IsBoss:false} &&
-                            ReferenceEquals(plan.Monsters[2].AiCharacter,native),
-                            "真实29末房固定两个原怪及原生友方5409，独立资源预期禁止误过滤为伴侣");
-                        for (int index=0;index<3;index++)
+                        That(map.Length==67 && map[18]==2 && plan.Monsters.Count==2 &&
+                            plan.Room.AiCharacters.Count==0,
+                            "累计候选真实29末房保留两个原怪，空AI声明不补造旧5409");
+                        for (int index=0;index<2;index++)
                         {
                             int offset=19+22*index;
                             That(U16(map,offset)==0 && U32(map,offset+2)==(index==1 ? 1u : 0u) &&
                                 U16(map,offset+6)==plan.Monsters[index].ObjectKey &&
-                                U32(map,offset+8)==(index==0 ? 109008549u : index==1 ? 63821u : 5409u) &&
-                                map[offset+12]==(index==2 ? 70 : 95) &&
-                                map[offset+13]==(index==0 ? 0 : index==1 ? 3 : 5) &&
+                                U32(map,offset+8)==(index==0 ? 109008549u : 63821u) &&
+                                map[offset+12]==95 &&
+                                map[offset+13]==(index==0 ? 0 : 3) &&
                                 map[offset+14]==0 && map[offset+15]==0 && map[offset+16]==255 &&
                                 U32(map,offset+17)==0 && map[offset+21]==(index==0 ? 0 : 1),
-                                "真实29三条22B完整保留敌人、显示63821、原生AI的原序、独立key、等级、品级和清房排除位");
+                                "真实29两条22B完整保留敌人、显示63821的原序、独立key、等级、品级和清房排除位");
                         }
-                        Bytes(map.AsSpan(85).ToArray(),[0,0,0,255],"末房29保留空物品、非深渊、空骑乘及无成员选择尾部");
+                        Bytes(map.AsSpan(63).ToArray(),[0,0,0,255],"末房29保留空物品、非深渊、空骑乘及无成员选择尾部");
                         var display=plan.Monsters.Single(row=>row.MonsterId==63821);
                         if (request==0)
                         {

@@ -12,9 +12,10 @@ internal static class CharacterPackets
     // 0233CDB0成功额外u8为可选提示；0继续命名。失败非150/151仅静默结束，沿既有拒绝码19不猜提示语义。
     public static byte[] PvpPrivateChecked(bool allowed) => allowed ? [1,0] : [0,19,0];
     public static byte[] HiddenRoster() => [1, 0];
-    // Client ACK692 错误码为 u16；20/24 都弹“名称重复”，当前采用24。
+    // Client ACK692 错误码为 u16；20/24 都弹“名称重复”，当前采用24；23提示特殊字符。
     // 错误码2只记录致命错误日志，不显示重名弹窗。
     public static byte[] NameCheck(bool exists) => exists ? ClientFailurePackets.Create(ClientCharacterNameError.Duplicate).Body : [1];
+    public static byte[] NameCheck(ClientCharacterNameError error) => ClientFailurePackets.Create(error).Body;
     // ACK6成功额外读取u8和u16；123仅作为已确认的静默收尾，不表示某个业务错误。
     public static byte[] Deleted(CharacterDeletionResult result) => result.Receipt is { } receipt
         ? [1, 0, (byte)receipt.RosterIndex, (byte)(receipt.RosterIndex >> 8)] : [0, 123, 0];
@@ -33,10 +34,11 @@ internal static class CharacterPackets
     // 名册行 48 字节尾部 tail[37..41] 由 ARAD 02676A00 依次读到 +0x491/+0x492/+0x493/+0x499/+0x494（==1 为真）。
     internal const int AntonEligibleTailOffset = 37;
     internal const int LukeEligibleTailOffset = 38;
-    // tail[39] -> +0x493 保留字段：退役玩法恒为0，后续字节偏移保持不变。
+    // tail[39] -> +0x493：魔兽资格只取已落库的5927完成状态。
     internal const int ReservedSpecialChannelTailOffset = 39;
     // 名册行 48 字节尾部中超时空漩涡资格字节的偏移（KB-20261021T015635-5c920e4e59）。
     internal const int FiendWarEligibleTailOffset = 40;
+    internal const int BeastEligibleTailOffset = 39;
     internal const int PreyEligibleTailOffset = 41;
     // 02681030 读 u32 进 Data+49Ch；与 Actor 头 +6Eh 同一武器幻化字段。光环 u16 仍在 tail[46]。
     internal const int WeaponSkinTailOffset = 42;
@@ -71,6 +73,7 @@ internal static class CharacterPackets
             tail[ReservedSpecialChannelTailOffset] = 0;
             tail[FiendWarEligibleTailOffset] = character.FiendWarEligible ? (byte)1 : (byte)0;
             tail[PreyEligibleTailOffset] = character.PreyEligible ? (byte)1 : (byte)0;
+            tail[39] = character.BeastEligible ? (byte)1 : (byte)0;
             System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(tail.AsSpan(WeaponSkinTailOffset),
                 character.WeaponSkin);
             // 0268104E读取末尾u16，只有1才经02A8DCF0启用预览光环；高字节由零初始化保留。

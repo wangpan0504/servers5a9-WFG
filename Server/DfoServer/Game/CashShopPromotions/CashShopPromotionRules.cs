@@ -23,20 +23,18 @@ internal static class CashShopPromotionRules
         for (int offset = 1; offset <= boughtUnits; offset++)
         {
             long number = checked(before + offset);
-            if (number >= rules.OverflowFrom)
-            {
-                awards.Add(new(number, rules.OverflowItemId, rules.OverflowCount));
-                continue;
-            }
             int sequence = checked((int)((number - 1) % rules.CycleLength + 1));
-            long round = (number - 1) / rules.CycleLength;
-            if (round >= rules.Cycles)
-                continue;
+            bool matchedTier = false;
             foreach (var tier in rules.Tiers)
             {
                 if (tier.Sequence == sequence)
+                {
                     awards.Add(new(number, tier.ItemId, tier.Count));
+                    matchedTier = true;
+                }
             }
+            if (!matchedTier && number >= rules.OverflowFrom)
+                awards.Add(new(number, rules.OverflowItemId, rules.OverflowCount));
         }
         return awards.ToImmutable();
     }

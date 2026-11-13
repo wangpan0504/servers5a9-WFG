@@ -90,8 +90,8 @@ internal static class RaidRosterFlagTests
         TestCheck.That(luke[38] == 1 && OnlyDiffers(luke, none, 38), "完成 2903：只有 tail[38]=1");
         TestCheck.That(prey[41] == 1 && OnlyDiffers(prey, none, 41), "完成 8935 且 Lv95：只有 tail[41]=1");
         TestCheck.That(preyLow[41] == 0 && preyLow.SequenceEqual(none), "完成 8935 但 Lv94：tail[41]=0");
-        TestCheck.That(beast[39] == 0 && beast.SequenceEqual(none), "旧5927完成历史不能激活已退役入口，tail[39]固定0");
-        TestCheck.That(all[37] == 1 && all[38] == 1 && all[39] == 0 && all[41] == 1 && all[40] == 0, "三项现行任务打开对应资格位，退役位保持零，超时空漩涡仍需公会");
+        TestCheck.That(beast[39] == 1 && beast.Where((_, i) => i != 39).SequenceEqual(none.Where((_, i) => i != 39)), "5927完成态仅打开魔兽资格位");
+        TestCheck.That(all[37] == 1 && all[38] == 1 && all[39] == 1 && all[41] == 1 && all[40] == 0, "四项任务打开各自资格位，超时空漩涡仍需公会");
     }
 
     static bool OnlyDiffers(byte[] tail, byte[] baseline, int offset) =>

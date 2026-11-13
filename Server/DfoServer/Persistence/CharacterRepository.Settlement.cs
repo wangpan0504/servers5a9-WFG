@@ -94,6 +94,10 @@ internal sealed partial class CharacterRepository
                         ? new(expected.Inventory,current.Inventory,"boss_rush_reward") : restored.Inventory };
             if (ReadGuildDungeonReward(db, tx, owner, prepared) is { } guildMail)
                 restored = restored with { MailId = guildMail };
+            if (ReadMockBattleVictoryMail(db, tx, prepared) is { } mockMail)
+                restored = restored with { MailId = mockMail };
+            if (prepared.MockBattle?.Inventory.Changed == true)
+                restored = restored with { Inventory = new(expected.Inventory, current.Inventory, "monster_mock_battle_reward") };
             tx.Commit();
             return restored;
         }
@@ -123,7 +127,7 @@ internal sealed partial class CharacterRepository
                 !DailyBoosterUsage.Same(current.Inventory.DailyBoosterUses, ancient.Before))
                 throw new InvalidOperationException("远古奖励进度的角色快照已变化");
         }
-        var result = reward.TotalExperience == 0 && run.Entry.DisableMonsterAndClearExperience
+        var result = reward.TotalExperience == 0 && run.Entry.AllowsZeroClearExperience
             ? CharacterGrowthPlan.WithoutExperience(expected, catalog) : CharacterGrowthPlan.AddExperience(expected, reward.TotalExperience, catalog);
         if (!result.Success)
             throw new InvalidDataException("通关成长候选被拒绝: " + result.Failure);
@@ -151,9 +155,7 @@ internal sealed partial class CharacterRepository
                 EffectivePosition(current.Level, current.Learning.Experience), current.Level, plan.TargetLevel,
                 DateTimeOffset.UtcNow) is { } credit)
         {
-            WriteAdventureCredit(db, tx, owner.Account, credit, AdventureCreditSource.Earned, adventureCatalog!);
-            if (credit.After != credit.Before)
-                adventureCommit = new(credit.After with { Revision = credit.Before.Revision + 1 }, credit.RawOverflow);
+            adventureCommit = WriteAdventureCredit(db, tx, owner.Account, credit, AdventureCreditSource.Earned, adventureCatalog!);
         }
         // 熟练度与通关经验同源：满级溢出全额、跨过95级入口线只计入口线以上部分。
         // 回执保存这笔经验里真正记入熟练度的额度，重复报告与显示层都按同一有效经验回放。
@@ -167,6 +169,9 @@ internal sealed partial class CharacterRepository
                 proficiencyGained = checked((uint)proficiency.Credited);
             }
         }
+        if (!run.Entry.IsPractice && !run.Entry.IsTrainingRoom && !run.Entry.IsTutorial && !run.Entry.IsClassExperience &&
+            !run.Entry.IsQuestReplay && run.Entry.MockBattle is null)
+            RecordReturningEvent(db, tx, owner.Account, plan.TargetLevel, "dungeon clear", checked((int)prepared.Fact.DungeonId));
         // 推荐地下城通关按角色累计到u16上限，账号面板读取时求和；同一实例的重复报告已在上面提前返回。
         if (recommendedClear)
         {
@@ -227,6 +232,11 @@ internal sealed partial class CharacterRepository
         ApplyBattlePassTayberrsClear(db, tx, owner.Account, run, prepared);
         ApplyBattlePassFormalClear(db, tx, owner.Account, run, prepared);
         ApplyBattlePassDazzlementClear(db, tx, owner.Account, run, prepared);
+        if (!run.Entry.IsPractice && !run.Entry.IsTrainingRoom && !run.Entry.IsTutorial &&
+            !run.Entry.IsClassExperience && !run.Entry.IsQuestReplay && reward.TotalExperience > 0)
+            ApplyBattlePassExperienceGain(db, tx, owner.Account, "dungeon_settlement",
+                FormattableString.Invariant($"{expected.Id}:{identity.InstanceId:N}"), reward.TotalExperience,
+                prepared.BattlePassFormalClear?.Clock.GetUtcNow());
         ClearOrdinaryLuke(db, tx, owner, run);
         ClearPreyNormal(db, tx, owner, run);
         ClearAntonNormal(db, tx, owner, run);
@@ -275,6 +285,8 @@ internal sealed partial class CharacterRepository
             committed = committed with { Inventory = committed.Inventory with { AccountWallet = ReadAccountWallet(db, owner.Account, tx) } };
         uint attendanceMail = prepared.DailyAttendance is { } attendance
             ? ApplyDailyAttendance(db, tx, owner.Account, committed, attendance, claim: false).MailId : 0;
+        var mockBattle = CommitMockBattleVictory(db, tx, owner, committed, run, prepared);
+        committed = mockBattle.Character;
         tx.Commit();
         return new DungeonSettlementCommit(committed, false, reward)
         {
@@ -289,12 +301,12 @@ internal sealed partial class CharacterRepository
             GuildContribution = guildContribution,
             GuildDungeon = guildDungeon,
             Card = prepared.Card, Options = prepared.Options,
-            GriefReward = prepared.Grief?.Reward, MailId = guildReward.Mail ?? griefMail ?? bossRushMail,
+            GriefReward = prepared.Grief?.Reward, MailId = guildReward.Mail ?? griefMail ?? bossRushMail ?? (mockBattle.Mail == 0 ? null : mockBattle.Mail),
             BossRushReward = prepared.BossRush,
             BlackDiamond = prepared.Options?.BlackDiamond,
-            Inventory = prepared.AncientGate is not null || prepared.Grief?.Delivery.Inventory.Changed == true ||
+            Inventory = prepared.MockBattle?.Inventory.Changed == true || prepared.AncientGate is not null || prepared.Grief?.Delivery.Inventory.Changed == true ||
                 prepared.BossRush?.Delivery.Inventory.Changed == true || creatureInventory is { Changed: true } || endlessAdventureAmount > 0
-                ? new(expected.Inventory, committed.Inventory, prepared.Grief is not null ? "grief_tower_reward" :
+                ? new(expected.Inventory, committed.Inventory, prepared.MockBattle is not null ? "monster_mock_battle_reward" : prepared.Grief is not null ? "grief_tower_reward" :
                     prepared.BossRush is not null ? "boss_rush_reward" : endlessAdventureAmount > 0 ? "endless_adventure" : "creature_experience") : null
         };
     });
@@ -377,4 +389,43 @@ internal sealed partial class CharacterRepository
             after.Core.Count - (before?.Core.Count ?? 0) != reward.Item.Count)
             throw new InvalidDataException("翻牌新增量、完整核心或原UID与冻结奖励不一致");
     }
+
+    public DungeonIncountUsage LoadClearRewardLimitUsage(AccountOwners.Lease owner, ushort characterId,
+        DfoServer.GameWorld.Dungeons.ClearRewardDungeonLimit limit, DungeonIncountPeriod period, int? containerItemId = null) => owner.Execute<DungeonIncountUsage>(() =>
+    {
+        if (limit.Dungeons.IsEmpty) return default;
+        using var db = database.Open();
+        using var command = db.CreateCommand();
+        command.Parameters.AddWithValue("$id", characterId);
+        command.Parameters.AddWithValue("$account", owner.Account);
+        string dungeonIn = string.Join(",", limit.Dungeons.Select((id, idx) =>
+        {
+            string name = "$d" + idx;
+            command.Parameters.AddWithValue(name, id);
+            return name;
+        }));
+        command.CommandText = $"""
+            SELECT r.plan_json
+            FROM character_dungeon_card_rewards r
+            JOIN character_dungeon_settlement_receipts s
+              ON s.character_id=r.character_id AND s.instance_id=r.instance_id
+            WHERE r.character_id=$id AND r.account=$account AND s.dungeon_id IN({dungeonIn})
+              AND NOT EXISTS(SELECT 1 FROM character_clear_reward_resets reset
+                WHERE reset.character_id=r.character_id AND reset.instance_id=r.instance_id)
+            """;
+        int daily = 0, weekly = 0;
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            var card = JsonSerializer.Deserialize<DungeonCardReward>(reader.GetString(0));
+            if (card?.Item is null) continue;
+            var rowPeriod = DungeonIncountPolicy.Period(DateTimeOffset.FromUnixTimeSeconds(card.CreatedAt));
+            if (rowPeriod.Day == period.Day) daily++;
+            if (rowPeriod.Week == period.Week) weekly++;
+        }
+        // 容器沿共享组的真实领奖历史计数，追加额度按券声明的具体容器独立读取。
+        var extra = ReadRewardTicketExtra(db, null, owner.Account, characterId, containerItemId is null ? 0 : 1,
+            containerItemId ?? limit.GroupId, period);
+        return new(daily, weekly, extra.DailyExtra, extra.WeeklyExtra);
+    });
 }

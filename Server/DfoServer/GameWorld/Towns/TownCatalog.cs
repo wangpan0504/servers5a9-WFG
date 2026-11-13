@@ -77,6 +77,7 @@ internal sealed class TownCatalog
     public TownDock Dock { get; }
     public RoomPortal[] RoomPortals { get; }
     public IReadOnlyDictionary<uint, uint[]> NpcMoves { get; }
+    public IReadOnlyList<RaidNpcRoute> RaidNpcRoutes { get; init; } = [];
     public IReadOnlySet<uint> NpcExits { get; init; } = new HashSet<uint>();
     public IReadOnlySet<uint> EquipmentTransportNpcs { get; init; } = new HashSet<uint>();
     public IReadOnlySet<uint> EquipmentResealNpcs { get; init; } = new HashSet<uint>();
@@ -376,6 +377,18 @@ internal sealed class TownCatalog
         var area = Areas[(target.Town, target.Area)];
         if (targetNpc != 0)
         {
+            // 原生攻坚菜单按WAITING ROOM NPC跳转；仍要求两端当前阶段真实放置对应NPC。
+            if (Areas.TryGetValue((current.Town, current.Area), out var raidSource) &&
+                area.Map(completed).Npcs.Any(n => n.Id == targetNpc) && RaidNpcRoutes.Any(route =>
+                    targetNpc == route.WaitingNpc &&
+                    raidSource.Map(completed).Npcs.Any(n => n.Id == route.RecruitNpc) &&
+                    new[] { route.WaitingRoom, route.SingleWaitingRoom }.OfType<Location>()
+                        .Any(room => room.Town == target.Town && room.Area == target.Area) ||
+                    targetNpc == route.RecruitNpc &&
+                    raidSource.Map(completed).Npcs.Any(n => n.Id == route.WaitingNpc) &&
+                    new[] { route.WaitingRoom, route.SingleWaitingRoom }.OfType<Location>()
+                        .Any(room => room.Town == current.Town && room.Area == current.Area)))
+                return "ready";
             if (!Areas.TryGetValue((current.Town, current.Area), out var npcSource) || !npcSource.Map(completed).Npcs.Any(n => NpcMoves.TryGetValue(n.Id, out var to) && to.Contains(targetNpc)))
                 return "npc-route-not-in-pvf";
             if (!area.Map(completed).Npcs.Any(n => n.Id == targetNpc))
@@ -440,14 +453,18 @@ internal sealed class TownCatalog
         area.Map(completed).Links.Any(l => l.Gate.Door && l.Town == target.Town && l.Area == target.Area);
 
     public bool CanTravel(Location current, Location target, int level, IReadOnlySet<int>? completed = null, Location? roomReturn = null) => Admission(current, target, level, completed, roomReturn) == "ready";
-    public static TownCatalog Load(PvfArchive pvf, DfoServer.GameWorld.Maps.MapGeometryConfig? geometry = null)
+    public static TownCatalog Load(PvfArchive pvf, DfoServer.GameWorld.Maps.MapGeometryConfig? geometry = null,
+        bool epicRoad2019Enabled = false)
     {
         geometry ??= DfoServer.GameWorld.Maps.MapGeometryConfig.Empty;
         var areas = new Dictionary<(byte, byte), TownArea>();
         var maps = new Dictionary<string, TownMap>();
         var texts = new Dictionary<string, MapText>();
         var episodes = new HashSet<byte>();
-        foreach (var entry in List(pvf.ReadText("town/town.lst")))
+        var townIndex = List(pvf.ReadText("town/town.lst"));
+        if (epicRoad2019Enabled)
+            townIndex = Events.EpicRoad2019ResourceIndex.Restore(pvf, "town", townIndex, relativePaths: true);
+        foreach (var entry in townIndex)
         {
             byte town = checked((byte)entry.Key);
             string text = pvf.ReadText("town/" + entry.Value);
@@ -487,6 +504,8 @@ internal sealed class TownCatalog
         var equipmentTransportNpcs = new HashSet<uint>();
         var equipmentResealNpcs = new HashSet<uint>();
         var npcList = List(pvf.ReadText("npc/npc.lst"));
+        if (epicRoad2019Enabled)
+            npcList = Events.EpicRoad2019ResourceIndex.Restore(pvf, "npc", npcList, relativePaths: true);
         foreach (uint id in maps.Values.SelectMany(m => m.Npcs).Select(n => n.Id).Distinct())
         {
             if (!npcList.TryGetValue(checked((int)id), out var npcPath))
@@ -512,6 +531,8 @@ internal sealed class TownCatalog
         }
 
         var worldPaths = List(pvf.ReadText("worldmap/worldmap.lst"));
+        if (epicRoad2019Enabled)
+            worldPaths = Events.EpicRoad2019ResourceIndex.Restore(pvf, "worldmap", worldPaths, relativePaths: true);
         var dungeonMaps = new Dictionary<int,TownDungeonMap>();
         foreach (int id in areas.Values.Select(area => area.DungeonWorldMap).OfType<int>().Distinct())
         {
@@ -523,7 +544,8 @@ internal sealed class TownCatalog
         var catalog = new TownCatalog(areas, room, new(38, 0, checked((ushort)origin.Gate.X), checked((ushort)origin.Gate.Y)), TownDock.Load(pvf), LoadRoomPortals(pvf), npcMoves,dungeonMaps)
             { Geometry = geometry, GeometryPaths = Array.AsReadOnly(texts.Keys.ToArray()), SpecialChannelQuests = LoadSpecialChannelQuests(pvf), NpcExits = npcExits, EpisodeTowns = episodes,
                 LostLandEntryNpcs = lostLandNpcs, MarriageDungeonEntryNpcs = marriageDungeonNpcs,
-                EquipmentTransportNpcs = equipmentTransportNpcs, EquipmentResealNpcs = equipmentResealNpcs };
+                EquipmentTransportNpcs = equipmentTransportNpcs, EquipmentResealNpcs = equipmentResealNpcs,
+                RaidNpcRoutes = RaidNpcRoute.Load(pvf) };
         if (!catalog.IsPosition(room) || !catalog.IsPosition(catalog.InitialReturn))
             throw new InvalidDataException("PVF initial position outside native movable regions");
         return catalog;
@@ -535,7 +557,7 @@ internal sealed class TownCatalog
             TownMap map;
             try
             {
-                var data = ReadMap(pvf, path, [], texts, geometry);
+                var data = ReadMap(pvf, path, [], texts, geometry, epicRoad2019Enabled);
                 var own = data.Text;
                 var bounds = Rows(own, "virtual movable area", 4).Select(r => new WalkRegion(Rect(r.Values), r.Quests, r.Conditions)).ToArray();
                 var movable = Rows(own, "town movable area", 6);
@@ -625,13 +647,14 @@ internal sealed class TownCatalog
     }
 
     sealed record MapText(string Text, bool IsRoom);
-    static MapText ReadMap(PvfArchive pvf, string path, HashSet<string> chain, Dictionary<string, MapText> cache, DfoServer.GameWorld.Maps.MapGeometryConfig geometry)
+    static MapText ReadMap(PvfArchive pvf, string path, HashSet<string> chain, Dictionary<string, MapText> cache, DfoServer.GameWorld.Maps.MapGeometryConfig geometry,
+        bool epicRoad2019Enabled)
     {
         if (cache.TryGetValue(path, out var cached))
             return cached;
         if (!chain.Add(path))
             throw new InvalidDataException("Recursive map import: " + path);
-        string own = geometry.ReadText(pvf, path), parent = "";
+        string own = Events.EpicRoad2019EntryNpc.RestoreText(path, geometry.ReadText(pvf, path), epicRoad2019Enabled, pvf.Contains), parent = "";
         bool room = path is "map/common/gate_seria.map" or "map/common/(r)gate_seria.map";
         foreach (Match m in Regex.Matches(Section(own, "import script"), "`([^`]+)`"))
         {
@@ -644,7 +667,7 @@ internal sealed class TownCatalog
                 imported = imported[..(slash + 1)] + "(r)" + imported[(slash + 1)..];
             }
 
-            var data = ReadMap(pvf, imported, chain, cache, geometry);
+            var data = ReadMap(pvf, imported, chain, cache, geometry, epicRoad2019Enabled);
             parent += data.Text + "\n";
             room |= data.IsRoom;
         }

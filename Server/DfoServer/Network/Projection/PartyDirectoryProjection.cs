@@ -100,7 +100,7 @@ internal sealed class PartyDirectoryProjection : IAsyncDisposable
                             await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(member!.Character, member.PvpGrade, member.Channel,
                                 DateTimeOffset.UtcNow.ToUnixTimeSeconds(), member.AdventureName,
                                 member.Phase == SessionPhase.Town ? ActorSceneState.Town : ActorSceneState.Dungeon,
-                                member.PremiumPcRoom), "party_directory_actor", QueryGuard);
+                                member.PremiumPcRoom, returningAdventurerType: member.ReturningAdventurerType, marriage: context.MarriageAppearance), "party_directory_actor", QueryGuard);
                     await context.Notify(NotiPacketType.PARTY_INFO, PartyPackets.Directory(identity.Channel.ServerIndex,
                         checked((byte)identity.Channel.Number), rows, candidates.Length), "party_directory_query",
                         QueryGuard);
@@ -129,7 +129,7 @@ internal sealed class PartyDirectoryProjection : IAsyncDisposable
                                 await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(target.Character, target.PvpGrade, target.Channel,
                                     DateTimeOffset.UtcNow.ToUnixTimeSeconds(), target.AdventureName,
                                     target.Phase == SessionPhase.Town ? ActorSceneState.Town : ActorSceneState.Dungeon,
-                                    target.PremiumPcRoom), "party_directory_member_actor", () => Guard() && parties.IsCurrent(party));
+                                    target.PremiumPcRoom, returningAdventurerType: target.ReturningAdventurerType, marriage: context.MarriageAppearance), "party_directory_member_actor", () => Guard() && parties.IsCurrent(party));
                         }
                     bool writing = false;
                     await context.Notify(NotiPacketType.PARTY_INFO, PartyPackets.Information(party.Id,

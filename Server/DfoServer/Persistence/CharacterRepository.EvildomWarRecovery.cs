@@ -48,6 +48,8 @@ internal sealed partial class CharacterRepository : IEvildomWarStore
                 var previous = ReadWarJson<EvildomWarCheckpoint>((string?)command.ExecuteScalar()
                     ?? throw new InvalidOperationException("魔界后续进图缺少原检查点"));
                 previous.Validate();
+                if (previous.View.StartedAt != after.StartedAt)
+                    throw new InvalidOperationException("魔界后续进图不能改变原开战时刻");
                 checkpoint = previous with { View = after };
             }
             checkpoint.Validate();
@@ -147,7 +149,7 @@ internal sealed partial class CharacterRepository : IEvildomWarStore
     {
         after.Validate();
         if (after.View.BattleId != before.BattleId || after.View.Revision != before.Revision + 1 ||
-            after.View.Deadline != before.Deadline || after.View.Mode != before.Mode)
+            after.View.Deadline != before.Deadline || after.View.Mode != before.Mode || after.View.StartedAt != before.StartedAt)
             throw new InvalidOperationException("魔界检查点身份不连续");
         using var db = database.Open(); using var write = db.BeginWrite("CharacterRepository.CommitEvildomWarCheckpoint");
         using var tx = write.Transaction; using var command = WarCommand(db, tx, owner.Account, characterId, before.BattleId);

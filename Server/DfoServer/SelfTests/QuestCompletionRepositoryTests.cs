@@ -39,6 +39,8 @@ internal static class QuestCompletionRepositoryTests
                 pair.First.Skills.SequenceEqual(pair.Second.Skills)) && commit.Character.Skills.SequenceEqual(expected.Skills),
                 "两树实际余额/TP/技能等级与稳定槽按原成长计划保留");
             Check(commit.Rewards.Length == 7 && commit.Rewards.Select(row => row.Item.Uid).Distinct().Count() == 7 &&
+                commit.Rewards.Select(row => row.Item.Core.ItemId).SequenceEqual(new[] { 10165055, 10005531, 8050536, 12403, 14403, 16403, 18403 }) &&
+                commit.Rewards.Select(row => row.Item.Core.Value).SequenceEqual(new[] { 1, 1, 1, 999999998, 999999998, 999999998, 999999998 }) &&
                 commit.Rewards.Select((row, index) => row.Item.Uid > 0 && row.Item.Core == plan.Rewards[index].Core &&
                     row.Item.Position == plan.Rewards[index].Position && row.GrantedCount == 1).All(value => value),
                 "七项原序奖励取得真实唯一UID、完整Core及实际库存槽");
@@ -272,6 +274,7 @@ internal static class QuestCompletionRepositoryTests
     // 真实提交结果丢失，仅在第一次返回之后注入；保存原计划引用用于精确重试检查。
     internal sealed class LostResultRepository(ICharacterRepository inner) : ICharacterRepository
     {
+        public Action<DfoServer.Game.Dungeons.DungeonEntryCharge>? BeforeDungeonEntryCommit { get; set; }
         public Character ResetDailyFatigue(AccountOwners.Lease owner, Character expected, int day, DateTimeOffset now) =>
             inner.ResetDailyFatigue(owner, expected, day, now);
         public System.Collections.Immutable.ImmutableDictionary<int,AccountItemRefillState> ReadAccountItemRefills(AccountOwners.Lease owner) => inner.ReadAccountItemRefills(owner);
@@ -347,9 +350,11 @@ internal static class QuestCompletionRepositoryTests
         public OperationHopeRewardCommit CommitOperationHopeReward(AccountOwners.Lease owner, OperationHopeRewardPlan plan) => inner.CommitOperationHopeReward(owner,plan);
         public Character ClearOperationHopeAcceptances(AccountOwners.Lease owner, Character expected,
             DfoServer.GameWorld.Dungeons.OperationHopeCatalog catalog, IReadOnlyList<ActiveMainQuest> removals) => inner.ClearOperationHopeAcceptances(owner,expected,catalog,removals);
-        public Character ConsumeOperationHopeAreaFatigue(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run, TimeProvider? battlePassClock = null) => inner.ConsumeOperationHopeAreaFatigue(owner,expected,run,battlePassClock);
-        public Character ConsumeDungeonRoomFatigue(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run, TimeProvider? battlePassClock = null) =>
-            inner.ConsumeDungeonRoomFatigue(owner, expected, run,battlePassClock);
+        public Character ConsumeOperationHopeAreaFatigue(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run, TimeProvider? battlePassClock = null,
+            DfoServer.Game.Inventory.Models.InventoryItem? energySource = null) => inner.ConsumeOperationHopeAreaFatigue(owner,expected,run,battlePassClock,energySource);
+        public Character ConsumeDungeonRoomFatigue(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run, TimeProvider? battlePassClock = null,
+            DfoServer.Game.Inventory.Models.InventoryItem? energySource = null) =>
+            inner.ConsumeDungeonRoomFatigue(owner, expected, run,battlePassClock,energySource);
         QuestCompletionPlan? first;
         public QuestCompletionPlan? FirstPlan => first;
         public int Calls { get; private set; }
@@ -440,13 +445,32 @@ internal static class QuestCompletionRepositoryTests
             => inner.CommitDungeonSettlement(owner, expected, run, prepared, catalog, cardInventory, mailCardItem,premiumDelivery, grantLuckyStar, luckyStarLimit, recommendedClear);
         public Character ReserveDungeonAttempt(AccountOwners.Lease owner, Character expected, uint nextObjectKey,
             DfoServer.Game.Dungeons.WeeklyDungeonEntry? weekly = null) => inner.ReserveDungeonAttempt(owner, expected, nextObjectKey, weekly);
+        public DfoServer.Game.Dungeons.DungeonQuotaResetResult ResetDungeonLimits(AccountOwners.Lease owner) =>
+            inner.ResetDungeonLimits(owner);
         public DfoServer.Game.Dungeons.DungeonEntryResetResult ResetDungeonEntries(AccountOwners.Lease owner) =>
             inner.ResetDungeonEntries(owner);
         public DfoServer.Game.Dungeons.RewardLimitResetResult ResetRewardLimits(AccountOwners.Lease owner) =>
             inner.ResetRewardLimits(owner);
         public DfoServer.Game.Dungeons.DungeonEntryCommit ReserveDungeonEntry(AccountOwners.Lease owner, Character expected, uint nextObjectKey,
             DfoServer.Game.Dungeons.WeeklyDungeonEntry? weekly = null) => inner.ReserveDungeonEntry(owner, expected, nextObjectKey, weekly);
-        public DfoServer.Game.Dungeons.DungeonEntryCommit CommitDungeonEntry(AccountOwners.Lease owner, Character expected, uint nextObjectKey, DfoServer.Game.Dungeons.DungeonEntryCharge charge) => inner.CommitDungeonEntry(owner, expected, nextObjectKey, charge);
+        public DfoServer.Game.Dungeons.DungeonEntryCommit CommitDungeonEntry(AccountOwners.Lease owner, Character expected, uint nextObjectKey, DfoServer.Game.Dungeons.DungeonEntryCharge charge)
+        {
+            BeforeDungeonEntryCommit?.Invoke(charge);
+            return inner.CommitDungeonEntry(owner, expected, nextObjectKey, charge);
+        }
+        public DfoServer.Game.Dungeons.DungeonIncountUsage LoadDungeonIncount(AccountOwners.Lease owner,
+            ushort characterId, int dungeon, DfoServer.Game.Dungeons.DungeonIncountPeriod now) =>
+            inner.LoadDungeonIncount(owner, characterId, dungeon, now);
+        public int LoadAccountDungeonIncount(AccountOwners.Lease owner, int dungeon, int period) =>
+            inner.LoadAccountDungeonIncount(owner, dungeon, period);
+        public int LoadAccountDungeonIncountExtra(AccountOwners.Lease owner, int dungeon, int period) =>
+            inner.LoadAccountDungeonIncountExtra(owner, dungeon, period);
+        public DfoServer.Game.Dungeons.DungeonIncountCommit? CommitDungeonIncountEntry(AccountOwners.Lease owner,
+            Character expected, int dungeon, DfoServer.Game.Dungeons.DungeonIncountPeriod now,
+            DfoServer.GameWorld.Dungeons.DungeonIncountRow? row, InventoryPlan? consumption,
+            System.Collections.Immutable.ImmutableArray<DfoServer.Game.Dungeons.AccountIncountCharge> account = default,
+            bool increment = true, bool check = true) =>
+            inner.CommitDungeonIncountEntry(owner, expected, dungeon, now, row, consumption, account, increment, check);
         public DfoServer.Game.Guild.GuildDungeonAdmission? PrepareGuildDungeonEntry(AccountOwners.Lease owner, ushort characterId,
             uint dungeonId, DfoServer.GameWorld.Guilds.GuildDungeonCatalog catalog) => inner.PrepareGuildDungeonEntry(owner, characterId, dungeonId, catalog);
         public int ReadGuildDungeonPartyCount(AccountOwners.Lease owner, ushort characterId,
@@ -468,9 +492,10 @@ internal static class QuestCompletionRepositoryTests
         public QuestClearReceipt? LoadQuestClear(AccountOwners.Lease owner, Character expected, ushort questId) => inner.LoadQuestClear(owner, expected, questId);
         public DungeonGrowthCommit CommitDungeonGrowth(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run,
             PreparedDungeonDeath prepared, DungeonExperienceReward reward, CharacterGrowthCatalog catalog, FrozenDungeonGroundDeath? loot = null, QuestDropPlan? questDrops = null, DfoServer.Game.Inventory.Services.EquipmentGrowthPlan? equipmentGrowth = null,
-            DfoServer.Game.Raids.AntonRaidBattle.FiendwarTitleDeath? fiendwarTitle = null, DungeonDirectPickupPlan? directPickup = null)
+            DfoServer.Game.Raids.AntonRaidBattle.FiendwarTitleDeath? fiendwarTitle = null, DungeonDirectPickupPlan? directPickup = null,
+            SpecialDungeonClearRewardPlan? specialClearReward = null)
         {
-            var result = inner.CommitDungeonGrowth(owner, expected, run, prepared, reward, catalog, loot, questDrops, equipmentGrowth, fiendwarTitle, directPickup);
+            var result = inner.CommitDungeonGrowth(owner, expected, run, prepared, reward, catalog, loot, questDrops, equipmentGrowth, fiendwarTitle, directPickup, specialClearReward);
             if (LoseGrowthResult && (GrowthLossCondition?.Invoke(prepared) ?? true) && ++growthCalls == 1)
                 throw new IOException("合成死亡事务已提交但返回值丢失");
             return result;

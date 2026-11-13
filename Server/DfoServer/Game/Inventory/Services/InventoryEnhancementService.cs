@@ -11,6 +11,8 @@ internal sealed class InventoryEnhancementService(ItemCatalog items, Enhancement
     internal const ushort Rejection = 23;
     public TimeProvider Clock { get; } = clock ?? TimeProvider.System;
 
+    public void PrepareEquipmentBonuses(Character character) => EquipmentUpgradeBonusPolicy.Prepare(character, items);
+
     // 普通NPC和勋章材料只是成本；强化券、便携工具及幸运券才激活源物品效果。
     public bool IsEffectSource(Character character, EnhancementRequest request) =>
         character.Inventory.Find(request.Target)?.Core.Kind != ItemKind.GuildMedal &&
@@ -45,18 +47,24 @@ internal sealed class InventoryEnhancementService(ItemCatalog items, Enhancement
         if (definition is null || !definition.Available || !enhancements.Allows(target.Core.ItemId, request.Mode)) return InventoryResult.Reject(Rejection);
         var now = Clock.GetUtcNow();
         EnhancementSuccessBonus bonus = default;
-        if (definition.Additional && definition.Level == 1 && definition.Mode != EnhancementMode.RandomReinforce && consumables is not null)
+        EquipmentUpgradeBonus equipmentBonus = default;
+        if (definition.Additional && definition.Level == 1 && definition.Mode != EnhancementMode.RandomReinforce)
         {
-            bonus = EnhancementPotionPolicy.ActiveBonus(character.Inventory.ConsumableStates, consumables.EnhancementPotions,
-                definition.Mode == EnhancementMode.Amplify ? EnhancementPotionMode.Amplify : EnhancementPotionMode.Reinforce,
-                now.ToUnixTimeMilliseconds());
-            if (definition.Mode == EnhancementMode.Reinforce)
-                bonus = EnhancementSuccessBonus.Max(bonus, DisguiseUpgradeLuckPolicy.ActiveBonus(character, consumables, now.ToUnixTimeMilliseconds()));
+            equipmentBonus = EquipmentUpgradeBonusPolicy.Capture(character, items, definition.Mode == EnhancementMode.Amplify
+                ? EquipmentUpgradeKind.Amplification : EquipmentUpgradeKind.Reinforcement, now.ToUnixTimeSeconds(), includeCost: false);
+            if (consumables is not null)
+            {
+                bonus = EnhancementPotionPolicy.ActiveBonus(character.Inventory.ConsumableStates, consumables.EnhancementPotions,
+                    definition.Mode == EnhancementMode.Amplify ? EnhancementPotionMode.Amplify : EnhancementPotionMode.Reinforce,
+                    now.ToUnixTimeMilliseconds());
+                if (definition.Mode == EnhancementMode.Reinforce)
+                    bonus = EnhancementSuccessBonus.Max(bonus, DisguiseUpgradeLuckPolicy.ActiveBonus(character, consumables, now.ToUnixTimeMilliseconds()));
+            }
         }
         var result = Plan(character, request, now.ToUnixTimeSeconds(), definition,
             items.Get(source.Core.ItemId), items.Get(target.Core.ItemId),
             () => (random ?? Random.Shared).Next(definition.Mode == EnhancementMode.RandomReinforce ? definition.RandomWeight : 10000), out receipt,
-            guildSuccessPercent, bonus.Weight);
+            guildSuccessPercent, bonus.Weight, equipmentBonus);
         return result.Plan is not { } plan ? result : result with { Plan = plan.WithAfter(plan.After,
             new(character, plan.CharacterPrecondition?.QualificationExpiresAt, Clock,
                 qualificationExpiresAtMilliseconds: bonus.QualificationExpiresAtMilliseconds)) };
@@ -87,7 +95,8 @@ internal sealed class InventoryEnhancementService(ItemCatalog items, Enhancement
             sourceTemplate.Kind != source.Core.Kind || sourceTemplate.UseForbidden)
             return InventoryResult.Reject(Rejection);
         var rules = medals.Rules;
-        if (target.Core.Upgrade >= rules.Rows.Length) return InventoryResult.Reject(Rejection);
+        if (target.Core.Upgrade >= InventoryRewardGrantService.MaximumUpgrade(template) ||
+            target.Core.Upgrade >= rules.Rows.Length) return InventoryResult.Reject(Rejection);
         var row = rules.Rows[target.Core.Upgrade];
         if (source.Core.ItemId != row.MaterialId) return InventoryResult.Reject(Rejection);
         int coins = rules.CoinCost(template.Rarity, row.MaterialCount);
@@ -105,13 +114,15 @@ internal sealed class InventoryEnhancementService(ItemCatalog items, Enhancement
         long? deadline = source.ExpireTime > 0 ? source.ExpireTime : null;
         if (target.ExpireTime > 0) deadline = deadline is null ? target.ExpireTime : Math.Min(deadline.Value, target.ExpireTime);
         receipt = new(EnhancementMode.Reinforce, request.Target, request.MaterialSlot, source.Core.Count - coins, oldLevel, outcome.Level, outcome.Code == 0)
-        { OutcomeCode = outcome.Code, Path = 0, GoldCost = 0, InPlace = true, Refunds = [] };
+        { OutcomeCode = outcome.Code, Path = 0, GoldCost = 0, InPlace = true, Refunds = [],
+            BaseSuccessPercent = (100000 - row.FailureWeight) / 1000m,
+            SuccessPercent = (100000 - row.FailureWeight) / 1000m };
         return new(true, 0, new(before, after, "guild_medal_enhancement", new(character, deadline, Clock)));
     }
 
     internal static InventoryResult Plan(Character character, EnhancementRequest request, long now, EnhancementDefinition definition,
         ItemTemplate sourceTemplate, ItemTemplate targetTemplate, Func<int> roll, out EnhancementReceipt? receipt,
-        int guildSuccessPercent = 0, int potionSuccessBonusWeight = 0)
+        int guildSuccessPercent = 0, long potionSuccessBonusWeight = 0, EquipmentUpgradeBonus equipmentBonus = default)
     {
         receipt = null;
         var before = character.Inventory;
@@ -132,7 +143,7 @@ internal sealed class InventoryEnhancementService(ItemCatalog items, Enhancement
             definition.SealedOnly && target.Core.SealFlag == 0 || !AllowsPart(targetTemplate.EquipmentSlot, definition.SlotClass) ||
             !definition.AllowedItems.IsEmpty && !definition.AllowedItems.Contains(target.Core.ItemId) ||
             !ItemSlotBoundService.Allows(before, source.Position, source.Core.Kind) || !ItemSlotBoundService.Allows(before, target.Position, target.Core.Kind) ||
-            !sourceTemplate.AllowsUse(character.Level, character.Job) ||
+            !sourceTemplate.AllowsActivation(character.Level, character.Job) ||
             !InventoryMoveService.RequiredSkillSatisfied(character, sourceTemplate))
             return InventoryResult.Reject(Rejection);
         if (request.Mode is EnhancementMode.Reinforce or EnhancementMode.RandomReinforce ? target.Core.AmplifyType != 0 :
@@ -159,7 +170,10 @@ internal sealed class InventoryEnhancementService(ItemCatalog items, Enhancement
         int successWeight = definition.Additional && definition.Level == 1 && !randomLevel
             ? ApplyGuildSuccessBonus(definition.SuccessWeight, guildSuccessPercent) : definition.SuccessWeight;
         if (definition.Additional && definition.Level == 1 && !randomLevel)
+        {
             successWeight = EnhancementPotionPolicy.AdjustedSuccessWeight(successWeight * 10, potionSuccessBonusWeight) / 10;
+            successWeight = equipmentBonus.SuccessWeight(successWeight, 10000);
+        }
         bool succeeded = randomLevel || value < successWeight;
         byte oldLevel = target.Core.Upgrade, newLevel = succeeded ? desired : oldLevel;
         var paid = InventoryDeleteService.Plan(before, source.Position, source.Core.ItemId, 1);
@@ -170,8 +184,11 @@ internal sealed class InventoryEnhancementService(ItemCatalog items, Enhancement
         after.Validate();
         long? deadline = source.ExpireTime > 0 ? source.ExpireTime : null;
         if (target.ExpireTime > 0) deadline = deadline is null ? target.ExpireTime : Math.Min(deadline.Value, target.ExpireTime);
+        if (equipmentBonus.ExpiresAt is { } bonusDeadline) deadline = Math.Min(deadline ?? long.MaxValue, bonusDeadline);
         receipt = new(request.Mode, request.Target, request.MaterialSlot, source.Core.Count - 1, oldLevel, newLevel, succeeded)
-            { Path = randomLevel ? (byte)1 : (byte)0, InPlace = randomLevel };
+            { Path = randomLevel ? (byte)1 : (byte)0, InPlace = randomLevel,
+                BaseSuccessPercent = randomLevel ? null : definition.SuccessWeight / 100m,
+                SuccessPercent = randomLevel ? null : successWeight / 100m };
         return new(true, 0, new(before, after, "equipment_enhancement_ticket", new(character, deadline)));
     }
 

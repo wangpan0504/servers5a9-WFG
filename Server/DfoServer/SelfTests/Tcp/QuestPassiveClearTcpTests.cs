@@ -26,6 +26,7 @@ internal static class QuestPassiveClearTcpTests
         VerifyMagtonium(fixture,resources,growth,drain);
         VerifyLayeredCinematic(fixture,resources,growth,drain,dungeons);
         VerifyLayeredCinematic(fixture,resources,growth,drain,dungeons,early:true);
+        VerifyLayeredCinematic(fixture,resources,growth,drain,dungeons,escSkip:true);
         VerifyPassiveHunt(fixture,resources,growth,drain,dungeons,3738,102,16120,76530,
             [0,0,7,5,4,6,5,15],[76532,76533,76534]);
         VerifyPassiveHunt(fixture,resources,growth,drain,dungeons,5947,291100293,109034854,292105331,
@@ -330,16 +331,16 @@ internal static class QuestPassiveClearTcpTests
             "SELECT * FROM account_currency_balances WHERE account=$p0 ORDER BY currency_kind",account);
     }
 
-    // 一个跨层成功代表：真实70201基础Boss、70487末层、独立39/33和34；事件正文仍明确合成。
+    // 一个跨层成功代表：真实70201基础Boss、70487末层、独立39/33（含ESC跳过只发33）和34；事件正文仍明确合成。
     static void VerifyLayeredCinematic(TcpTestFixture fixture, TcpTestResources resources, CharacterGrowthCatalog growth,
-        Action<TcpPeer, Action<WirePacket>?> drain, DungeonCatalog dungeons, bool early = false)
+        Action<TcpPeer, Action<WirePacket>?> drain, DungeonCatalog dungeons, bool early = false, bool escSkip = false)
     {
-        string account = early ? "layered-movie-3858-early" : "layered-movie-3858";
+        string account = early ? "layered-movie-3858-early" : escSkip ? "layered-movie-3858-esc" : "layered-movie-3858";
         var entrance = MiddleQuestEntryTests.Entrance(resources.Towns,resources.Quests.Get(3858),193);
         Character created;
         using (var owner = new AccountOwners().Acquire(account,() => { }))
         {
-            var candidate = CharacterCreation.Prepare(early ? "LayerMovieE" : "LayerMovie",resources.Characters.Get(0),
+            var candidate = CharacterCreation.Prepare(early ? "LayerMovieE" : escSkip ? "LayerMovieS" : "LayerMovie",resources.Characters.Get(0),
                 entrance.Position,entrance.Position,resources.Learning.Get);
             var learning = SkillPointLedger.Synchronize(0,0,86,candidate.InitialLearning with
                 { Experience=growth.GetLevelStartExperience(86) },resources.Learning);
@@ -377,6 +378,7 @@ internal static class QuestPassiveClearTcpTests
                 if (room+1 < path.Length) Move(path[room+1],0);
             }
             That(U32(map,14) == 70484,"3858沿完整真实拓扑抵达基础70484");
+            RejectExit(path[^2],0);
             foreach (var layer in maze.LayeredMaps.Where(row => row.Position == path[^1]))
             {
                 Move(layer.Position,1);
@@ -394,27 +396,44 @@ internal static class QuestPassiveClearTcpTests
                 U32(map,49) == 68004 && map[54] == 9 && map[62] == 1 &&
                 U32(map,71) == 68004 && map[76] == 9 && map[84] == 1 &&
                 new[] { U16(map,25), U16(map,47), U16(map,69) }.Distinct().Count() == 3 &&
-                enabled == 0 && Scalar() is [[long scalar]] && scalar == (early ? 0 : 1),
-                "真实70487保留友方APC56501及两个独立68004特殊父对象，加载不达成演出或清图");
+                enabled == (early ? 1 : 0) && Scalar() is [[long scalar]] && scalar == (early ? 0 : 1),
+                "真实70487保留独立对象；早到终末在加载后补交清图");
             string saved = State();
+            if (!early) { RejectExit(path[^2],0); RejectExit(path[^1],1); }
             if (!early)
             {
                 peer.Send(34,[34,0,18,15,255,255,1,0,255,255]); peer.Expect(1,34,[0,19,0]); Drain();
                 That(State() == saved,"3858未收到演出终末时34拒绝且不写奖励");
             }
-            peer.Send(39,passive); peer.Expect(0,31,[]); enabled++; Drain();
-            That(enabled == 1 && bossChecks == 0 && Scalar() is [[long sceneScalar]] && sceneScalar == (early ? 0 : 1) && fixture.Query(
-                "SELECT source_type,dungeon_id,map_id,template_id,length(death_events)/16,quest_id FROM character_dungeon_scene_clear_receipts WHERE character_id=$p0",peer.Id)
-                is [["PassiveObject",193L,70487L,69292L,long sceneDeaths,0L]] && sceneDeaths == deaths,
-                "3858普通0绑定唯一末层scene与实际死亡集合，39不代替type65，空31不造115");
-            saved = State(); peer.Send(39,passive); Drain();
-            That(State() == saved && enabled == 1,"3858重复物件39不重复场景或结算许可");
-            peer.Send(33,[33,0,18,15,0,0]); peer.Expect(1,33,[1,18,15,0,0,0,0]); Drain();
-            That(Scalar() is [[0L]] && enabled == 1 && fixture.Query(
-                "SELECT acceptance_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=3858",peer.Id)[0][0].Equals(acceptance),
-                "3858终末33沿原AcceptanceId达成演出，已经发布的31不重复");
-            saved = State(); peer.Send(33,[33,0,18,15,0,0]); peer.Expect(1,33,[1,18,15,0,0,0,0]); Drain();
-            That(State() == saved && enabled == 1,"3858重复33不重复保存或发布");
+            if (escSkip || early)
+            {
+                if (!early) { peer.Send(33,[33,0,18,15,0,0]); peer.Expect(1,33,[1,18,15,0,0,0,0]); Drain(); }
+                That(enabled == 1 && bossChecks == 0 && Scalar() is [[0L]] && fixture.Query(
+                    "SELECT acceptance_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=3858",peer.Id)[0][0].Equals(acceptance) &&
+                    fixture.Query("SELECT source_type,dungeon_id,map_id,template_id,length(death_events)/16,quest_id FROM character_dungeon_scene_clear_receipts WHERE character_id=$p0",peer.Id)
+                    is [["PassiveObject",193L,70487L,69292L,long escDeaths,0L]] && escDeaths == deaths,
+                    "3858仅发一次33时，提交原AcceptanceId及69292场景清图并签发空31");
+                saved = State();
+                peer.Send(33,[33,0,18,15,0,0]); peer.Expect(1,33,[1,18,15,0,0,0,0]); Drain();
+                peer.Send(39,passive); Drain();
+                That(State() == saved && enabled == 1,"3858跳过动画清图后的重复33或迟到39不重复场景或结算许可");
+            }
+            else
+            {
+                peer.Send(39,passive); peer.Expect(0,31,[]); enabled++; Drain();
+                That(enabled == 1 && bossChecks == 0 && Scalar() is [[long sceneScalar]] && sceneScalar == (early ? 0 : 1) && fixture.Query(
+                    "SELECT source_type,dungeon_id,map_id,template_id,length(death_events)/16,quest_id FROM character_dungeon_scene_clear_receipts WHERE character_id=$p0",peer.Id)
+                    is [["PassiveObject",193L,70487L,69292L,long sceneDeaths,0L]] && sceneDeaths == deaths,
+                    "3858普通0绑定唯一末层scene与实际死亡集合，39不代替type65，空31不造115");
+                saved = State(); peer.Send(39,passive); Drain();
+                That(State() == saved && enabled == 1,"3858重复物件39不重复场景或结算许可");
+                peer.Send(33,[33,0,18,15,0,0]); peer.Expect(1,33,[1,18,15,0,0,0,0]); Drain();
+                That(Scalar() is [[0L]] && enabled == 1 && fixture.Query(
+                    "SELECT acceptance_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=3858",peer.Id)[0][0].Equals(acceptance),
+                    "3858终末33沿原AcceptanceId达成演出，已经发布的31不重复");
+                saved = State(); peer.Send(33,[33,0,18,15,0,0]); peer.Expect(1,33,[1,18,15,0,0,0,0]); Drain();
+                That(State() == saved && enabled == 1,"3858重复33不重复保存或发布");
+            }
             peer.Send(46,report); Drain();
             That(fixture.Query("SELECT map_id,quest_id FROM character_dungeon_settlement_receipts WHERE character_id=$p0",peer.Id)
                 is [[70487L,0L]],"3858正式46保留实际末层70487与普通0实例身份");
@@ -445,6 +464,14 @@ internal static class QuestPassiveClearTcpTests
             {
                 var request = new byte[100]; request[0] = checked((byte)point.X); request[1] = checked((byte)point.Y); request[10] = kind;
                 peer.Send(45,request); peer.Expect(1,45,[1]); map = peer.Expect(0,29).Body;
+            }
+            void RejectExit(DungeonPoint point,byte kind)
+            {
+                string before = State();
+                var request = new byte[100]; request[0] = checked((byte)point.X); request[1] = checked((byte)point.Y); request[10] = kind;
+                peer.Send(45,request); peer.Expect(1,45,[0,19,0]);
+                drain(peer,packet => That(packet.Opcode != 29,"3858待物件终末的拒绝出门不能发布换图"));
+                That(State() == before && enabled == 0,"3858基础Boss或末层物件未完成时拒绝出门，存档与结算许可不变");
             }
             void Drain() => drain(peer,packet =>
             {

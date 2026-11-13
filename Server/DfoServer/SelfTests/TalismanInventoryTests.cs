@@ -25,10 +25,18 @@ internal static class TalismanInventoryTests
     static readonly GoldLimitCatalog Limits = new("[gold limit from level]\n0 1000000000\n[/gold limit from level]");
     static readonly EpicPieceCatalog Pieces = new("[piece list]\n50000 50001\n[/piece list]");
 
+    static Func<int, int> UnsortedSocketDraw()
+    {
+        int[] offsets = [4, 3, 0]; // Fisher-Yates 原始抽出 5、1、3。
+        int index = 0;
+        return _ => offsets[index++];
+    }
+
     public static void RunCore()
     {
         int start = Count;
         var catalog = Catalog();
+        RunUnequipChecks();
         var empty = Character();
         var granted = InventoryRewardGrantService.TryGrantBatch(empty, [new(StoneId, 1), new(RuneId, 12)], catalog, Limits, Pieces,
             DateTimeOffset.FromUnixTimeSeconds(Now));
@@ -37,8 +45,11 @@ internal static class TalismanInventoryTests
             granted.Plan.After.Items.All(item => item.Position.List == InventoryListType.Talisman), "护石与符文奖励自动进入各自专用分页");
         var newStone = granted.Plan!.After.Find(new(InventoryListType.Talisman, 0))!.Core;
         var colors = TalismanSocketColors.Read(newStone);
-        That(colors.IsComplete && new[] { colors.First, colors.Second, colors.Third }.Distinct().Count() == 3,
-            "新护石一次生成三种有效孔色");
+        That(colors.IsComplete && colors.First < colors.Second && colors.Second < colors.Third,
+            "新护石一次生成三种有效孔色并按阵营编号升序落孔");
+        That(TalismanSocketColors.Read(InventoryRewardGrantService.Create(Stone,
+            talismanColorDraw: UnsortedSocketDraw())) == new TalismanSocketColors(1, 3, 5),
+            "新护石将抽出的乱序三色按阵营编号升序写入孔位");
         That(ItemSlotBoundService.Range(ItemKind.Talisman, 0) == ((short)0, (short)69) &&
             ItemSlotBoundService.Range(ItemKind.Rune, 0) == ((short)70, (short)209) &&
             ItemSlotBoundService.Allows(0, new(InventoryListType.Equipment, 35), ItemKind.Talisman) &&
@@ -72,6 +83,12 @@ internal static class TalismanInventoryTests
         That(incoming.Accepted && incoming.Plan!.After.Items.Count(item => item.Uid == 20) == 1 &&
             incoming.Plan.After.Items.Where(item => item.Core.Kind == ItemKind.Rune).Sum(item => item.Core.Count) == 2001,
             "旧邮件附件在领取输出归一分类并守恒拆分，不重写原附件身份");
+        var unorderedLegacyCore = new TalismanSocketColors(5, 1, 3).Apply(originalCore with
+        { Kind = ItemKind.Talisman, EquipmentLockId = 0 });
+        var unorderedIncoming = InventoryRewardGrantService.TryGrantItems(empty,
+            [legacyStone with { Core = unorderedLegacyCore }], catalog, Limits, Pieces, DateTimeOffset.FromUnixTimeSeconds(Now));
+        That(unorderedIncoming.Accepted && unorderedIncoming.Plan!.After.Find(new(InventoryListType.Talisman, 0))?.Core == unorderedLegacyCore,
+            "已有护石附件领取保留原孔位顺序，不按新实例生成规则重排");
 
         var service = new InventoryTalismanService(catalog, _ => 0);
         var worn = StoneItem(1, 34, InventoryListType.Equipment);
@@ -109,10 +126,14 @@ internal static class TalismanInventoryTests
             new(213, 70, RuneId), Now).Accepted, "两块护石各自独立，可各装同色符文");
         That(!service.Equip(wearer with { Inventory = new([worn with { Core = worn.Core with { EquipmentLockId = 1 } }, source]) },
             new(210, 70, RuneId), Now).Accepted, "锁定护石拒绝装载，材料不变");
-        // 孔位绑定装备槽，护石离开 34 会把符文留给下一枚护石；卸石前必须先卸符文。
+        // 带符文护石直接卸回空护石页时，符文先原子归还，不能留下绑定到装备槽的孔位。
         var unequip = new InventoryMoveRequest(new(InventoryListType.Equipment, 34), StoneId, 1,
             new(InventoryListType.Talisman, 0), 0, 0, 0, 0, 0);
-        That(!InventoryMoveService.Plan(afterEquip, unequip, catalog, Now).Accepted, "带已装符文的护石拒绝卸下");
+        var unequipped = InventoryMoveService.Plan(afterEquip, unequip, catalog, Now);
+        That(unequipped.Accepted && unequipped.Plan!.After.Find(new(InventoryListType.Talisman, 0)) is { Uid: 1 } &&
+            unequipped.Plan.After.Find(new(InventoryListType.Talisman, 210)) is null &&
+            unequipped.Plan.After.Find(source.Position)?.Core.Count == 3,
+            "带已装符文的护石卸下时先归还符文并保持同一库存计划");
         That(!InventoryMoveService.Plan(Character(worn, actual, StoneItem(6, 0)),
             new(new(InventoryListType.Talisman, 0), StoneId, 1, new(InventoryListType.Equipment, 34), StoneId, 0, 0, 0, 0),
             catalog, Now).Accepted, "带已装符文的护石不能与背包护石互换，符文不会错挂到另一枚");
@@ -138,6 +159,13 @@ internal static class TalismanInventoryTests
             "重锻按品级足额扣料，仅替换三孔颜色，其他完整实例字段保留");
         That(refinedCore == target.Core && refined.Plan.ChangedSlots.SequenceEqual(new[] { material.Position }),
             "重锻允许抽回原孔色并照常扣料，值未变的目标不进入通用库存差量，回执后仍须恢复目标显示");
+        var reordered = new InventoryTalismanService(catalog, UnsortedSocketDraw())
+            .Refine(Character(target, material), new(121, 0), costs, Now);
+        var reorderedCore = reordered.Plan!.After.Find(target.Position)!.Core;
+        That(reordered.Accepted && TalismanSocketColors.Read(reorderedCore) == new TalismanSocketColors(1, 3, 5) &&
+            reorderedCore.Extension114.Flag == originalCore.Extension114.Flag &&
+            (reorderedCore.Extension114.Value >> 24) == 0xFE && reorderedCore.Rune == originalCore.Rune,
+            "重锻将抽出的乱序三色升序落孔，保留扩展高字节、Flag及其他实例属性");
         That(!service.Refine(Character(target, material with { Core = material.Core with { Value = 1 } }), new(121, 0), costs, Now).Accepted,
             "重锻材料不足不返回扣料计划");
 
@@ -313,6 +341,67 @@ internal static class TalismanInventoryTests
         That(vector.Length == 25 && vector[0] == 6 && BinaryPrimitives.ReadInt32LittleEndian(vector.AsSpan(1)) == RuneId &&
             vector.AsSpan(5).IndexOfAnyExcept((byte)0) < 0, "本人装备尾向量固定六位置，未装孔不压缩错位");
         Console.WriteLine($"PASS {Count - start} talisman inventory checks");
+    }
+
+    // 直接卸下护石的规则矩阵由核心自测与 talisman TCP 组共同调用；TCP 不重复承载完整领域矩阵。
+    internal static void RunUnequipChecks()
+    {
+        var catalog = Catalog();
+        var request = (short stoneSlot, short targetSlot, int stoneId) => new InventoryMoveRequest(
+            new(InventoryListType.Equipment, stoneSlot), stoneId, 1,
+            new(InventoryListType.Talisman, targetSlot), 0, 0, 0, 0, 0);
+
+        var emptyParent = StoneItem(1, 34, InventoryListType.Equipment);
+        var empty = InventoryMoveService.Plan(Character(emptyParent), request(34, 0, StoneId), catalog, Now);
+        That(empty.Accepted && empty.Plan!.After.Find(new(InventoryListType.Talisman, 0))?.Uid == 1 &&
+            empty.Plan.After.Find(emptyParent.Position) is null, "无符文护石保留原有直接卸下语义");
+
+        var oneRune = new InventoryItem(2, new(InventoryListType.Talisman, 210), new(RuneId, ItemKind.Rune, 1));
+        var one = InventoryMoveService.Plan(Character(emptyParent, oneRune), request(34, 0, StoneId), catalog, Now);
+        That(one.Accepted && one.Plan!.After.Find(new(InventoryListType.Talisman, 0))?.Uid == 1 &&
+            one.Plan.After.Find(oneRune.Position) is null && one.Plan.After.Find(new(InventoryListType.Talisman, 70))?.Uid == 2,
+            "一枚符文随护石原子归还并保留UID");
+
+        var threeRunes = new[]
+        {
+            new InventoryItem(3, new(InventoryListType.Talisman, 210), new(RuneId, ItemKind.Rune, 1)),
+            new InventoryItem(4, new(InventoryListType.Talisman, 211), new(RuneId, ItemKind.Rune, 1)),
+            new InventoryItem(5, new(InventoryListType.Talisman, 212), new(RuneId, ItemKind.Rune, 1))
+        };
+        var three = InventoryMoveService.Plan(Character([emptyParent, ..threeRunes]), request(34, 0, StoneId), catalog, Now);
+        That(three.Accepted && three.Plan!.After.Items.Where(item => item.Core.Kind == ItemKind.Rune && item.Position.Index is >= 70 and < 210).Sum(item => item.Core.Count) == 3 &&
+            three.Plan.After.Items.All(item => item.Position.Index is < 210 || item.Position.Index > 215),
+            "三枚符文按同一计划全部归还且不残留孔位");
+
+        var reverse = InventoryMoveService.Plan(Character(emptyParent, oneRune), new(
+            new(InventoryListType.Talisman, 0), 0, 1,
+            new(InventoryListType.Equipment, 34), StoneId, 0, 0, 0, 0), catalog, Now);
+        That(reverse.Accepted && reverse.Plan!.After.Find(new(InventoryListType.Talisman, 0))?.Uid == 1 &&
+            reverse.Plan.After.Find(new(InventoryListType.Talisman, 70))?.Uid == 2,
+            "空源反向请求按真实护石端点归一并归还符文");
+
+        var expiringRune = oneRune with { Core = oneRune.Core with { ExpireTime = checked((int)(Now + 10)) } };
+        var expiring = InventoryMoveService.Plan(Character(emptyParent, expiringRune), request(34, 0, StoneId), catalog, Now);
+        That(expiring.Accepted && expiring.Plan!.CharacterPrecondition?.QualificationExpiresAt == Now + 10,
+            "返还符文最早期限进入最终库存计划前提");
+
+        var fullPage = Enumerable.Range(70, 140)
+            .Select(slot => new InventoryItem(slot + 100, new(InventoryListType.Talisman, (short)slot),
+                new(OtherRuneId, ItemKind.Rune, 999))).ToArray();
+        var noCapacity = InventoryMoveService.Plan(Character([emptyParent, oneRune, .. fullPage]), request(34, 0, StoneId), catalog, Now);
+        That(!noCapacity.Accepted && noCapacity.Plan is null && noCapacity is { Accepted: false },
+            "符文页无合堆或空格时整笔拒绝且不产生部分计划");
+
+        var lockedParent = emptyParent with { Core = emptyParent.Core with { EquipmentLockId = 1 } };
+        That(!InventoryMoveService.Plan(Character(lockedParent, oneRune), request(34, 0, StoneId), catalog, Now).Accepted,
+            "安全锁护石带符文时拒绝自动归还");
+        var lockedRune = oneRune with { Core = oneRune.Core with { EquipmentLockId = 1 } };
+        That(!InventoryMoveService.Plan(Character(emptyParent, lockedRune), request(34, 0, StoneId), catalog, Now).Accepted,
+            "安全锁符文不能被自动归还");
+
+        var replacement = InventoryMoveService.Plan(Character(emptyParent, oneRune,
+            StoneItem(6, 0)), request(34, 0, StoneId), catalog, Now);
+        That(!replacement.Accepted, "带符文护石与背包护石替换仍拒绝");
     }
 
     static ItemCatalog Catalog()

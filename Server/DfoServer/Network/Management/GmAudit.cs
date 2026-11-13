@@ -7,7 +7,7 @@ namespace DfoServer.Network.Management;
 internal sealed record GmAuditEntry(DateTimeOffset Time, string Operator, string Action, string Target, string Command,
     bool Ok, string Before, string After, string Result);
 
-internal sealed class GmAudit(string path)
+internal sealed class GmAudit(string path, bool enabled = true)
 {
     static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
     readonly object gate = new();
@@ -16,6 +16,7 @@ internal sealed class GmAudit(string path)
 
     public void Append(GmAuditEntry entry)
     {
+        if (!enabled) return;
         string line = JsonSerializer.Serialize(entry with
         {
             Before = Cut(entry.Before), After = Cut(entry.After), Result = Cut(entry.Result), Command = Cut(entry.Command)

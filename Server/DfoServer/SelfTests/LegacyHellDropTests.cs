@@ -30,6 +30,8 @@ internal static class LegacyHellDropTests
             ordinary.Trials[^3] is { Threshold: 2, ProbabilityDenominator: 3, MaximumCount: 2, IndividualObjects: true } &&
             ordinary.Trials[^2] is { Threshold: 10, ProbabilityDenominator: 1000 } && ordinary.Trials[^1].Threshold == 1,
             "旧普通深渊仅追加本服票、魂及当前地区宝珠，不借哈林晶石");
+        That(ordinary.Trials[0].ExcludeLegacyHellLowEquipment && ordinary.Trials.Skip(1).All(trial => !trial.ExcludeLegacyHellLowEquipment),
+            "只有旧地区普通密门深渊的末波装备额外骰携带白蓝魔封过滤，碎片票魂珠不携带");
         foreach (bool special in new[] { false, true })
         {
             var rift = entry with { DungeonId = 7539, HellParty = null, IsInfernoParty = true,
@@ -39,6 +41,7 @@ internal static class LegacyHellDropTests
                 var result = resource.PrepareEntry(rift with { Difficulty = difficulty }, hell)(wave);
                 int expected = special ? 13 : 11;
                 That(result.Trials.Length == 2 && result.Trials[^1].Attempts == expected &&
+                    result.Trials.All(trial => !trial.ExcludeLegacyHellLowEquipment) &&
                     result.Generate(bound => bound == 1001 ? 1000 : 0, DateTimeOffset.UnixEpoch).Length == expected,
                     "时空裂缝普通11/特殊13片，实际生成数量不随难度改变且不混入票魂宝珠");
             }
@@ -51,12 +54,29 @@ internal static class LegacyHellDropTests
         That(resource.PrepareEntry(entry with { DungeonId = 7539, HellParty = null, IsInfernoParty = true }, disabled)(wave).Trials.Length == 1,
             "时空碎片仍遵守显式0关闭，不因固定数量绕过配置");
         foreach (var invalid in new[] { entry with { HellParty = null }, entry with { IsPractice = true },
-            entry with { RouteQuestId = 10 }, entry with { IsHellLegend = true }, entry with { DungeonId = 291100308 } })
-            That(!resource.PrepareEntry(invalid, hell)(wave).ResourceSource.Contains(LegacyHellDropPolicy.Rule),
+            entry with { RouteQuestId = 10 }, entry with { IsHellLegend = true }, entry with { IsCosmo = true },
+            entry with { DungeonId = 291100308 } })
+            That(!resource.PrepareEntry(invalid, hell)(wave).ResourceSource.Contains(LegacyHellDropPolicy.Rule) &&
+                resource.PrepareEntry(invalid, hell)(wave).Trials.All(trial => !trial.ExcludeLegacyHellLowEquipment),
                 "普通、任务、练习、星空及哈林不借旧地区补全奖励");
         That(!resource.PrepareEntry(entry, hell)(wave with { HellRewardRolls = 0 }).ResourceSource.Contains(LegacyHellDropPolicy.Rule) &&
             !resource.PrepareEntry(entry, hell)(wave with { IsFriendly = true }).ResourceSource.Contains(LegacyHellDropPolicy.Rule),
             "非末波及友方演员不产生补全奖励");
+        foreach (var ineligible in new[] { wave with { HellRewardRolls = 0 }, wave with { IsFriendly = true },
+            wave with { HellWave = null }, wave with { IsBlocking = false },
+            wave with { Source = new DungeonRoomMonster(42, [], "[fixed]", "[boss]", "monster/合成.mob") { Modifiers = ["[dummy]"] } } })
+            That(resource.PrepareEntry(entry, hell)(ineligible).Trials.All(trial => !trial.ExcludeLegacyHellLowEquipment),
+                "非有效末波末杀不安装额外装备过滤");
+        var lowLevelHell = new DungeonHellRewardPolicy(DungeonHellDropRules.Parse("""
+            [dungeon difficulty drop prob] 1 1 1000 1000 1000 1000 1000
+            [basis of rarity dicision] 1 0 599000 993000 993000 1000000 1000001 1000002
+            [item drop ref table] 1 0 2
+            """), DungeonItemDropCatalog.Create([]));
+        var ordinaryMonster = resource.PrepareEntry(entry with { BasisLevel = 1 }, lowLevelHell)(wave with { SpawnType = 0, CandidateLevel = 1 });
+        That(ordinaryMonster.Trials.Count(trial => trial.ExcludeLegacyHellLowEquipment) == 1 &&
+            ordinaryMonster.Trials.Where(trial => trial.ExcludeLegacyHellLowEquipment).Single().RarityBonusGroup == DungeonRarityBonusGroup.HellEquipment &&
+            ordinaryMonster.Trials.Any(trial => trial.RarityBonusGroup == DungeonRarityBonusGroup.OrdinaryEquipment && !trial.ExcludeLegacyHellLowEquipment),
+            "同怪普通装备通道不继承末波额外装备骰的过滤");
     }
 
     internal static void RunResources(PvfArchive pvf, TownCatalog towns, ItemResources items)

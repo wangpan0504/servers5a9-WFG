@@ -25,7 +25,7 @@ internal static class PvpTotalTeamRename
         // 已提交名称的重放不再次消费；不凭同名请求创建队伍。
         if (name == team.Name) return new(character, team, name, null, null);
         if (slot > short.MaxValue || card is not { Id: CardId, Kind: ItemKind.Material } ||
-            !card.AllowsUse(character.Level, character.Job)) return null;
+            !card.AllowsActivation(character.Level, character.Job)) return null;
         var position = new InventorySlot(InventoryListType.Main, (short)slot);
         var source = character.Inventory.Find(position);
         if (source is not { Uid: > 0, Core: { ItemId: CardId, Kind: ItemKind.Material, Count: > 0, EquipmentLockId: 0 } } ||

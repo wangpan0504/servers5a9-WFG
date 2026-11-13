@@ -59,7 +59,7 @@ internal static partial class TownPackets
             writer.Write(training ? (byte)0 : (byte)1);
             if (!training) writer.Write((byte)31);
             writer.Write(fatigue.SelectionAuxiliary);
-            writer.Write(fatigue.Remaining);
+            writer.Write(fatigue.BatteryBuff); // 02341F34/02341F3E：当前与上一蓄电池祝福。
             writer.Write((byte)0);
             writer.Write(fatigue.ContextAuxiliary);
             writer.Write((byte)0);
@@ -76,11 +76,13 @@ internal static partial class TownPackets
         (character.DungeonState?.ProficiencyLevel ?? 0u, character.DungeonState?.ProficiencyExperience ?? 0UL);
 
     public static byte[] Actor(Character character, DfoServer.Game.Pvp.PvpDisplayGrade pvpGrade, ChannelIdentity channel = default, long? utcSeconds = null,
-        string adventureName = "", ActorSceneState sceneState = ActorSceneState.Town, bool premiumPcRoom = false)
+        string adventureName = "", ActorSceneState sceneState = ActorSceneState.Town, bool premiumPcRoom = false,
+        ushort returningAdventurerType = 0, MarriageAppearance? marriage = null)
     {
         if (character.BlacklistCount < 0)
             throw new InvalidDataException("角色被拉黑计分不能为负数");
         if (pvpGrade.PowerTitle > 9) throw new InvalidDataException("战斗力称谓超出客户端范围");
+        if (returningAdventurerType > 2) throw new InvalidDataException("新回归系统身份超出客户端范围");
         using (var stream = new MemoryStream())
         using (var writer = new BinaryWriter(stream))
         {
@@ -99,6 +101,10 @@ internal static partial class TownPackets
             {
                 state[23] = relationship.State;
                 state[24] = relationship.RingLevel;
+                // 0267FB97/0267FBDF同样覆盖Data+3EC；不能用零分重建已布置婚房的角色。
+                if (relationship.State == 4 && !relationship.Furniture.IsEmpty && marriage is null)
+                    throw new InvalidOperationException("已布置婚房的Actor缺少装饰分目录");
+                System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(state.AsSpan(25), marriage?.Score(character) ?? 0);
             }
             // 0267F78D将状态+44h写入Data+488；023BC931据此安装真实组队栏边框。
             System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(state.AsSpan(68),
@@ -162,7 +168,8 @@ internal static partial class TownPackets
             writer.Write(0u);
             writer.Write((ushort)0);
             writer.Write(new byte[2]);
-            writer.Write((ushort)0); // 02678840.
+            // 026788CF读取u16，经026788D8安装Data+418；02D83A20读取新回归系统头像身份。
+            writer.Write(returningAdventurerType);
             // 026768F0 依次读 u32 熟练等级与 u64 熟练经验，经 01A16420/01A16470 写角色
             // Data+42C/+430/+434；左下角HUD与「熟练Lv」窗口直接消费这三个字段。
             // 满级停发NOTI37后没有其他同步通道，Actor 必须投影持久化的熟练状态。
@@ -184,7 +191,9 @@ internal static partial class TownPackets
             writer.Write(character.Learning.TreeWireValue);
             writer.Write(new byte[2]);
             writer.Write(0u);
-            writer.Write(new byte[2]); // 0267F273..0267FED3.
+            // 02681958及023D6271安装Data+4A3；普通队伍、攻坚队和跨频道详情共用此技能分支标志。
+            writer.Write(CharacterSkillVariant.Read(character));
+            writer.Write((byte)0);
             return stream.ToArray();
         }
     }

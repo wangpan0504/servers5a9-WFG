@@ -14,7 +14,7 @@ internal static class AdventurePackets
     // 基本信息页「内容熟练度」由客户端按独立 u32 读取（2026-10-22 哨兵探针+实机截图逐项对上）：
     // 推荐地下城通关@16、卢克攻坚@28、超时空漩涡@32、普雷·伊希斯攻坚战@36、
     // 无双决斗场获胜@44、绝望之塔100层@48、悲叹之塔100层@52。
-    // 推荐地下城与三类团本使用各自账号级真实累计；决斗场及双塔暂无统计，保持0。
+    // 推荐地下城、三类团本与双塔100层使用各自账号级真实累计；无双决斗场暂无统计，保持0。
     public const int RecommendedClearOffset = 16;
     public const int LukeRaidClearOffset = 28;
     public const int MetroRaidClearOffset = 32;
@@ -27,7 +27,7 @@ internal static class AdventurePackets
     public const int PurchasesOffset = 5312;
     public const int ContentCountsOffset = 7360;
     public const int CapsuleOffset = 7424;
-    public const int ClaimsOffset = 7432;
+    public const int CapsulePreviewExperienceOffset = 7432;
 
     public static byte[] Ack(ushort error = 0) => Build(writer =>
     {
@@ -45,7 +45,7 @@ internal static class AdventurePackets
         PacketEncoding.WriteString(writer, name);
     });
     public static byte[] Information(ushort actor, AdventureSnapshot snapshot, AdventureCatalog catalog,
-        IReadOnlyList<AdventureMember> representatives, bool ack = false) => Build(writer =>
+        IReadOnlyList<AdventureMember> representatives, byte region, bool ack = false) => Build(writer =>
     {
         if (ack) writer.Write((byte)1);
         writer.Write(actor); writer.Write(checked((uint)snapshot.State.CreatedDate));
@@ -53,13 +53,16 @@ internal static class AdventurePackets
         var raw = new byte[InformationRawLength];
         U32(raw, 0, checked((uint)snapshot.State.Level)); U64(raw, 8, snapshot.State.Experience);
         U32(raw, LoginDaysOffset, checked((uint)snapshot.State.LoginStreakDays));
-        // 内容熟练度使用独立u32，不借用收藏分类表；团本不沿用推荐地下城的u16上限。
+        // 内容熟练度使用独立u32，不借用收藏分类表；团本与双塔不沿用推荐地下城的u16上限。
         var counts = snapshot.ContentCounts;
         U32(raw, RecommendedClearOffset, counts.Length > AdventureContent.RecommendedDungeon
             ? counts[AdventureContent.RecommendedDungeon] : 0u);
         U32(raw, LukeRaidClearOffset, snapshot.RaidClears.Luke);
         U32(raw, MetroRaidClearOffset, snapshot.RaidClears.Fiendwar);
         U32(raw, PreyRaidClearOffset, snapshot.RaidClears.Prey);
+        U32(raw, DuelWinOffset, snapshot.DuelWins);
+        U32(raw, DespairTowerClearOffset, snapshot.DespairTowerClears);
+        U32(raw, LamentTowerClearOffset, snapshot.LamentTowerClears);
         U16(raw, 68, checked((ushort)snapshot.Members.Length));
         AdventureMember? best = null;
         int at = 0;
@@ -70,7 +73,7 @@ internal static class AdventurePackets
             var row = raw.AsSpan(RosterOffset + 52 * at++, 52);
             row[0] = profession.Job; row[1] = profession.Grow;
             if (member is null) continue;
-            WriteCollection(row, member);
+            WriteCollection(row, member, region);
             // 同熟练度取目录顺序靠前者，保持每次构包稳定。
             if (best is null || member.Proficiency > best.Proficiency) best = member;
         }
@@ -106,7 +109,7 @@ internal static class AdventurePackets
             raw[ContentCountsOffset + type * 3 + 2] = collection[type].Complete ? (byte)1 : (byte)0;
         }
         U64(raw, CapsuleOffset, snapshot.State.CapsuleExperience);
-        U32(raw, ClaimsOffset, Claims(snapshot.State, catalog));
+        U32(raw, CapsulePreviewExperienceOffset, CapsulePreviewExperience(snapshot.State, catalog));
         writer.Write(raw.Length); writer.Write(raw); PacketEncoding.WriteString(writer, snapshot.State.Name);
     });
 
@@ -119,12 +122,18 @@ internal static class AdventurePackets
         // 经验表按level+1自行计算后写入。两条路径写同一份「下一级所需经验」，本服必须下发同一结果：
         // 留0会让每个1349（入城、商店、远征、胶囊提取）到达后把该字段覆盖成0，面板经验显示失真。
         U64(raw, 16, catalog.Experience.GetValueOrDefault(state.Level + 1));
-        U64(raw, 24, state.CapsuleExperience); U32(raw, 32, Claims(state, catalog));
+        U64(raw, 24, state.CapsuleExperience);
+        U32(raw, 32, CapsulePreviewExperience(state, catalog));
         writer.Write(raw.Length); writer.Write(raw); writer.Write(new byte[4]);
     });
+    // 1343 RAW+7432与1349 RAW+32都写manager+2B0；00D91A40直接显示它并计算领取后的等级。
+    // 1499每次只领取一颗，完整颗数另由0102F250按账号计量计算，不能把颗数或全部奖励写进预览。
+    static uint CapsulePreviewExperience(AdventureState state, AdventureCatalog catalog) =>
+        Claims(state, catalog) == 0 ? 0 : catalog.Capsule.GrantedExperience;
+
     // 客户端按胶囊格数展示可领取次数；经验上限可能覆盖多格，但显示不能超过资源声明的最大格数。
     public static uint Claims(AdventureState state, AdventureCatalog catalog) =>
-        (uint)Math.Min(catalog.Capsule.MaximumGauges, state.CapsuleExperience / catalog.Capsule.MinimumExperience);
+        (uint)Math.Min(catalog.Capsule.MaximumGauges, state.CapsuleExperience / catalog.Capsule.GaugeExperience);
 
     public static byte[] Candidates(IReadOnlyList<AdventureMember> rows, byte region) => Build(writer =>
     {
@@ -141,21 +150,21 @@ internal static class AdventurePackets
     // 1477成功回包：ACK、分类结构长度u32=3、type:u8、count:u8、complete:u8、收藏行长度u32=52、52B行。
     // 客户端01034DC0把这3字节整体写回收藏表对应槽并复用显示刷新，布局必须与1343表完全一致；
     // count超过127会被显示侧当作负数而置灰，宽度写错还会让52B行整体错位。
-    public static byte[] Representative(AdventureProfession profession, AdventureCollection collection, AdventureMember member) => Build(writer =>
+    public static byte[] Representative(AdventureProfession profession, AdventureCollection collection, AdventureMember member, byte region) => Build(writer =>
     {
         writer.Write((byte)1); writer.Write(3u); writer.Write(profession.Group);
         writer.Write((byte)Math.Min((int)collection.Count, 127)); writer.Write(collection.Complete ? (byte)1 : (byte)0);
-        var row = new byte[52]; WriteCollection(row, member);
+        var row = new byte[52]; WriteCollection(row, member, region);
         writer.Write(52u); writer.Write(row);
     });
 
-    static void WriteCollection(Span<byte> row, AdventureMember member)
+    static void WriteCollection(Span<byte> row, AdventureMember member, byte region)
     {
         row[0] = member.Job; row[1] = member.ProfessionGrow;
         U32(row, 4, member.Proficiency); Name(row.Slice(12, 30), member.Name);
-        // 010314C0 把 u8@42 读进显示结构+2C；选角卡片右上角的熟练角标按熟练等级分档取图标，
-        // 原先写频道 ServerIndex 会让所有角色恒显示同一档。超过255沿用最高档，不按u8回绕。
-        row[42] = checked((byte)Math.Min(member.Proficiency, byte.MaxValue));
+        // 010314C0读取u8@42到DTO+2C，1343/1477再经收藏map+40投影UI条目+34，
+        // 00D9C079将其传给0290B6D0服务器名称查表；熟练度独立保留在u32@4。
+        row[42] = region;
         // 010314C0 把 word@44 读进显示结构+30；该字段的客户端用途尚未确认，
         // 「最高熟练度」卡片实际读取报文头的 RAW+56/57/60，不再依赖这里选人。
         U16(row, 44, (ushort)Math.Min(member.Proficiency, ushort.MaxValue));

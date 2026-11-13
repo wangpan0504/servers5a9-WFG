@@ -485,7 +485,7 @@ internal static class LotteryTests
         foreach (var invalid in new[]
         {
             boxTemplate with { MinimumLevel = 96 }, boxTemplate with { MaximumLevel = 94 },
-            boxTemplate with { Jobs = 2 }, boxTemplate with { RequiredSkill = ushort.MaxValue },
+            boxTemplate with { RequiredSkill = ushort.MaxValue },
             boxTemplate with { UseForbidden = true }, boxTemplate with { Kind = ItemKind.Material },
             boxTemplate with { Id = boxTemplate.Id + 1 }
         })
@@ -498,7 +498,7 @@ internal static class LotteryTests
             var denied = guarded.OpenLottery(runeSource, new(0, 117), out var deniedReceipt, now);
             That(!denied.Accepted && denied.Error == 19 && denied.RejectReason == "rune_box_source" &&
                 deniedReceipt is null && random.Bounds.Count == 0,
-                "符文盒在读取产物池及抽取前复验源模板身份、种类、等级、职业、技能与禁用资格");
+                "符文盒在读取产物池及抽取前复验源模板身份、种类、等级、技能与禁用资格");
         }
         random.Values = new();
         random.Bounds.Clear();

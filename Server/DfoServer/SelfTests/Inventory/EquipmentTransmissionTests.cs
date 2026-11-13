@@ -62,7 +62,7 @@ internal static class EquipmentTransmissionTests
             new EpicPieceCatalog("[piece list]\n50000 50001\n[/piece list]"), clock);
         var target = new InventoryItem(1, Bag(50), new(100, ItemKind.Equipment, 123456)
         {
-            Attr = 0xAF, AmplifyType = 3, AmplifyValue = 78, GenuineUpgrade = 8, Durability = 24,
+            Attr = 0xAF, AmplifyType = 3, AmplifyValue = 78, GenuineUpgrade = 8, Durability = 24, Rune = 1,
             EnchantCardId = 900, EnchantUpgrade = 3, EmblemSocketCount = 2, Emblem1 = 901, Emblem2 = 902,
             Random0 = new(1, 2, 3), Extension114 = new(2, 23456), Extension121 = 3456,
             EpicExchangeOrigin = new(1, 999), SortLockFlag = 1, ExpireTime = 1200
@@ -71,7 +71,7 @@ internal static class EquipmentTransmissionTests
         {
             Attr = 11, AmplifyType = 1, AmplifyValue = 33, GenuineUpgrade = 5, Durability = 17,
             EnchantCardId = 800, EnchantUpgrade = 2, EmblemSocketCount = 1, Emblem1 = 801,
-            Extension114 = new(1, 999), ExpireTime = 1300
+            Extension114 = new(1, 999), ExpireTime = 1300, Rune = 2
         });
         var material = new InventoryItem(3, Bag(121), new(300, ItemKind.Material, 450) { ExpireTime = 1100 });
         var character = new Character(1, 0, "Transmission", 0, new(1, 0, 10, 10), null)
@@ -82,11 +82,11 @@ internal static class EquipmentTransmissionTests
         var result = service.Transmit(character, request);
         var expected = target.Core with
         {
-            EnchantCardId = 800, EnchantUpgrade = 2, EmblemSocketCount = 1, Emblem1 = 801, Emblem2 = 0
+            EnchantCardId = 800, EnchantUpgrade = 2, EmblemSocketCount = 1, Emblem1 = 801, Emblem2 = 0, Rune = 0
         };
         That(result.Accepted && result.Plan!.After.Find(Bag(50)) == target with { Core = expected } &&
             result.Plan.After.Find(Bag(12)) is null && result.Plan.After.Find(Bag(121))?.Core.Count == 50 &&
-            result.Plan.After.Gold == 1234567, "只覆盖附魔和徽章孔，消耗供体与400材料，完整保留目标其他核心及金币");
+            result.Plan.After.Gold == 1234567, "传承清除特效且不继承供体特效，覆盖附魔和徽章孔，保留目标其他核心及金币");
         That(character.Inventory.Items.SequenceEqual([target, donor, material]), "规划不修改输入快照");
         That(result.Plan!.CharacterPrecondition!.Matches(character) &&
             !result.Plan.CharacterPrecondition.Matches(character with { Revision = character.Revision + 1 }),

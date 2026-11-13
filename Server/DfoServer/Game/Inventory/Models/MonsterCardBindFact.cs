@@ -12,11 +12,10 @@ internal sealed record MonsterCardBindFact(Guid Id, DateTimeOffset PlannedAt, Ti
 {
     public bool Matches(InventoryPlan plan, InventorySnapshot inventory)
     {
-        bool sphere = BindType is >= 3 and <= 5;
         if (Id == Guid.Empty || plan.Reason != "monster_card_bind" ||
             !ReferenceEquals(plan.Before, Before) || !ReferenceEquals(plan.After, After) ||
             Request.CardSlots.IsDefaultOrEmpty || Request.CardSlots.Length is < 2 or > 5 ||
-            !sphere && Request.CardSlots.Length != 2 || Materials.IsDefaultOrEmpty || BindType < 0 ||
+            Materials.IsDefaultOrEmpty || BindType < 0 ||
             Synthesizer.Uid <= 0 || Synthesizer.Core.Count < 1 || !Synthesizer.Core.IsStackable ||
             Synthesizer.Position != Request.SynthesizerPosition || plan.BeforeIndex.Find(Synthesizer.Position) != Synthesizer ||
             Receipt.SynthesizerSlot != Request.SynthesizerSlot || Receipt.BindType != BindType ||

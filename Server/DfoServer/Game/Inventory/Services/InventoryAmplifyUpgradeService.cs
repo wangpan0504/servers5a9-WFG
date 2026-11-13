@@ -33,7 +33,7 @@ internal sealed class InventoryAmplifyUpgradeService(ItemCatalog items, AmplifyU
             target.Core.ItemId != request.TargetItemId || target.Core.Kind != ItemKind.Equipment || target.Core.IsRental ||
             target.Core.EquipmentLockId != 0 || target.IsExpired(now) ||
             (reinforce ? target.Core.AmplifyType != 0 : target.Core.AmplifyType is < 1 or > 4 || target.Core.AmplifyValue == 0) ||
-            target.Core.Upgrade >= 31 ||
+            target.Core.Upgrade >= 31 && request.Mode != EnhancementMode.Amplify ||
             !ItemSlotBoundService.Allows(before, target.Position, target.Core.Kind))
             return InventoryResult.Reject(RejectCode);
         var template = items.Get(target.Core.ItemId);
@@ -50,6 +50,11 @@ internal sealed class InventoryAmplifyUpgradeService(ItemCatalog items, AmplifyU
             return InventoryResult.Reject(RejectCode);
         if (use is not null && !AllowsUse(use, character, target, template))
             return InventoryResult.Reject(RejectCode);
+        // 普通NPC增幅已到五位等级上限时走原生“无法继续强化”提示；不读取下一档概率或规划费用。
+        // 便携、幸运及强化仍保留原拒绝；源实体门禁与目标资格不能被上限提示覆盖。
+        if (old >= 31)
+            return InventoryResult.Reject(request.Mode == EnhancementMode.Amplify && use is null && !InvalidPhysicalSource()
+                ? (ushort)13 : RejectCode);
         // 便携强化读取普通normal表；幸运强化仍只使用自己的三段权重。
         var rules = reinforce && !lucky ? upgrades.ReinforceRules : upgrades.Rules;
         if (old >= rules.Steps.Length || rules.MaximumLevels.TryGetValue(template.Rarity, out int maximum) && old >= maximum)
@@ -91,8 +96,11 @@ internal sealed class InventoryAmplifyUpgradeService(ItemCatalog items, AmplifyU
             failureWeight = 100000 - EnhancementPotionPolicy.AdjustedSuccessWeight(100000 - failureWeight,
                 successBonus.Weight);
         }
+        var equipmentBonus = lucky ? default : EquipmentUpgradeBonusPolicy.Capture(character, items,
+            reinforce ? EquipmentUpgradeKind.Reinforcement : EquipmentUpgradeKind.Amplification, now, includeCost: !portable);
+        if (!lucky) failureWeight = 100000 - equipmentBonus.SuccessWeight(100000 - failureWeight, 100000);
         int count = portable || lucky ? 1 : step.MaterialCount;
-        int gold = portable || lucky ? 0 : rules.Gold(template, old);
+        int gold = portable || lucky ? 0 : equipmentBonus.GoldCost(rules.Gold(template, old));
         int available = wallet ? checked((int)Math.Min(int.MaxValue, CurrencyWallet.Get(before, walletKind!.Value))) : source!.Core.Count;
         if (available < count || before.Gold < gold)
             return InventoryResult.Reject(RejectCode);
@@ -163,7 +171,8 @@ internal sealed class InventoryAmplifyUpgradeService(ItemCatalog items, AmplifyU
             refunds = [];
         }
         after.Validate(allocating: true);
-        long? deadline = new[] { source?.ExpireTime ?? 0, target.ExpireTime, protectionSlot >= 0 ? protection!.ExpireTime : 0 }
+        long? deadline = new[] { source?.ExpireTime ?? 0, target.ExpireTime, protectionSlot >= 0 ? protection!.ExpireTime : 0,
+            equipmentBonus.ExpiresAt ?? 0 }
             .Where(value => value > 0).Select(value => (long?)value).Min();
         int remaining = wallet ? checked((int)CurrencyWallet.Get(paid, walletKind!.Value)) : source!.Core.Count - count;
         string reason = reinforce
@@ -172,7 +181,9 @@ internal sealed class InventoryAmplifyUpgradeService(ItemCatalog items, AmplifyU
         receipt = new(reinforce ? EnhancementMode.Reinforce : EnhancementMode.Amplify,
             request.Target, request.MaterialSlot, remaining, old, outcome.Level, outcome.Code == 0)
         { OutcomeCode = outcome.Code, Path = lucky ? (byte)4 : (byte)0, GoldCost = gold, InPlace = true, UsesLevelProbability = !lucky,
-            TerminalSlot = protectionSlot, TerminalRemaining = protectionRemaining, Refunds = refunds };
+            TerminalSlot = protectionSlot, TerminalRemaining = protectionRemaining, Refunds = refunds,
+            BaseSuccessPercent = lucky ? null : (100000 - step.FailureWeight) / 1000m,
+            SuccessPercent = lucky ? null : (100000 - failureWeight) / 1000m };
         return new(true, 0, new(before, after, reason, new(character, deadline, clock,
                 qualificationExpiresAtMilliseconds: successBonus.QualificationExpiresAtMilliseconds))
         {

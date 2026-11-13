@@ -194,10 +194,12 @@ internal sealed partial class SinglePlayerDungeonRun
         FatigueAccelerationPercent = percent;
     }
     internal DungeonMonsterPlan CurrentMonsterPlan => current.Plan;
-    // 友方APC在原客户端跨房随行；只读取本实例真正加载过的资源演员，不把未来房间算作存活。
+    // 友方APC及MAP显式follow的monster跨房随行；只认本实例真正加载过的原对象key。
+    static bool IsFollowingFriendlyActor(DungeonPlannedMonster monster) => monster.IsFriendly && !monster.CanReportDeath &&
+        (monster.AiCharacter is not null || monster.Source?.FollowType == "follow");
     internal DungeonPlannedMonster? PublishedFriendlyActor(ushort key) => carriedCompanions.GetValueOrDefault(key) ?? allRooms.Where(room => room.Loaded)
         .SelectMany(room => room.Plan.Monsters).SingleOrDefault(monster => monster.ObjectKey == key &&
-            monster.AiCharacter is not null && monster.IsFriendly && !monster.CanReportDeath);
+            IsFollowingFriendlyActor(monster));
 
     internal bool HasLivingFriendlyActor(int id, DungeonRunSnapshot snapshot) =>
         carriedCompanions.Values.Any(monster => monster.MonsterId == id && !retiredCarriedCompanions.Contains(monster.ObjectKey)) ||
@@ -230,7 +232,7 @@ internal sealed partial class SinglePlayerDungeonRun
     }
     internal DungeonPlannedMonster? CurrentLivingMonster(ushort key) =>
         Phase is SinglePlayerDungeonPhase.Dungeon or SinglePlayerDungeonPhase.Settlement &&
-        !current.Dead.Contains(key) && !current.Culled.Contains(key) && (current.Altar is null || current.Altar.WasPublished(key))
+        !current.Dead.Contains(key) && !current.Culled.Contains(key) && RevisedBeastCombatReady(key) && (current.Altar is null || current.Altar.WasPublished(key))
             ? current.Plan.Monsters.SingleOrDefault(monster => monster.ObjectKey == key && (monster.CanReportDeath || monster.IsSpecialChild ||
                 entry.IsTutorial && (monster.IsScriptedRetirement || monster.AiCharacter?.Faction is "[character]" or "[neutral]"))) : null;
     // 实验性（未在95客户端实证）：深渊派对波次怪不在 Monsters 里，客户端上报其死亡时只登记，不参与清房/经验/掉落。
@@ -264,9 +266,13 @@ internal sealed partial class SinglePlayerDungeonRun
         }
         var room = current.Plan.Monsters.Any(monster => monster.ObjectKey == key && !monster.CanReportDeath) ? current :
             allRooms.SingleOrDefault(candidate => candidate.Loaded && candidate.Plan.Monsters.Any(monster =>
-                monster.ObjectKey == key && monster.AiCharacter is not null && monster.IsFriendly && !monster.CanReportDeath));
+                monster.ObjectKey == key && IsFollowingFriendlyActor(monster)));
         room?.Dead.Add(key);
     }
+    internal bool MockBattleDefeated => entry.MockBattle is not null &&
+        current.Plan.Monsters.Any(monster => monster.MockBattleSpawn is { Team: 0 }) &&
+        current.Plan.Monsters.Where(monster => monster.MockBattleSpawn is { Team: 0 })
+            .All(monster => current.Dead.Contains(monster.ObjectKey));
     SinglePlayerDungeonPhase phase = SinglePlayerDungeonPhase.Loading;
     // 截止瞬间停止新战斗与移动，不依赖后台任务何时取得命令门；已准备的事务仍由原回执确认。
     public SinglePlayerDungeonPhase Phase
@@ -299,11 +305,11 @@ internal sealed partial class SinglePlayerDungeonRun
     }
     public bool HasPendingSettlement => pendingSettlement is not null || pendingAltarSettlement is not null || pendingDespairClear is not null;
     // 剧情入场不扣持久疲劳；宠物仍按真实首次加载的房间成长，回访不重复计点。
-    public int CreatureExperiencePoints => entry.IsTutorial || entry.IsTrainingRoom || entry.IsClassExperience || entry.IsQuestReplay || entry.IsPractice
+    public int CreatureExperiencePoints => entry.MockBattle is not null || entry.IsTutorial || entry.IsTrainingRoom || entry.IsClassExperience || entry.IsQuestReplay || entry.IsPractice
         ? 0 : allRooms.Count(room => room.Loaded);
     public DungeonRunSnapshot Snapshot => new(identity, Phase, current.Plan.Room.Map,
         Array.AsReadOnly(current.Plan.Monsters.Where(monster => !current.Dead.Contains(monster.ObjectKey) &&
-            !current.Culled.Contains(monster.ObjectKey) && (current.Altar is null || current.Altar.WasPublished(monster.ObjectKey)))
+            !current.Culled.Contains(monster.ObjectKey) && RevisedBeastVisible(monster.ObjectKey) && (current.Altar is null || current.Altar.WasPublished(monster.ObjectKey)))
             .Select(monster => monster.ObjectKey).ToArray()))
         { MapOperation = mapOperation, MapPayload = mapPayload, ConsumedFatigue = consumedFatigue, BossPosition = BossPosition(activeDummyStage) };
 
@@ -349,6 +355,7 @@ internal sealed partial class SinglePlayerDungeonRun
         dummyRooms = entry.Maze.DummyStages.Select(map => baseRooms.FirstOrDefault(room => room.Plan.Room.Map == map) ??
             new Room(route.Rooms.Single(plan => plan.Room.Map == map))).ToArray();
         allRooms = baseRooms.Concat(dummyRooms).Concat(layeredRooms.Values).Concat(conditionalRooms.Values).Distinct().ToArray();
+        antonTremorTargets = ResolveAntonTremorTargets();
         passiveClearTarget = route.PassiveClearTarget;
         if (ResolvePassiveLayerTerminal() is { } passiveTerminal)
             this.entry = entry with { PassiveClearTerminalMap = passiveTerminal.Plan.Room.Map };
@@ -384,11 +391,12 @@ internal sealed partial class SinglePlayerDungeonRun
         if (approvedRoute is null || combatAuthority is null)
             return false;
         if ((entry.DungeonId == 4000 || entry.Maze.IsLostLand || entry.LostLand is not null) &&
-            (entry.DungeonId != 4000 || !entry.Maze.IsLostLand || entry.LostLand is null || entry.QuestId != 0 ||
+            (entry.DungeonId != 4000 || !entry.Maze.IsLostLand || entry.LostLand is null ||
+                entry.QuestId != 0 && !entry.IsOrdinaryHunt ||
                 entry.Difficulty != 0 || entry.IsPractice || entry.IsQuestReplay || entry.HellPartyMode != 0 || entry.PartyRoute is not null ||
                 !entry.DisableFatigueConsumption || !entry.DisableGiveupPenalty || !entry.DisableClearReward ||
                 entry.AllowsCompanionAi || !entry.Maze.StaticTopology.Supported ||
-                entry.Maze.ClearConditions is not [{ Type: "limit time", TargetId: 600, Count: > 0 } timeLimit] ||
+                entry.Maze.ClearConditions is not [{ Type: "limit time", TargetId: LostLandAdmission.ResourceSeconds, Count: > 0 } timeLimit] ||
                 entry.LostLand.OpaqueValue != timeLimit.Count))
         { reason = "invalid: 遗忘之地专用准入不完整"; return false; }
         // 此字段只由本Run依据完整批准路线派生，调用方不能预先声明一个任意末层。
@@ -500,11 +508,14 @@ internal sealed partial class SinglePlayerDungeonRun
             try
             {
                 // 入场与复验采用同一训练策略；普通副本继续要求完整特殊父子演员。伴侣行按同一放行集合复验。
-                resourcePlan = DungeonMonsterPlan.FromRoom(plan.Room, entry.CharacterId, 1,
+                resourcePlan = entry.MockBattle is { } mock
+                    ? DungeonMonsterPlan.FromMockBattleRoom(plan.Room, entry.CharacterId, plan.Monsters[0].ObjectKey, mock, mock.Catalog)
+                    : DungeonMonsterPlan.FromRoom(plan.Room, entry.CharacterId, 1,
                     entry.BasisLevel,
                     includeSpecial: !entry.IsTutorial, playerTeam: entry.PlayerTeam ?? plan.PlayerTeam,
                     // 与入场规划同一判据：只有起始房间带伴侣行；放行集合已在入场规划时排除训练/练习等类型。
-                    companionRows: plan.Room.Map == entry.StartMap ? entry.CompanionMapRows : [], companionProfiles: entry.CompanionProfiles);
+                    companionRows: plan.Room.Map == entry.StartMap ? entry.CompanionMapRows : [], companionProfiles: entry.CompanionProfiles,
+                    suppressCompanions: entry.IsTagSystem);
                 if (plan.Tournament is not null)
                 {
                     if (!entry.IsTournament || plan.Room.Map != entry.StartMap || entry.StartMap != entry.BossMap ||
@@ -529,6 +540,7 @@ internal sealed partial class SinglePlayerDungeonRun
                 baseMonsters.Zip(resourcePlan.Monsters).Any(pair =>
                 pair.First.SourceOrdinal != pair.Second.SourceOrdinal || pair.First.Source != pair.Second.Source ||
                 pair.First.AiCharacter != pair.Second.AiCharacter || pair.First.MonsterId != pair.Second.MonsterId ||
+                pair.First.MockBattleSpawn != pair.Second.MockBattleSpawn ||
                 pair.First.CandidateLevel != pair.Second.CandidateLevel ||
                 pair.First.SpawnType != pair.Second.SpawnType && !AllowedChampionPromotion(pair.First, pair.Second, entry) ||
                 pair.First.IsDummyMapBoss != pair.Second.IsDummyMapBoss ||
@@ -595,8 +607,8 @@ internal sealed partial class SinglePlayerDungeonRun
 
     // 入场已按资源[champion]抽出精英；复验不能把这一步合法的0→1变化当成伪造演员。
     static bool AllowedChampionPromotion(DungeonPlannedMonster planned, DungeonPlannedMonster resource, DungeonEntryPlan entry) =>
-        DungeonMonsterPlan.CanBecomeChampion(resource) && !entry.NamedMonsters.Contains(resource.MonsterId) &&
-        planned.SpawnType == 1 && entry.ChampionPercents.Percent(entry.Difficulty) > 0;
+        planned.SpawnType == 1 && DungeonMonsterPlan.CanBecomeChampion(resource) &&
+        !entry.NamedMonsters.Contains(resource.MonsterId) && entry.ChampionPercents.Percent(entry.Difficulty) > 0;
 
     // 等级只在房间首次安装时冻结；AI参数每次安装都重新解析，回访不沿用上一次访问的配置。
     // 组队各角色共享同一个冻结控制器，同房安装仍取同一份快照。
@@ -612,6 +624,9 @@ internal sealed partial class SinglePlayerDungeonRun
 
     // 本次房间访问冻结的AI参数；null 表示冻结时功能关闭，不发送私有包。
     internal MonsterAiProfile? CurrentMonsterAi => current.MonsterAi;
+    internal DungeonLanding? InitialHelperLanding => entry.HelperRotation is not null && LastLoadingFact is null &&
+        Phase == SinglePlayerDungeonPhase.Loading && current.Plan.Room.Map == entry.StartMap
+        ? current.Plan.Room.HelperLanding : null;
 
     public DungeonRunResult CompleteLoading(DungeonRunIdentity expected, Guid actionId, bool hasMatchingQuest = false)
     {
@@ -631,7 +646,11 @@ internal sealed partial class SinglePlayerDungeonRun
                 if (!HasLoadedHopeArea(area)) consumedFatigue = checked(consumedFatigue + (uint)hope.FatigueValue);
             }
             else if (entry.StartFatigue > 0 ? first : !allRooms.Any(room => room.Loaded && room.Plan.Room.Map.Id == current.Plan.Room.Map.Id))
-                consumedFatigue = checked(consumedFatigue + (entry.StartFatigue == 0 ? 1u : entry.StartFatigue));
+            {
+                // 入场一次性疲劳只在首次加载计 N。逐房基数默认 1，灾难领域为 3；0 仍按 1，避免漏字段后免费。
+                uint roomCost = entry.StartFatigue > 0 ? entry.StartFatigue : entry.RoomFatigueCost == 0 ? 1u : entry.RoomFatigueCost;
+                consumedFatigue = checked(consumedFatigue + roomCost);
+            }
         }
         acceptedActions.Add(actionId, new(expected, "loaded", null));
         current.Loaded = true;
@@ -680,9 +699,11 @@ internal sealed partial class SinglePlayerDungeonRun
             next = replacement;
         current = next;
         FreezeCurrentRoom();
-        mapOperation = DungeonMapOperation.Current;
+        // 原生普通格选择不会清除该坐标的叠层游标。末层直接离房后折返，
+        // 必须显式恢复基础格，否则客户端仍会用叠层演员缓存重建已死亡的怪物。
+        mapOperation = layerSources.ContainsKey(target) ? DungeonMapOperation.RestoreBase : DungeonMapOperation.Current;
         mapPayload = replaceVisited ? DungeonMapPayload.Refresh : current.Loaded ? DungeonMapPayload.Cached : DungeonMapPayload.Build;
-        pendingLayerBaseAck = null;
+        pendingLayerBaseAck = mapOperation == DungeonMapOperation.RestoreBase ? target : null;
         Phase = SinglePlayerDungeonPhase.Loading;
         Advance();
         return Result(DungeonRunOutcome.Accepted);
@@ -694,6 +715,7 @@ internal sealed partial class SinglePlayerDungeonRun
         Phase == SinglePlayerDungeonPhase.Dungeon && CanAdvance() &&
         current.Elevator is not { Completed: false } &&
         !HasPendingLayer() && rooms.ContainsKey(target) &&
+        (antonTremorTargets is null || target != entry.BossMap.Position || AntonTremorTargetsCommitted) &&
         (CanEvildomWarChallengeWarp(target) ||
             (entry.DungeonId != EvildomWarChallengeEntryPolicy.DungeonId ||
                 current.Plan.Room.Map.Position.Y == 0 && target.Y == 0) &&
@@ -791,6 +813,9 @@ internal sealed partial class SinglePlayerDungeonRun
 
     private bool HasPendingLayer()
     {
+        // 已冻结的物件终末占用整个Boss格；基础Boss死亡和末层空房都不能绕开未提交的物件清图。
+        if (entry.PassiveClearTerminalMap is { } terminal && current.Plan.Room.Map.Position == terminal.Position &&
+            !HasCommittedPassiveClearCondition) return true;
         if (current.Plan.Room.Map.Kind != "layered") return false;
         var layers = entry.Maze.LayeredMaps.Where(map => map.Position == current.Plan.Room.Map.Position).ToArray();
         int index = Array.IndexOf(layers,current.Plan.Room.Map);
@@ -833,12 +858,14 @@ internal sealed partial class SinglePlayerDungeonRun
         if (pendingDeath is not null)
             return SameDeath(pendingDeath.Death, confirmed)
                 ? new(DungeonRunOutcome.Accepted, pendingDeath) : new(DungeonRunOutcome.Rejected);
-        if (!Matches(confirmed.Identity) || Phase is not (SinglePlayerDungeonPhase.Dungeon or SinglePlayerDungeonPhase.Settlement) ||
+        if (MockBattleDefeated || !Matches(confirmed.Identity) || Phase is not (SinglePlayerDungeonPhase.Dungeon or SinglePlayerDungeonPhase.Settlement) ||
             HasPendingSettlement || committedAltarSettlement is not null || committedDespairClear is not null || confirmed.EventId == Guid.Empty ||
             !CanAdvance() || confirmed.CombatSequence <= 0 || combatSequences.Contains(confirmed.CombatSequence) ||
             CurrentLivingMonster(confirmed.MonsterKey) is null || !CanReportTournamentDeath(confirmed.MonsterKey))
             return new(DungeonRunOutcome.Rejected);
         var target = current.Plan.Monsters.Single(monster => monster.ObjectKey == confirmed.MonsterKey);
+        if (entry.IsRevisedBeast && current.Plan.Room.Map.Position == new DungeonPoint(1, 0))
+            return PrepareRevisedBeastDeath(confirmed, target);
         bool conditionClears = !entry.IsClassExperience && Phase == SinglePlayerDungeonPhase.Dungeon && MatchesClearCondition(target) &&
             !HasPendingBossDeaths(confirmed.MonsterKey);
         // TAG终末尚无自己的到账合同；真实怪物死亡可提交，但不能产生普通翻牌/任务通关许可。
@@ -983,6 +1010,7 @@ internal sealed partial class SinglePlayerDungeonRun
         if (prepared.Result.ClearFact is { } clear)
             ClearFact = clear;
         pendingDeath = null;
+        ConfirmRevisedBeastDeath(prepared);
         RecordHopeTarget(prepared);
         return prepared.Result;
     }
@@ -1005,7 +1033,7 @@ internal sealed partial class SinglePlayerDungeonRun
         ArgumentNullException.ThrowIfNull(fact);
         ArgumentNullException.ThrowIfNull(reward);
         if (entry.LostLand is not null || tagEvildom is not null || entry.IsPractice || entry.DungeonId is >= 11008 and <= 11107 || !ReferenceEquals(ClearFact, fact) || fact.Identity != identity || Phase != SinglePlayerDungeonPhase.Settlement ||
-            HasPendingDeath || reportBody.IsEmpty || reportBody.Length > 4096 || reward.TotalExperience == 0 && !entry.IsTutorial && !entry.DisableMonsterAndClearExperience ||
+            HasPendingDeath || reportBody.IsEmpty || reportBody.Length > 4096 || reward.TotalExperience == 0 && !entry.AllowsZeroClearExperience ||
             entry.DisableMonsterAndClearExperience && reward.TotalExperience != 0 ||
             (ulong)reward.BaseExperience + reward.RankExperience + reward.ExtraExperience != reward.TotalExperience || reward.RankBonusIndex is < -1 or > 4 ||
             string.IsNullOrWhiteSpace(reward.RuleId) || reward.RuleId.Length > 128 ||
@@ -1241,6 +1269,8 @@ internal sealed partial class SinglePlayerDungeonRun
 
     private bool TerminalBossCleared(ushort? preparedMonsterKey = null, bool passiveConfirmed = false)
     {
+        if (antonTremorTargets is not null) return IsTerminalRoom() && AntonTremorTargetsCommitted &&
+            (passiveClearTarget is null || HasCommittedPassiveClearCondition || passiveConfirmed);
         if (current.Altar is { } altar)
             return IsTerminalRoom() && (altar.Completed || altar.CanComplete(current.Dead, preparedMonsterKey));
         // 正常通关由当前终点Boss死亡决定；未走过的支路不属于全图清怪要求。

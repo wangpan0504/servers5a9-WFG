@@ -44,10 +44,14 @@ internal sealed class RaidDungeonCatalog(RaidScript script, ImmutableDictionary<
 
     // 显式映射也供资源修复工具校验；不扫描文件名，不将缺项补成0或按DGN编号拼路径。
     internal static RaidDungeonCatalog Load(PvfArchive pvf, RaidResources resources, Func<int, string?> mapPath, byte type = 0,
-        IReadOnlyDictionary<int, string>? supplementalMaps = null)
+        IReadOnlyDictionary<int, string>? supplementalMaps = null, bool preyTeam = false)
     {
         if (type is not (0 or 1 or 2 or 3)) throw new InvalidDataException("未登记团本目录类型");
-        string prefix = type switch { 0 => "dungeon/anton/", 1 => "dungeon/luke/", 2 => "dungeon/fiendwar_kr/", _ => "dungeon/kcontents3/isysraid_guide/" };
+        string prefix = type switch
+        {
+            0 => "dungeon/anton/", 1 => "dungeon/luke/", 2 => "dungeon/fiendwar_kr/",
+            3 when preyTeam => "dungeon/", _ => "dungeon/kcontents3/isysraid_guide/"
+        };
         var maps = new Dictionary<int, string>();
         var missing = ImmutableArray.CreateBuilder<int>();
         foreach (int id in resources.Dungeons.SelectMany(row => row.MapIds).Concat(supplementalMaps?.Keys ?? []).Distinct().Order())

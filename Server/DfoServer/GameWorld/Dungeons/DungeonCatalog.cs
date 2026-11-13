@@ -23,6 +23,8 @@ internal sealed record DungeonMap(string Kind, DungeonPoint Position, int Id, st
     public IReadOnlyList<int> CandidateIds { get; init; } = Array.Empty<int>();
     public IReadOnlyList<int> CandidateWeights { get; init; } = Array.Empty<int>();
 }
+// 仅由已核验的任务回放单房投影设置；不作为普通迷宫或解析器的通用豁免。
+internal sealed record DungeonQuestReplayRoom(uint QuestId, DungeonMap Map);
 internal sealed record DungeonRawSection(string Tag, IReadOnlyList<PvfToken> Tokens);
 // 实验性（未在95客户端实证）：深渊派对房间 = （maze 内或副本头）[hell dungeon] 1 + [seal door map index]（深渊房间地图）+ [seal door pos]（该房间在迷宫内的坐标）。
 // 依据参考项目 dungeon_hell_room.go（对应 A21 FindHellMapRoom/TryBuildSealDoorHellPartyRoom）。
@@ -46,6 +48,8 @@ internal sealed record DungeonMaze(
     IReadOnlyList<DungeonMap>? MapSpecification,
     IReadOnlyList<PvfToken> QuestConnectionTokens)
 {
+    // 显式单格任务回放的零出口身份；普通资源保持 null 并继续走完整 Greed 拓扑。
+    public DungeonQuestReplayRoom? QuestReplayRoom { get; init; }
     // 实验性：只有普通（非任务连接）maze 带密门深渊房间时才非空；任务 maze 带 [escape hell]，不属于深渊派对。
     public DungeonHellPartyRoom? HellParty { get; init; }
     // 实验性：深渊房间地图的 PVF 路径（[seal door map index] 对应的 map 文件），用于把 HellParty.Room 处的普通房间换成深渊房间。
@@ -63,6 +67,7 @@ internal sealed record DungeonMaze(
     public IReadOnlyList<DungeonWarpMap> WarpMaps { get; init; } = Array.Empty<DungeonWarpMap>();
     public IReadOnlyList<DungeonMap> ConditionalMaps { get; init; } = Array.Empty<DungeonMap>();
     public IReadOnlyList<DungeonClearCondition> ClearConditions { get; init; } = [];
+    public IReadOnlyList<DungeonClearPartyBuffCard> ClearPartyBuffCards { get; init; } = [];
     public IReadOnlyList<DungeonRandomizedObject> RandomizedObjects { get; init; } = [];
     public IReadOnlyList<DungeonRandomizedObjectGroup> RandomizedObjectGroups { get; init; } = [];
     public string? ResourceError { get; init; }
@@ -83,6 +88,7 @@ internal sealed record DungeonMaze(
     // 实验性（#259）：比赛副本的 1x1 单图迷宫，地图取自 PVF 地图反向 [dungeon] 声明。
     public bool IsTournament { get; init; }
     public DungeonMap? WeddingCoupleRoom { get; init; }
+    public DungeonMap? MockBattleRoom { get; init; }
     // 仅识别已确认的三个整数；原始 token 继续保留给资源诊断。
     public bool ConnectsQuest(uint questId, byte difficulty = 0, int state = 0) => QuestConnectionTokens.Count == 3 &&
         QuestConnectionTokens.All(token => token.Type == 0) &&
@@ -102,6 +108,7 @@ internal sealed record DungeonMaze(
         SameMaps(MapAlternatives, other.MapAlternatives) && SameMaps(DummyStages, other.DummyStages) &&
         SameMaps(StoryStages, other.StoryStages) && SameMaps(ConditionalMaps, other.ConditionalMaps) &&
         WarpMaps.SequenceEqual(other.WarpMaps) && ClearConditions.SequenceEqual(other.ClearConditions) &&
+        ClearPartyBuffCards.SequenceEqual(other.ClearPartyBuffCards) &&
         RandomizedObjects.SequenceEqual(other.RandomizedObjects) &&
         SameObjectGroups(RandomizedObjectGroups, other.RandomizedObjectGroups) &&
         IsBossRush == other.IsBossRush && IsInfernoSpecial == other.IsInfernoSpecial && SameEntrance(BossEntrance, other.BossEntrance);
@@ -144,6 +151,7 @@ internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel,
 {
     public int? LimitTimeSeconds => RawSections.Where(row => row.Tag == "limit time").ToArray() is
         [{ Tokens: [{ Type: 0, Value: > 0 } seconds] }] ? seconds.Value : null;
+    public ImmutableHashSet<int> DisjointForbiddenDropRarities { get; init; } = ImmutableHashSet<int>.Empty;
     // 客户端逐段覆盖；舰炮先声明4，raid段再声明12，取最后一段而非拒绝重复标签。
     public int? CoinLimit => RawSections.LastOrDefault(row => row.Tag == "coin limit") is
         { Tokens: [{ Type: 0, Value: >= 0 } count] } ? count.Value : null;
@@ -157,8 +165,18 @@ internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel,
     public int DummyAppearCount => RawSections.Where(row => row.Tag == "dummy appear count").ToArray() is
         [{ Tokens: [{ Type: 0, Value: >= 0 and < ushort.MaxValue } count] }] ? count.Value : 0;
     public string? DungeonType { get; init; }
+    public IReadOnlyList<int> EnterRandomDungeons => RawSections.Where(row => row.Tag == "enter random dungeon list").ToArray() switch
+    {
+        [] => [],
+        [var row] when row.Tokens.Count > 0 && row.Tokens.All(token => token.Type == 0 && token.Value > 0) =>
+            row.Tokens.Select(token => token.Value).ToArray(),
+        _ => throw new InvalidDataException("随机副本列表必须是唯一非空整数段")
+    };
     // 仅三个正式泰波尔斯模式，任务版与升级版继续走各自合同。
     public bool IsTayberrs => Id is 291100320 or 291100322 or 5349 && WarriorsDungeon == "Tayberrs";
+    public bool IsTayberrsStory => Id == 291100321 &&
+        string.Equals(Path, "dungeon/legend/tayberrs/tayberrs_quest.dgn", StringComparison.OrdinalIgnoreCase);
+    public SpecialDungeonClearReward? SpecialClearReward { get; init; }
     public bool IsOperationHope => RawSections.Where(row => row.Tag == "operation hope dungeon").ToArray() is
         [{ Tokens: [{ Type: 0, Value: 1 }] }];
     public bool IsTutorial => RawSections.Where(row => row.Tag == "tutorial dungeon").ToArray() is
@@ -197,6 +215,8 @@ internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel,
         [{ Tokens: [{ Type: 0, Value: > 0 and <= ushort.MaxValue } quest] }] ? quest.Value : 0;
     // [tournament dungeon] 1：魂·黄龙/青龙大会等比赛副本（实验性，依据来自 Go 项目反汇编）。
     public bool IsTournament => RawSections.Where(row => row.Tag == "tournament dungeon").ToArray() is [{ Tokens: [{ Type: 0, Value: 1 }] }];
+    public ushort? TournamentRoundFatigue => RawSections.Where(row => row.Tag == "tournament round fatigue").ToArray() is
+        [{ Tokens: [{ Type: 0, Value: >= 0 and <= ushort.MaxValue } amount] }] ? (ushort)amount.Value : null;
     public DungeonTournamentRewards? TournamentRewards { get; init; }
     // 团本：raid dungeon=1，raid normal dungeon/anton dungeon 为无参标记。冒险团推荐通关不计团本。
     public bool IsRaid => RawSections.Any(row => row.Tag == "raid dungeon" && row.Tokens is [{ Type: 0, Value: 1 }]) ||
@@ -213,10 +233,10 @@ internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel,
     public bool IsDazzlementTower => string.Equals(DungeonType?.Trim(), "tower of dazzlement", StringComparison.OrdinalIgnoreCase);
     // GM伴侣AIC只在普通副本注入。祭坛（[blood dungeon]）、塔与亡者峡谷各图由资源自带AI演员、
     // 波次或楼层合同，再叠加伴侣会与地图断言、重复演员或楼层规则冲突；按资源标记整类排除，新增同类副本自动覆盖。
-    // Boss Rush（337）由用户指定放行，与普通副本同一合同。
     static readonly string[] CompanionBlockedTypes = ["advance altar", "tower of death", "tower of boss"];
-    public bool AllowsCompanionAi => AltarKind == 0 && !IsDespairTower && !IsDazzlementTower &&
+    public bool AllowsCompanionAi => AltarKind == 0 && !IsDespairTower && !IsDazzlementTower && !IsBossRushDungeon &&
         !RequiresGriefEntryContract && !Path.StartsWith("dungeon/towers/", StringComparison.OrdinalIgnoreCase) &&
+        !Path.StartsWith("dungeon/boss_rush/", StringComparison.OrdinalIgnoreCase) &&
         !CompanionBlockedTypes.Contains(DungeonType?.Trim() ?? "", StringComparer.OrdinalIgnoreCase);
     // 0409EC16 把唯一整数收成非零字节；本资源里合法形状是单独的 1。
     public bool EnterWithoutFatigue => RawSections.Where(row => row.Tag == "enter without fatigue").ToArray() is
@@ -276,7 +296,26 @@ internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel,
     // [required item] 物品 数量 第三列：只识别三个整数且前两项为正的单行声明；第三列含义未确认，原样保留。
     public DungeonRequiredItem? RequiredItem => RawSections.Where(row => row.Tag == "required item").ToArray() is
         [{ Tokens: [{ Type: 0, Value: > 0 } item, { Type: 0, Value: > 0 } count, { Type: 0 } flag] }] ? new(item.Value, count.Value, flag.Value) : null;
+    public bool DisableItemDrops => RawSections.Any(row => row.Tag == "disable drop item" && row.Tokens.Count == 0);
     public bool DisableClearReward => RawSections.Any(row => row.Tag == "disable clear reward" && row.Tokens.Count == 0);
+    // 040974CC读取[forced create delilah]单整数并复制到Dungeon+0x54E；仅识别唯一整数1声明。
+    public bool ForcedCreateDelilah => RawSections.Where(row => row.Tag == "forced create delilah").ToArray() is
+        [{ Tokens: [{ Type: 0, Value: 1 }] }];
+    // 只采用完整结果块中的唯一整数0；缺省或未确认形状不改变原结算入口。
+    public bool HasNoResultBoard
+    {
+        get
+        {
+            var markers = RawSections.Select((section, index) => (Section: section, Index: index))
+                .Where(row => row.Section.Tag is "dungeon clear result" or "/dungeon clear result").ToArray();
+            if (markers is not [{ Section: { Tag: "dungeon clear result", Tokens.Count: 0 } },
+                { Section: { Tag: "/dungeon clear result", Tokens.Count: 0 } }])
+                return false;
+            var block = RawSections.Skip(markers[0].Index + 1).Take(markers[1].Index - markers[0].Index - 1).ToArray();
+            return block.All(section => section.Tag is "reward card" or "result board") &&
+                block.Where(section => section.Tag == "result board").ToArray() is [{ Tokens: [{ Type: 0, Value: 0 }] }];
+        }
+    }
     public bool AllowsPractice => !IsTutorial && !IsClassExperience && !IsTournament && Id != 5000 &&
         RawSections.Where(row => row.Tag == "prohibit practice").All(row => row.Tokens is [{ Type: 0, Value: 0 }]);
     // 强袭任务副本均带 [disable black diamond card reward]（无值标记）：通关翻牌不提供黑钻额外卡。
@@ -358,11 +397,15 @@ internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel,
             // 普雷妮十五图仅声明difficulty 2，匹配客户端正常16请求也发2；不能按缺省0拒绝。
             if (IsOrdinaryPrey && designated.Length == 0)
                 return difficulty == 2 && plain is [{ Tokens: [{ Type: 0, Value: 2 }] }];
+            // 星河两图只声明固定难度2，真实选图请求也发2；不套用缺省零难度。
+            if (EpicRoadResourcePaths.Dungeons.GetValueOrDefault(Id) == Path && designated.Length == 0)
+                return difficulty == 2 && plain is [{ Tokens: [{ Type: 0, Value: 2 }] }];
             // 月轮山巨龙三图只声明固定难度1，没有普通五档难度表，不能按缺省0拒绝。
             if (Id is >= 3200 and <= 3202 && Path.StartsWith("dungeon/event/dragon_kurun_kor/", StringComparison.OrdinalIgnoreCase) && designated.Length == 0)
                 return difficulty == 1 && plain is [{ Tokens: [{ Type: 0, Value: 1 }] }];
-            // 普雷引导、漩涡正式图只有difficulty声明；正式团本授权仍由原Battle签发。
+            // 普雷普通/引导、漩涡正式图只有difficulty声明；正式团本授权仍由原Battle签发。
             if (IsRaid && (Path.StartsWith("dungeon/kcontents3/isysraid_guide/", StringComparison.Ordinal) ||
+                Path.StartsWith("dungeon/gcontents/190307_prey_raid/", StringComparison.Ordinal) ||
                 Path.StartsWith("dungeon/fiendwar_kr/", StringComparison.Ordinal)) && designated.Length == 0)
                 return plain is [{ Tokens: [{ Type: 0, Value: >= 0 and <= 4 } value] }] && difficulty == value.Value;
             return IsTournament && designated.Length == 1 || difficulty == 0;
@@ -421,7 +464,10 @@ internal sealed class DungeonCatalog
     private readonly IReadOnlyDictionary<int, string> dungeons, maps;
     private readonly ConcurrentDictionary<int, Lazy<DungeonDefinition>> definitions = new();
     private readonly Lazy<DungeonMapPool> mapPool;
+    private readonly Lazy<IReadOnlyDictionary<(int Dungeon, byte Difficulty), DungeonMap>> revisedBeastBossMaps;
     private readonly Lazy<GriefTowerCatalog> griefTower;
+    private readonly Lazy<StackableDungeonLimitCatalog> stackableLimits;
+    internal StackableDungeonLimitCatalog StackableLimits => stackableLimits.Value;
     private readonly Lazy<BossRushCatalog> bossRush;
     private readonly Lazy<DungeonAltarAdmissionCatalog> altarAdmission;
     public DungeonAltarAdmissionCatalog AltarAdmission => altarAdmission.Value;
@@ -435,11 +481,15 @@ internal sealed class DungeonCatalog
     public PreyNormalCatalog PreyNormal => preyNormal.Value;
     private readonly Lazy<AntonNormalSequenceCatalog> antonNormalSequence;
     public AntonNormalSequenceCatalog AntonNormalSequence => antonNormalSequence.Value;
+    private readonly Lazy<ImmutableDictionary<int, SpecialDungeonClearReward>> specialClearRewards;
+    public ImmutableDictionary<int, SpecialDungeonClearReward> SpecialClearRewards => specialClearRewards.Value;
     private DungeonCatalog(PvfArchive archive, IReadOnlyDictionary<int, string> dungeons, IReadOnlyDictionary<int, string> maps)
     {
         (this.archive, this.dungeons, this.maps) = (archive, dungeons, maps);
         mapPool = new(() => DungeonMapPool.Load(archive,maps),LazyThreadSafetyMode.ExecutionAndPublication);
+        revisedBeastBossMaps = new(() => RevisedBeastLayout.ReadBossMaps(archive, maps),LazyThreadSafetyMode.ExecutionAndPublication);
         griefTower = new(() => new GriefTowerCatalog(archive),LazyThreadSafetyMode.ExecutionAndPublication);
+        stackableLimits = new(() => new StackableDungeonLimitCatalog(archive), LazyThreadSafetyMode.ExecutionAndPublication);
         bossRush = new(() => new BossRushCatalog(archive),LazyThreadSafetyMode.ExecutionAndPublication);
         altarAdmission = new(() => DungeonAltarAdmissionCatalog.Load(archive),LazyThreadSafetyMode.ExecutionAndPublication);
         despair = new(() => TowerOfDespairCatalog.Load(archive),LazyThreadSafetyMode.ExecutionAndPublication);
@@ -447,7 +497,13 @@ internal sealed class DungeonCatalog
         ekernCycle = new(() => EkernCycleCatalog.Load(archive),LazyThreadSafetyMode.ExecutionAndPublication);
         preyNormal = new(() => PreyNormalCatalog.Load(archive), LazyThreadSafetyMode.ExecutionAndPublication);
         antonNormalSequence = new(() => AntonNormalSequenceCatalog.Load(archive), LazyThreadSafetyMode.ExecutionAndPublication);
+        specialClearRewards = new(() => archive.Contains(DungeonCardPriceCatalog.ResourcePath)
+            ? DungeonSpecificCardRewards.ParseSpecialClearRewards(archive.ReadTokens(DungeonCardPriceCatalog.ResourcePath), archive.ResolveString)
+            : ImmutableDictionary<int, SpecialDungeonClearReward>.Empty, LazyThreadSafetyMode.ExecutionAndPublication);
     }
+    public DungeonMaze RevisedBeastMaze(int id, byte difficulty = 0) =>
+        RevisedBeastLayout.Read(Get(id), archive.ResolveString, maps, archive.Contains, revisedBeastBossMaps.Value, difficulty);
+
     public int DungeonCount => dungeons.Count;
     public bool ContainsDungeon(int id) => dungeons.ContainsKey(id);
     // 裂缝1/2/3资源是同一地区的不同子变体，选图只列第一份；奖励核查不能只覆盖选图入口。
@@ -471,13 +527,14 @@ internal sealed class DungeonCatalog
     public GriefTowerCatalog GriefTower => griefTower.Value;
     public BossRushCatalog BossRush => bossRush.Value;
 
-    public static DungeonCatalog Load(PvfArchive pvf)
+    public static DungeonCatalog Load(PvfArchive pvf, IReadOnlyDictionary<int, string>? supplementalDungeons = null,
+        IReadOnlyDictionary<int, string>? supplementalMaps = null)
     {
 
         // 这里只加载两个目录；未知副本的脚本不会因加载目录而被强制解析。
-        var dungeons = ParseDirectory(pvf.ReadTokens("dungeon/dungeon.lst"), pvf.ResolveString, "dungeon");
-        var maps = ParseDirectory(pvf.ReadTokens("map/map.lst"), pvf.ResolveString, "map");
-        return new(pvf, dungeons, maps);
+        var dungeons = ParseDirectory(pvf.ReadTokens("dungeon/dungeon.lst"), pvf.ResolveString, "dungeon", supplementalDungeons);
+        var maps = ParseDirectory(pvf.ReadTokens("map/map.lst"), pvf.ResolveString, "map", supplementalMaps);
+        return new(pvf, dungeons, RevisedBeastLayout.ReadMapPaths(pvf, maps));
     }
 
     public DungeonDefinition Get(int id)
@@ -490,6 +547,8 @@ internal sealed class DungeonCatalog
             var definition = ParseResource(id, path, archive.ReadTokens(path), archive.ResolveString, maps, archive.Contains);
             if (definition.IsTournament)
                 definition = definition with { TournamentRewards = DungeonTournamentRewards.Parse(definition) };
+            if (definition.IsTayberrs && SpecialClearRewards.TryGetValue(id, out var specialClear))
+                definition = definition with { SpecialClearReward = specialClear };
             if (!definition.RequiresGriefEntryContract) return definition;
             if (!GriefTower.FloorsByDungeon.TryGetValue(id, out var floor))
                 throw new InvalidDataException("悲叹副本未登记于楼层专表: " + id);
@@ -519,11 +578,56 @@ internal sealed class DungeonCatalog
             maze = maze with { MapSpecification = maps };
         }
         // 先按当前房间用途区分普通、dummy和Boss候选，不能提前将混合候选随机压成单图。
-        if (maze.ResourceError is null && maze.QuestConnectionTokens.Count == 0 &&
-            (!maze.StaticTopology.Supported || maze.Starts.Count != 1 || maze.Bosses.Count != 1 ||
-             maze.MapAlternatives.Count != 0 || definition.DummyAppearCount > 0))
+        if (UsesOrdinaryMapPool(definition, maze))
             maze = mapPool.Value.Resolve(definition,maze,choose,hellParty);
         return ResolveMapCandidates(maze,maps,archive.Contains,choose);
+    }
+
+    static bool UsesOrdinaryMapPool(DungeonDefinition definition, DungeonMaze maze) =>
+        maze.ResourceError is null && maze.QuestConnectionTokens.Count == 0 &&
+        (!maze.StaticTopology.Supported || maze.Starts.Count != 1 || maze.Bosses.Count != 1 ||
+         maze.MapAlternatives.Count != 0 || definition.DummyAppearCount > 0);
+
+    // 仅供静态消费者证明使用；临时排除确实不可选的显式候选，不改变正式随机池。
+    internal DungeonMaze ResolveStaticConsumerMaze(DungeonDefinition definition, DungeonMaze maze, bool hellParty = false)
+    {
+        var candidate = PrepareStaticConsumerMaze(maze, maps, archive.Contains, UsesOrdinaryMapPool(definition, maze));
+        return ResolveOrdinaryMaze(definition, candidate, _ => 0, hellParty);
+    }
+
+    // 动态MapPool目前按实际kind选择、忽略显式权重；只有原静态路径才按正权重判断可达性。
+    internal static DungeonMaze PrepareStaticConsumerMaze(DungeonMaze maze, IReadOnlyDictionary<int, string> paths,
+        Func<string, bool> exists, bool dynamicPool)
+    {
+        if (maze.ResourceError is not null) return maze;
+        return maze with
+        {
+            MapSpecification = maze.MapSpecification?.Select(map => Filter(map, alternative: false)).ToArray(),
+            MapAlternatives = maze.MapAlternatives.Select(map => Filter(map, alternative: true)).ToArray()
+            // LayeredMaps是全部必需层，不是随机候选；固定story首项也不能被其它编号替换。
+        };
+
+        DungeonMap Filter(DungeonMap map, bool alternative)
+        {
+            var ids = map.CandidateIds.Count == 0 ? new[] { map.Id } : map.CandidateIds.Distinct().ToArray();
+            if (ids.Length <= 1 || !alternative && map.StoryStageIndex >= 0) return map;
+            bool alignedWeights = map.CandidateWeights.Count == ids.Length;
+            bool weighted = !dynamicPool && !alternative && alignedWeights;
+            if (weighted && (map.CandidateWeights.Any(weight => weight < 0) || checked(map.CandidateWeights.Sum()) <= 0))
+                throw new InvalidDataException("地图候选权重无效");
+            var indexes = Enumerable.Range(0, ids.Length).Where(index =>
+                (!weighted || map.CandidateWeights[index] > 0) &&
+                ids[index] >= 0 && paths.TryGetValue(ids[index], out var path) && exists(path)).ToArray();
+            // 全空行保留原错误/角色kind处理，不删除整行后启用原本不可用的fallback。
+            if (indexes.Length == 0 || indexes.Length == ids.Length) return map;
+            return map with
+            {
+                CandidateIds = indexes.Select(index => ids[index]).ToArray(),
+                CandidateWeights = alignedWeights
+                    ? indexes.Select(index => map.CandidateWeights[index]).ToArray() : []
+                // 保留原Id/Path，不让清除missing首项意外改变是否进入动态MapPool的判定。
+            };
+        }
     }
 
     internal static DungeonMaze ResolveMapCandidates(DungeonMaze maze, IReadOnlyDictionary<int,string> paths,
@@ -611,7 +715,8 @@ internal sealed class DungeonCatalog
         return Freeze(maps);
     }
 
-    internal static IReadOnlyDictionary<int, string> ParseDirectory(IReadOnlyList<PvfToken> tokens, Func<int, string> resolve, string root)
+    internal static IReadOnlyDictionary<int, string> ParseDirectory(IReadOnlyList<PvfToken> tokens, Func<int, string> resolve, string root,
+        IReadOnlyDictionary<int, string>? supplemental = null)
     {
         if (tokens.Count == 0 || tokens.Count % 2 != 0)
             throw new InvalidDataException("PVF 目录记录不完整: " + root);
@@ -626,6 +731,22 @@ internal sealed class DungeonCatalog
             if (!result.TryAdd(tokens[i].Value, path))
                 throw new InvalidDataException("重复 PVF 目录 ID: " + tokens[i].Value);
         }
+
+        if (supplemental is not null)
+            foreach (var (id, sourcePath) in supplemental)
+            {
+                if (id < 0)
+                    throw new InvalidDataException("PVF 补充目录 ID 无效: " + id);
+                string path = PvfArchive.NormalizePath(sourcePath);
+                if (!path.StartsWith(root + "/", StringComparison.Ordinal) || path.Length == root.Length + 1)
+                    throw new InvalidDataException("PVF 补充目录路径越过资源根: " + root);
+                if (result.TryGetValue(id, out var existing))
+                {
+                    if (existing != path)
+                        throw new InvalidDataException("PVF 补充目录与原登记冲突: " + id);
+                }
+                else result.Add(id, path);
+            }
 
         return result.AsReadOnly();
     }
@@ -709,12 +830,16 @@ internal sealed class DungeonCatalog
         }
 
         Finish();
-        if (mazes.Count == 0)
+        // 灾难领域5340只承载选图与随机实图列表；允许读取元数据，不为入口伪造迷宫。
+        bool disasterEntrance = id == 5340 && dungeonType == "disaster dungeon" &&
+            sections.Any(section => section.Tag == "enter random dungeon list" && section.Tokens.Count > 0);
+        if (mazes.Count == 0 && !disasterEntrance)
             throw new NotSupportedException("unsupported: 未发现 maze info 资源结构");
         return new(id, path, minimum, basis, Freeze(mazes), Freeze(sections))
         {
             DungeonType = dungeonType,
             PersonalCoinInfoLimits = ReadPersonalCoinInfoLimits(),
+            DisjointForbiddenDropRarities = ReadDisjointDropRarities(sections, resolve),
             WarriorsDungeon = sections.Where(section => section.Tag == "warriors dungeon").ToArray() is
                 [{ Tokens: [{ Type: 6 } warriors] }] ? resolve(warriors.Value) : null,
             RoomMoveKeepState = Flag("room move keep state"),
@@ -936,6 +1061,7 @@ internal sealed class DungeonCatalog
         var maze = new DungeonMaze(ordinal,width,height,greed,starts,bosses,specification,quest)
             { IsBossRush = allowOffGridBoss, LayeredMaps = Freeze(layered),OverriddenMaps = Freeze(overridden),MapAlternatives = Freeze(alternatives),StoryStages = Freeze(stages),BossEntrance = entrance,WarpMaps = warps,
                 ClearConditions = DungeonMazeConditions.Clear(mazeSections,resolve),
+                ClearPartyBuffCards = DungeonMazeConditions.ClearPartyBuffCards(mazeSections),
                 RandomizedObjects = DungeonMazeConditions.RandomizedObjects(mazeSections),
                 RandomizedObjectGroups = DungeonRandomizedObjectGroups.Parse(mazeSections, resolve),
                 IsDimensionHiddenBoss = mazeSections.Any(row => row.Tag == "hidden boss maze"),
@@ -1023,6 +1149,28 @@ internal sealed class DungeonCatalog
         }
 
         return Freeze(sections);
+    }
+
+    private static ImmutableHashSet<int> ReadDisjointDropRarities(IReadOnlyList<DungeonRawSection> sections, Func<int, string> resolve)
+    {
+        var declarations = sections.Select((row, index) => (row, index))
+            .Where(pair => pair.row.Tag is "no disjoint drop rarity" or "/no disjoint drop rarity").ToArray();
+        if (declarations.Length == 0) return ImmutableHashSet<int>.Empty;
+        if (declarations is not [{ row.Tag: "no disjoint drop rarity" }, { row: { Tag: "/no disjoint drop rarity", Tokens.Count: 0 } }] ||
+            declarations[1].index != declarations[0].index + 1 || declarations[0].row.Tokens.Count == 0)
+            throw new InvalidDataException("[no disjoint drop rarity] 必须为唯一的完整稀有度块");
+        var result = ImmutableHashSet.CreateBuilder<int>();
+        foreach (var token in declarations[0].row.Tokens)
+        {
+            int rarity = token.Type == 6 ? resolve(token.Value) switch
+            {
+                "common" => 0, "uncommon" => 1, "rare" => 2, "unique" => 3,
+                "epic" => 4, "chronicle" => 5, "legendary" => 6, _ => -1
+            } : -1;
+            if (rarity < 0) throw new InvalidDataException("[no disjoint drop rarity] 含未知稀有度");
+            result.Add(rarity);
+        }
+        return result.ToImmutable();
     }
 
     private static IReadOnlyList<T> Freeze<T>(IEnumerable<T> values) => Array.AsReadOnly(values.ToArray());

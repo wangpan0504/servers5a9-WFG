@@ -43,6 +43,17 @@ internal static class QuestCharacterReward
     // 深渊派对挑战资格类任务只有参数1的形态已核对：奖励只剩经验/金币，服务端没有资格状态，完成即记入已完成。
     // [inferno challenge]（7527/7530/7533/7539/7542）与 [cosmo challenge]（如10112“[超·星空裂缝]”值7191）同理：单个 Type0 Text null 且 Value>0 的奖励，行为与 hell challenge 相同（无资格状态，仅发经验/金币）。
     // 假设：任务6081“[星空裂缝]天空中出现的裂缝”奖励 [hell legend] 值291100268，无原服依据、值含义未知，仅限6081精确放行（形状：单个 Type0 Text null、无选择奖励），行为同深渊资格：只发经验/金币并记为已完成，不写资格状态。Refs #256
+    public static bool TryBeastChallengeScalar(StoryQuest quest, out int value)
+    {
+        value = 0;
+        if (quest.Id != 5927 || quest.RewardType != "[beast dungeon challenge]" ||
+            quest.Rewards is not [{ Type: 0, Text: null, Value: 311 }] || quest.Definition is not { SelectRewards.Length: 0 }) return false;
+        value = 311;
+        return true;
+    }
+
+    public static bool SupportedChallengeReward(StoryQuest quest) => TryHellChallenge(quest) || TryBeastChallengeScalar(quest, out _);
+
     public static bool TryHellChallenge(StoryQuest quest) =>
         (quest.RewardType == "[hell challenge]" && quest.Rewards is [{ Type: 0, Text: null, Value: 1 }] ||
             quest.RewardType is "[inferno challenge]" or "[cosmo challenge]" && quest.Rewards is [{ Type: 0, Text: null, Value: > 0 }] ||

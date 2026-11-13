@@ -32,7 +32,7 @@ internal static partial class PartyDungeonTcpTests
             {
                 var packet = peer.Read();
                 if (packet is { Kind: 1, Opcode: 1347 }) { Bytes(packet.Body, [1], "公会结算TCP屏障"); return rows.ToArray(); }
-                That(packet.Kind == 0 || packet.Opcode is 46 or 140 or 141 or 744 or 905 or 1454,
+                That(packet.Kind == 0 || packet.Opcode is 46 or 140 or 141 or 744 or 905 or 1002 or 1454,
                     $"公会通关结算只接受结算、管理名册、账号公会索引及恶魔卡状态，实际{packet.Kind}/{packet.Opcode}");
                 rows.Add(packet);
             }

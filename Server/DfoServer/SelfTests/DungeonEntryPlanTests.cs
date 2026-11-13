@@ -53,6 +53,20 @@ internal static class DungeonEntryPlanTests
         var ordinary = definition with { Mazes = [maze with { QuestConnectionTokens = [] }] };
         That(DungeonEntryPlan.TryCreate(ordinary, character with { ActiveMainQuests = [] }, 17, 0, 0, out var normal, out _) &&
             normal is { IsOrdinary: true, Difficulty: 0, RouteQuestId: 0 }, "无任务普通入场不变");
+        foreach (var markers in new DungeonRawSection[][]
+        {
+            [], [new("disable drop item", [])],
+            [new("disable drop item", []), new("disable drop item", [])],
+            [new("disable drop item", [new(0, 0)])]
+        })
+        {
+            var declared = ordinary with { RawSections = [.. sections, .. markers] };
+            bool disabled = markers.Any(marker => marker.Tokens.Count == 0);
+            That(declared.DisableItemDrops == disabled && DungeonEntryPlan.TryCreate(declared,
+                character with { ActiveMainQuests = [] }, 17, 0, 0, out var planned, out _) &&
+                planned!.DisableItemDrops == disabled && !planned.DisableClearReward,
+                "普通入场冻结无参数禁掉落声明，重复标记幂等，不误禁独立翻牌");
+        }
         That(!DungeonEntryPlan.TryCreate(definition with { Mazes = [maze with { QuestConnectionTokens = [new(0, 0), new(0, 100), new(0, 2)] }] },
             character, 17, 100, 1, out _, out var connectionReason) && connectionReason == "quest-maze-unavailable",
             "非-1连接第三字段保留精确难度匹配，不擅自解释成最低难度");
@@ -318,6 +332,7 @@ internal static class DungeonEntryPlanTests
 
     public static void Run(PvfArchive pvf)
     {
+        SequentialQuestContinuations(pvf);
         QuestDifficultyRoutes(global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf),
             global::DfoServer.Testing.SelfTestCatalogs.Quests(pvf));
         int checks = Count;
@@ -345,12 +360,17 @@ internal static class DungeonEntryPlanTests
             soul.Mazes.Single().Bosses.SequenceEqual([new DungeonPoint(6,6)]) &&
             soulPlan.Maze.IsBossRush && soulPlan.Maze.StaticTopology.Supported,
             "真实337不耗疲劳，按已有最远格规划结算房且不改共享目录的6,6声明；拓扑只核起点，并冻结 120 秒 BossRush 合同");
-        // GM伴侣只在普通副本注入：祭坛/塔/亡者峡谷按资源标记整类排除，普通副本与Boss Rush保持放行。
-        // 7601 眩惑之塔、11006/11007 两座祭坛、11008 绝望之塔首层。
+        // 按真实亡者峡谷选图清单覆盖全部入口，包括灵魂之冢；楼层与特殊模式继续沿资源标记排除。
         DeathTowerCompanionPolicy(pvf, catalog);
-        That(new[] { 7601, 11006, 11007, 11008 }.All(id => !catalog.Get(id).AllowsCompanionAi) &&
-            catalog.Get(337).AllowsCompanionAi && catalog.Get(3).AllowsCompanionAi && catalog.Get(5097).AllowsCompanionAi,
-            "祭坛、塔与亡者峡谷不注入伴侣AIC，普通副本与Boss Rush保持放行");
+        var valley = TownDungeonMap.Read(0,"worldmap/towers.wdm",pvf.ReadTokens("worldmap/towers.wdm"),pvf.ResolveString);
+        That(valley.Options.Select(row => row.DungeonId).SequenceEqual([11006,11007,11008,5115,7601,337]) &&
+            valley.Options.All(row => !catalog.Get(checked((int)row.DungeonId)).AllowsCompanionAi) &&
+            catalog.Get(3).AllowsCompanionAi && catalog.Get(5097).AllowsCompanionAi && !soulPlan!.AllowsCompanionAi,
+            "亡者峡谷六个入口及灵魂之冢计划均不注入伴侣AIC，普通副本仍可放行");
+        var ordinaryCompanion = new DungeonDefinition(1,"dungeon/ordinary.dgn",null,null,[],[]);
+        That(!(ordinaryCompanion with { DungeonType = "boss rush dungeon" }).AllowsCompanionAi &&
+            !(ordinaryCompanion with { Path = "dungeon/boss_rush/future.dgn" }).AllowsCompanionAi,
+            "灵魂之冢类型与资源目录各自阻止新增同类副本注入伴侣");
         var ekern = new Character(17, 0, "Ekern", 1, new Location(35, 1, 0, 0, 0), null) { Level = 90 };
         var noQuests = new QuestCatalog(new());
         var cosmoCharacter = new Character(18, 0, "CosmoMode", 0, new Location(54, 2, 0, 0), null) { Level = 95 };
@@ -1022,6 +1042,53 @@ internal static class DungeonEntryPlanTests
         var next = DungeonQuestContinuationRules.Resolve(continuing, previous, continuationQuests, catalog, [82], out var nextReason);
         That(next is { Difficulty: 2, RequestedDifficulty: 0, Quest.QuestId: 29988 },
             "后继任务保留自动提升前的原请求值，不用旧实际难度覆盖它：" + nextReason);
+    }
+
+    internal static void SequentialQuestContinuations(PvfArchive pvf)
+    {
+        var quests = global::DfoServer.Testing.SelfTestCatalogs.Quests(pvf);
+        var dungeons = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf);
+        var parent = new ActiveMainQuest(0,3640,3) { AcceptanceId = Guid.NewGuid() };
+        var first = new ActiveMainQuest(1,3686,1) { AcceptanceId = Guid.NewGuid() };
+        var hunt = new ActiveMainQuest(1,3687,1) { AcceptanceId = Guid.NewGuid() };
+        var delivery = new ActiveMainQuest(1,3688,1) { AcceptanceId = Guid.NewGuid() };
+        var character = new Character(1,0,"SequentialNext",0,new(12,1,196,260),null)
+            { Level = 86, CompletedQuests = [3639,3686], ActiveMainQuests = [parent with { ConditionState = 2 },hunt] };
+        var previous = new DungeonEntryPlan(character.Id,character.Revision,517,3640,0,0,null!,null!,null!)
+            { QuestAcceptanceId = parent.AcceptanceId, QuestAcceptances = [parent,first] };
+        string snapshot = System.Text.Json.JsonSerializer.Serialize(character);
+        var next = DungeonQuestContinuationRules.Resolve(character,previous,quests,dungeons,[517,72],out var reason);
+        That(next is { DungeonId: 72, Quest.QuestId: 3687 } && next.Quest.AcceptanceId == hunt.AcceptanceId,
+            "父3640未领奖时，首子3686真实完成后的下一任务进入猎杀D72，不误回城：" + reason);
+        That(DungeonEntryPlan.TryCreate(dungeons,character,72,3687,next!.Difficulty,out var huntEntry,out _,
+                quest:quests.Get(3687),quests:quests) && huntEntry!.Maze.ConnectsQuest(3687,0),
+            "后继规划仍走真实D72九房及原3687接取身份");
+        var afterHunt = character with { CompletedQuests = [3639,3686,3687],
+            ActiveMainQuests = [parent with { ConditionState = 1 },delivery] };
+        next = DungeonQuestContinuationRules.Resolve(afterHunt,huntEntry!,quests,dungeons,[517,72],out reason);
+        That(next is { DungeonId: 517, Quest.QuestId: 3688 } && next.Quest.AcceptanceId == delivery.AcceptanceId,
+            "父内猎杀完成后使用3688交付路线返回D517，不重开3686：" + reason);
+        That(DungeonEntryPlan.TryCreate(dungeons,afterHunt,517,3688,next!.Difficulty,out var deliveryEntry,out _,
+                quest:quests.Get(3688),quests:quests) && deliveryEntry!.Maze.ConnectsQuest(3688,0),
+            "交付后继仍由原准入规则匹配真实地图与NPC，不伪造任务完成");
+        foreach (var rejected in new[]
+        {
+            character with { ActiveMainQuests = [parent with { ConditionState = 2 }] },
+            character with { ActiveMainQuests = [parent with { ConditionState = 2 },delivery] },
+            character with { ActiveMainQuests = [parent with { ConditionState = 2 },hunt with { AcceptanceId = Guid.Empty }] },
+            character with { ActiveMainQuests = [parent with { ConditionState = 2, AcceptanceId = Guid.NewGuid() },hunt] },
+            character with { ActiveMainQuests = [parent with { ConditionState = 3 },hunt] },
+            character with { ActiveMainQuests = [parent with { ConditionState = 2 },hunt,delivery with { Slot = 2 }] },
+            character with { CompletedQuests = [3639], ActiveMainQuests = [parent,first] }
+        })
+            That(DungeonQuestContinuationRules.Resolve(rejected,previous,quests,dungeons,[517,72],out _) is null,
+                "后继未接取、越序、空身份、重接父、错误父状态、多活动子或原子未完成均不能续图");
+        That(DungeonQuestContinuationRules.Resolve(character,previous with { QuestAcceptances = [] },quests,dungeons,[517,72],out _) is null,
+            "不借当前同名父任务修复缺失的原Run接取绑定");
+        That(DungeonQuestContinuationRules.Resolve(character,previous,quests,dungeons,[517],out reason) is null &&
+            reason == "successor-route-unavailable", "后继副本不在当前入口时保留合法准入限制");
+        That(System.Text.Json.JsonSerializer.Serialize(character) == snapshot,
+            "解析下一任务不修改玩家任务、接取身份、物品、奖励或完成记录");
     }
 
     static void OrdinaryHuntRoutes(DungeonCatalog catalog, QuestCatalog quests, DungeonRoomCatalog rooms, Character basis)

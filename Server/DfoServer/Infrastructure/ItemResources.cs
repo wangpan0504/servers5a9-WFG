@@ -23,6 +23,7 @@ internal sealed class ItemResources
     public EquipmentRefinementCatalog Refinement { get; }
     public RandomOptionCatalog RandomOptions { get; }
     public EquipmentTextureChangeCatalog TextureChanges { get; }
+    public TitleChangeCatalog TitleChanges { get; }
     public EquipmentUpgradeCatalog EquipmentUpgrades { get; }
     public EquipmentTransmissionCatalog EquipmentTransmissions { get; }
     public DarkRevelationCatalog DarkRevelations { get; }
@@ -31,7 +32,9 @@ internal sealed class ItemResources
     public DisjointCatalog Disjoint { get; }
     public AvatarDisjointCatalog AvatarDisjoint { get; }
     public EpicPieceCatalog EpicPieces { get; }
+    public EpicPieceBonusDropCatalog EpicPieceBonusDrops { get; }
     public EpicPieceShopCatalog? EpicPieceShop { get; }
+    public SecretShopCatalog? SecretShop { get; }
     public EpicExchangeCatalog EpicExchanges { get; }
     public BoosterCatalog Boosters { get; }
     public RentalCatalog Rental { get; }
@@ -82,7 +85,7 @@ internal sealed class ItemResources
 
     public ItemResources(PvfArchive archive) : this(archive, null) { }
 
-    internal ItemResources(PvfArchive archive, Func<ItemDropDiagnostics>? dropDiagnostics)
+    internal ItemResources(PvfArchive archive, Func<ItemDropDiagnostics>? dropDiagnostics, string? resourcesDirectory = null)
     {
         vendingMachines = new(() => new(archive));
         if (archive.Contains(GameWorld.PcRoom.PcRoomCatalog.PremiumPath) && archive.Contains(GameWorld.PcRoom.PcRoomCatalog.RentalPath))
@@ -98,6 +101,7 @@ internal sealed class ItemResources
         AvatarDisjoint = new(archive);
         EpicPieces = new(archive);
         EpicPieceShop = archive.Contains(EpicPieceShopCatalog.Path) ? EpicPieceShopCatalog.Load(archive) : null;
+        SecretShop = archive.Contains(SecretShopCatalog.Path) ? new(archive) : null;
         EpicExchanges = new(archive);
         var equipment = PvfScript.List(archive.ReadText("equipment/equipment.lst"));
         var stackable = PvfScript.List(archive.ReadText("stackable/stackable.lst"));
@@ -114,10 +118,11 @@ internal sealed class ItemResources
         Items = new(archive, equipment, stackable, Shops.EquipmentSellRate,
             Contracts.RecognizedItems.Union(Boosters.DirectActivationItems).ToHashSet(),
             Contracts.ByItem.Where(row => Contracts.TryAcquisitionContract(row.Key, out _)).ToDictionary(), creatures: Creatures, echon: Echon,
-            newEchon: NewEchon, acquisitionCargo: Cargo.AcquisitionItems);
+            newEchon: NewEchon, acquisitionCargo: Cargo.AcquisitionItems, questDropSets: new(archive));
         // 匹配客户端02160930加载器固定读取ShieldWindowNewData.etc，不能并集旧任务表。
         KnightShields = KnightShieldCatalog.Load(archive, KnightShieldCatalog.CurrentPath, Items);
         epicPieceDrops = new(() => new(EpicPieces, Items.Get));
+        EpicPieceBonusDrops = new(archive, Items);
         expertJobs = new(() => ExpertJobScriptCatalog.Load(archive, Items, stackable));
         CollectBoxes = new(archive, Items);
         CashShop = CashShopCatalog.Load(archive);
@@ -147,6 +152,7 @@ internal sealed class ItemResources
         Skins = new(archive, stackable);
         RandomOptions = new(archive, equipment);
         TextureChanges = new(archive, equipment);
+        TitleChanges = new(archive);
         EquipmentUpgrades = new(archive);
         EquipmentTransmissions = new(archive);
         DarkRevelations = new(archive, equipment);
@@ -162,7 +168,7 @@ internal sealed class ItemResources
         MagicBoxes = new(archive, stackable);
         Rental = RentalCatalog.Load(archive);
         attributePairs = new(() => IndependentAttributePairCatalog.Load(
-            Path.Combine(AppContext.BaseDirectory, "Resources", "independent-attribute-pairs.json"),
+            Path.Combine(resourcesDirectory ?? Path.Combine(AppContext.BaseDirectory, "Resources"), "independent-attribute-pairs.json"),
             Items, Boosters, LimitCubes, Enchantments, EpicPieces, Contracts,
             id => Game.Currency.CurrencyWallet.RewardKind(id) is not null, useBundledDefault: true));
     }

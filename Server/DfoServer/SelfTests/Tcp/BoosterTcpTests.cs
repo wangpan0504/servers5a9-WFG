@@ -364,6 +364,9 @@ internal static class BoosterTcpTests
         PlainCooldown(fixture, resources, repo, owners, clock);
         DungeonPlaces(fixture, resources, repo, owners);
         EmptyBonus(fixture, resources, repo, owners);
+        EpicMarker(fixture, resources, repo, owners);
+        SetExpirationDebug(fixture, false);
+        DisguiseBoxes(fixture, resources, repo, owners);
         await fixture.StopAsync();
         That(File.ReadLines(Path.Combine(fixture.Options.LogDirectory, "server.jsonl")).Count(line =>
         {
@@ -373,7 +376,8 @@ internal static class BoosterTcpTests
                 data.GetProperty("Detail").GetProperty("Reason").GetString() == "SqliteException" &&
                 data.GetProperty("Detail").GetProperty("Message").GetString() == "SQLite Error 19: 'moon bonus rollback'.";
         }) == 1, "月兔礼盒故障断线来自唯一一次末段SQL注入");
-        That(fixture.Query("SELECT gold FROM characters WHERE slot=0") is [[12345L]], "ordinary boxes never infer an extra gold fee");
+        That(fixture.Query("SELECT gold FROM characters WHERE account=$p0 AND slot=0", fixture.Options.DevelopmentAccount) is [[12345L]],
+            "ordinary boxes never infer an extra gold fee");
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0, "booster database integrity");
 
         ItemCore Core(int id, int count = 1) => InventoryRewardGrantService.Create(itemResources.Items.Get(id), count);
@@ -677,7 +681,11 @@ internal static class BoosterTcpTests
             FormalDungeonTcpTests.Enter(peer);
             RejectSource(peer, 65, "Loading阶段不能消费副本礼包");
             FormalDungeonTcpTests.Load(peer, fatigue: false);
-            peer.Expect(0, 36, [0, 0, 156, 0, 0, 0, 156, 0, 0, 0]);
+            byte[] fatigueBody = peer.Expect(0, 36).Body;
+            byte[] expectedFatigue = [1, 0, 156, 0, 0, 0, 0, 0, 0, 0];
+            That(fatigueBody.SequenceEqual(expectedFatigue), $"副本疲劳正文：实际 {Convert.ToHexString(fatigueBody)}，预期 {Convert.ToHexString(expectedFatigue)}");
+            That(fixture.Query("SELECT used,maximum,used_maximum,remaining,context_auxiliary FROM character_fatigue WHERE character_id=$p0", created.Id)
+                is [[1L, 156L, 0L, 155L, 0L]], "剧情首房加载后的疲劳通知与已提交账本一致");
             RejectSource(peer, 67, "仅城镇与房间礼盒在已加载正式副本仍拒绝");
             OpenAndVerify(peer, 2);
         }
@@ -894,6 +902,129 @@ internal static class BoosterTcpTests
             fixture.Snapshot("SELECT * FROM inventory_audit_log ORDER BY audit_id") +
             fixture.Snapshot("SELECT * FROM currency_audit_log ORDER BY audit_id") +
             fixture.Snapshot("SELECT * FROM sqlite_sequence ORDER BY name");
+    }
+
+    static void EpicMarker(TcpTestFixture fixture, TcpTestResources resources, CharacterRepository repo, AccountOwners owners)
+    {
+        const int sourceId = 490703923;
+        var items = resources.ItemResources;
+        Character actor;
+        using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
+            actor = repo.Create(owner, CharacterCreation.Prepare("EpicRandom", resources.Characters.Get(0),
+                resources.Towns.Room, resources.Towns.InitialReturn, resources.Learning.Get) with
+            { AcceptedStoryLevel = 1, Inventory = new([new(0, Bag(65), InventoryRewardGrantService.Create(items.Items.Get(sourceId), 2,
+                fixture.UtcNow))], Gold: 12345) });
+        using (var peer = Open(fixture))
+        {
+            peer.Select(actor.Slot); peer.Barrier();
+            SendOpen(peer, 65, 2);
+            byte[] ack = peer.Expect(1, 160).Body;
+            int count = U16(ack, 16);
+            That(ack.Length == 18 + count * 8 && ack[0] == 1 && U32(ack, 2) == sourceId && U16(ack, 6) == 65,
+                "鸿运随机礼盒返回完整原生成功头和所有奖励行");
+            var rewards = Enumerable.Range(0, count).Select(index =>
+                (Id: (int)U32(ack, 18 + index * 8), Count: (int)U32(ack, 22 + index * 8))).ToArray();
+            That(rewards.Sum(row => row.Count) == 2 && rewards.All(row => row.Count > 0 &&
+                items.Boosters.Get(sourceId).Pools[0].Rewards.Any(candidate => candidate.ItemId == row.Id)),
+                "鸿运随机礼盒批量两次抽取的ACK总量与真实候选一致");
+            byte[] delta = peer.Expect(0, 14).Body;
+            Entry(delta, 65, -1, 0);
+            peer.Barrier();
+            var saved = Read();
+            That(saved.Inventory.Find(Bag(65)) is null && saved.Inventory.Gold == 12345 && saved.Inventory.Items.Length == 2 &&
+                saved.Inventory.Items.GroupBy(item => item.Core.ItemId).Select(group => (Id: group.Key, Count: group.Count()))
+                    .OrderBy(row => row.Id).SequenceEqual(rewards.OrderBy(row => row.Id)),
+                "鸿运随机盒实际落库两件完整装备、源耗尽且金币保持");
+            foreach (var reward in saved.Inventory.Items)
+            {
+                That(reward.Uid > 0 && reward.Core == (InventoryRewardGrantService.Create(items.Items.Get(reward.Core.ItemId),
+                    utcNow: fixture.UtcNow) with { EpicExchangeOrigin = new(1, sourceId) }),
+                    "随机礼盒来源与禁交换状态随完整实例落库");
+                Entry(delta, reward.Position.Index, reward.Core.ItemId, reward.Core.Value);
+            }
+            string committed = JsonSerializer.Serialize(saved);
+            SendOpen(peer, 65, 2); peer.Expect(1, 160, [0, 19, 0]); peer.Barrier();
+            That(JsonSerializer.Serialize(Read()) == committed, "鸿运盒耗尽重放不再产生奖励");
+        }
+        using (var peer = Open(fixture))
+        {
+            byte[] full = peer.Select(actor.Slot)[4].Body;
+            foreach (var reward in Read().Inventory.Items)
+            {
+                Entry(full, reward.Position.Index, reward.Core.ItemId, reward.Core.Value, true);
+                That(reward.Core.Extension119 == 0 && reward.Core.EpicExchangeOrigin == new EpicExchangeOrigin(1, sourceId),
+                    "随机盒重连恢复完整来源和禁止交换状态");
+            }
+            peer.Barrier();
+        }
+        Character Read()
+        {
+            using var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { });
+            return repo.List(owner).Single(role => role.Id == actor.Id);
+        }
+    }
+
+    static void DisguiseBoxes(TcpTestFixture fixture, TcpTestResources resources, CharacterRepository repo, AccountOwners owners)
+    {
+        const string account = "disguise-box";
+        Character actor;
+        var items = resources.ItemResources.Items;
+        using (var owner = owners.Acquire(account, () => { }))
+            actor = repo.Create(owner, CharacterCreation.Prepare("CosBoxes", resources.Characters.Get(0),
+                resources.Towns.Room, resources.Towns.InitialReturn, resources.Learning.Get) with
+            { AcceptedStoryLevel=1, Inventory=new([new(0,Bag(65),InventoryRewardGrantService.Create(items.Get(10306814))),
+                new(0,Bag(66),InventoryRewardGrantService.Create(items.Get(490010625)))]) });
+        using (var peer = Open(fixture,account))
+        {
+            peer.Select(); peer.Barrier();
+            SendOpen(peer,65,1);
+            ExpectAck(peer,10306814,65,[(10306815,1),(10306810,1)]);
+            var saved = Read();
+            var delta = ReceiveDelta(peer,65,saved,2);
+            foreach (int id in new[] { 10306815,10306810 })
+            {
+                var reward = saved.Inventory.Items.Single(row => row.Core.ItemId == id);
+                That(reward.Uid > 0 && reward.Core.Count == 1,"强者之路盒真实CMD160发齐两个COS并保存唯一实例");
+                Entry(delta,reward.Position.Index,id,1);
+            }
+            SendOpen(peer,66,1);
+            ExpectAck(peer,490010625,66,[(490010626,1)]);
+            saved = Read();
+            delta = ReceiveDelta(peer,66,saved,1);
+            var potion = saved.Inventory.Items.Single(row => row.Core.ItemId == 490010626);
+            Entry(delta,potion.Position.Index,490010626,1);
+        }
+        using (var peer = Open(fixture,account))
+        {
+            var full = peer.Select()[4].Body; peer.Barrier();
+            var saved = Read();
+            That(saved.Inventory.Items.All(row => row.Core.ItemId is not (10306814 or 490010625)),
+                "两类引力恶魔盒均已消费，重连不恢复源");
+            foreach (var reward in saved.Inventory.Items)
+                Entry(full,reward.Position.Index,reward.Core.ItemId,reward.Core.Count,true);
+        }
+        Character Read()
+        {
+            using var owner = owners.Acquire(account, () => { });
+            var saved = repo.LoadCharacter(owner,actor.Slot);
+            That(saved.Inventory.Gold == actor.Inventory.Gold,"COS开箱及重连不额外扣除金币");
+            return saved;
+        }
+        static byte[] ReceiveDelta(TcpPeer peer, short slot, Character saved, int rewards)
+        {
+            bool reused = saved.Inventory.Find(Bag(slot)) is not null;
+            if (reused)
+            {
+                byte[] clear = peer.Expect(0,14).Body;
+                That(clear.Length == 126 && U16(clear,1) == 1,"COS源格复用先发送唯一完整删除行");
+                Entry(clear,slot,-1,0);
+            }
+            byte[] delta = peer.Expect(0,14).Body;
+            That(U16(delta,1) == rewards + (reused ? 0 : 1),"COS差量完整包含全部奖励及未复用源删除");
+            if (!reused) Entry(delta,slot,-1,0);
+            peer.Barrier();
+            return delta;
+        }
     }
 
     static InventorySlot Bag(short slot) => new(InventoryListType.Main, slot);

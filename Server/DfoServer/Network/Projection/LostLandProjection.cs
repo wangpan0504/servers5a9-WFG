@@ -54,7 +54,10 @@ internal sealed class LostLandProjection(GameConnectionContext context, TownProj
             }
 
             // 原生结束界面会发空42；未响应时仍在有限等待后沿原回城用例退出，不走普通翻牌。
-            await Task.Delay(ReturnGrace, time ?? TimeProvider.System, stop);
+            var returnGrace = Task.Delay(ReturnGrace, time ?? TimeProvider.System, stop);
+            log.Write("formal_lost_land_timer", new { Connection = context.Id, scheduled.InstanceId,
+                State = "return_grace_started", Seconds = (int)ReturnGrace.TotalSeconds });
+            await returnGrace;
             await context.CommandGate.WaitAsync(stop);
             try
             {

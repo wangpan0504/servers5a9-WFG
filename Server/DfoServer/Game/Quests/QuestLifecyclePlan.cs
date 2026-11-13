@@ -88,6 +88,8 @@ internal sealed class QuestLifecyclePlan
             run.IsPassiveClearCondition(scene.Identity, scene.TemplateId, scene.SourceOrdinal));
 
     static bool AllowsSceneOnly(DungeonEntryPlan entry, QuestSceneEvent scene) => entry.PartyRoute is not null ||
+        entry.RaidEntry is { Kind: DfoServer.Game.Raids.RaidKind.Anton, Phase: 0 } && entry.DungeonId is 212 or 214 &&
+        scene.TemplateId == 15467 && entry.BossMap.Id == scene.MapId ||
         entry.RaidEntry is { Kind: DfoServer.Game.Raids.RaidKind.Luke, Phase: 1 } && entry.LukeEnergyObject is { } binding &&
         entry.Maze.MapSpecification?.SingleOrDefault(map => map.Id == scene.MapId && binding.Room.Kind == map.Kind &&
             binding.Room.Position == map.Position && binding.Room.Path == map.Path) is { } map &&
@@ -158,11 +160,25 @@ internal sealed class QuestLifecyclePlan
             after,inventory,sceneEvent) { SceneClear = sceneClear, SceneClearRun = run };
     }
 
+    internal static QuestLifecyclePlan SetCinematicPassiveClear(Character expected, StoryQuest quest, QuestCatalog quests,
+        DfoServer.Game.Dungeons.DungeonEntryPlan entry, QuestSceneEvent sceneEvent, PreparedDungeonPassiveClear sceneClear,
+        SinglePlayerDungeonRun run)
+    {
+        var conditionPlan = SetCondition(expected, quest, 0, quests);
+        var passivePlan = ObservePassive(conditionPlan.Expected with { ActiveMainQuests = [.. conditionPlan.ActiveAfter] },
+            quests, entry, sceneEvent, drops: null, sceneClear, run)
+            ?? throw new InvalidDataException("演出终末场景清图需要有效迷宫单物件目标");
+        return new(expected, QuestLifecycleAction.Condition, conditionPlan.QuestId, conditionPlan.AcceptanceId,
+            passivePlan.ActiveAfter, conditionPlan.Inventory, passivePlan.SceneEvent)
+            { SceneClear = sceneClear, SceneClearRun = run };
+    }
+
     public static QuestLifecyclePlan Accept(Character expected, StoryQuest quest, QuestCatalog catalog,
         ItemCatalog items, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, DateTimeOffset now, int? pvpGrade = null,
-        bool strongway2019Active = false)
+        bool strongway2019Active = false, bool epicRoad2019Active = false)
     {
-        var eligibility = QuestEligibility.Evaluate(expected, quest, catalog, strongway2019Active: strongway2019Active);
+        var eligibility = QuestEligibility.Evaluate(expected, quest, catalog,
+            strongway2019Active: strongway2019Active, epicRoad2019Active: epicRoad2019Active);
         if (!eligibility.Eligible || !eligibility.Visible && !QuestRelationProgress.DialogueChild(quest, catalog) &&
             !QuestRelationProgress.ThresholdParent(quest,catalog) && !QuestHiddenEntry.Direct(quest,catalog))
             throw new InvalidDataException(eligibility.Reason);
@@ -309,7 +325,10 @@ internal sealed class QuestLifecyclePlan
         bool observedClear = QuestDungeonClearProgress.ValidScalar(quest,scalar) && scalar == active.ConditionState;
         bool observedRental = QuestRentalProgress.Supports(quest) && scalar == 0 && active.ConditionState == 0;
         bool observedEpic = QuestEpicProductionProgress.Supports(quest) && scalar == 0 && active.ConditionState == 0;
-        bool observedEvent = (QuestEventProgress.Supports(quest) || QuestPvpProgress.Supports(quest)) && scalar == active.ConditionState;
+        bool observedEvent = (QuestEventProgress.Supports(quest) || QuestPvpProgress.Supports(quest)) &&
+            (scalar == active.ConditionState ||
+             scalar <= active.ConditionState && quest.TargetKind is QuestTargetKind.UiClick or QuestTargetKind.SendChatting
+                 or QuestTargetKind.CheckTime or QuestTargetKind.CheckLife);
         bool holding = scalar <= 1 && catalog is not null && (quest.TargetKind == QuestTargetKind.CheckItem &&
             scalar == MaterialState(expected.Inventory, quest, DateTimeOffset.UtcNow.ToUnixTimeSeconds(), catalog.Items) ||
             quest.TargetKind == QuestTargetKind.EquippedItem && catalog.Items is { } facts &&

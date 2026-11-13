@@ -1,4 +1,5 @@
 using DfoServer.Game.Inventory.Models;
+using DfoServer.Game.Currency;
 
 namespace DfoServer.Network.Builders.Inventory;
 
@@ -30,7 +31,8 @@ internal static class VendingPackets
             writer.Write((byte)InventoryListType.Main);
             writer.Write(currencySlot);
             writer.Write(reward.ItemId);
-            writer.Write(reward.Count);
+            var kind = CurrencyWallet.RewardKind(reward.ItemId) ?? throw new InvalidOperationException("售货机货币回执类型无效");
+            writer.Write(checked((int)CurrencyWallet.Get(committed.Character.Inventory, kind)));
             writer.Write(new byte[ItemListProtocolWriter.EntrySize - 10]);
         }
         else foreach (var row in reward.Items)
@@ -38,8 +40,8 @@ internal static class VendingPackets
             var item = committed.Index.Find(row.Slot) ?? throw new InvalidOperationException("售货机奖励槽未提交");
             if (item.Core.ItemId != reward.ItemId) throw new InvalidOperationException("售货机奖励槽物品不匹配");
             writer.Write((byte)row.Slot.List);
-            // 0237AF41读取123B记录，已有堆叠按本次获得数量增加，完整总数随后由NOTI14同步。
-            ItemListProtocolWriter.Write(writer, row.Slot.Index, item.Core.IsStackable ? item.Core with { Value = row.Count } : item.Core);
+            // 0372BEF6比较提交后总数与旧堆叠，0372BF85相减后填奖励弹窗及获得提示。
+            ItemListProtocolWriter.Write(writer, row.Slot.Index, item.Core);
         }
         return stream.ToArray();
     }

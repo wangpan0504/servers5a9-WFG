@@ -16,6 +16,22 @@ internal sealed record CashShopProduct(int CommodityId, int ItemId, int Count, i
     public int GoldPrice { get; init; }
 }
 internal sealed record CashShopBonus(int ItemId, int Count);
+// 原生 04303925..04303A75 读取 [buy restrict item] 五元组：(restrictId, commodityId, periodCode, maxCount, scopeCode)。
+internal sealed record CashShopBuyRestriction(int RestrictId, int CommodityId, int PeriodCode, int Maximum, bool AccountWide)
+{
+    public bool TryGetPeriod(out ItemPurchasePeriod period)
+    {
+        period = PeriodCode switch
+        {
+            0 => ItemPurchasePeriod.Accumulate,
+            1 => ItemPurchasePeriod.Daily,
+            101 => ItemPurchasePeriod.Weekly,
+            102 => ItemPurchasePeriod.Monthly,
+            _ => default
+        };
+        return PeriodCode is 0 or 1 or 101 or 102;
+    }
+}
 
 internal sealed class CashShopCatalog
 {
@@ -34,16 +50,19 @@ internal sealed class CashShopCatalog
 
     public FrozenDictionary<int, CashShopProduct> Products { get; }
     public FrozenDictionary<int, ImmutableArray<CashShopBonus>> Bonuses { get; }
+    public FrozenDictionary<int, CashShopBuyRestriction> BuyRestrictions { get; }
     public MileageShopCatalog Mileage { get; }
     public FrozenDictionary<int, FrozenDictionary<int, int>> CouponMappings { get; }
     readonly FrozenSet<int> couponProducts;
 
     CashShopCatalog(Dictionary<int, CashShopProduct> products,
         Dictionary<int, ImmutableArray<CashShopBonus>>? bonuses,
-        Dictionary<int, Dictionary<int, int>>? coupons, MileageShopCatalog mileage)
+        Dictionary<int, Dictionary<int, int>>? coupons, MileageShopCatalog mileage,
+        Dictionary<int, CashShopBuyRestriction>? buyRestrictions = null)
     {
         Products = products.ToFrozenDictionary();
         Bonuses = (bonuses ?? []).ToFrozenDictionary();
+        BuyRestrictions = (buyRestrictions ?? []).ToFrozenDictionary();
         CouponMappings = (coupons ?? []).ToFrozenDictionary(pair => pair.Key, pair => pair.Value.ToFrozenDictionary());
         couponProducts = CouponMappings.Values.SelectMany(mapping => mapping.Values).ToFrozenSet();
         Mileage = mileage;
@@ -113,10 +132,36 @@ internal sealed class CashShopCatalog
         }
         if (products.Count == 0)
             throw new InvalidDataException("商城商品目录为空");
-        return new(products, ParseBonuses(bonusText), ParseCoupons(couponText), new(new MileageShopFile(text, mileageText)));
+        return new(products, ParseBonuses(bonusText), ParseCoupons(couponText), new(new MileageShopFile(text, mileageText)),
+            ParseBuyRestrictions(text));
     }
 
     static bool Number(string value, out int number) => int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out number);
+
+    static Dictionary<int, CashShopBuyRestriction> ParseBuyRestrictions(string text)
+    {
+        var result = new Dictionary<int, CashShopBuyRestriction>();
+        string body = PvfScript.Section(text, "buy restrict item");
+        if (body.Length == 0) return result;
+        int[] values = PvfScript.Integers(body);
+        if (values.Length % 5 != 0)
+            throw new InvalidDataException($"商城 buy restrict item 行宽无效: {values.Length}/5");
+        var restrictIds = new HashSet<int>();
+        for (int offset = 0; offset < values.Length; offset += 5)
+        {
+            int restrictId = values[offset];
+            int commodityId = values[offset + 1];
+            int periodCode = values[offset + 2];
+            int maximum = values[offset + 3];
+            int scopeCode = values[offset + 4];
+            if (restrictId <= 0 || commodityId <= 0 || maximum <= 0 ||
+                periodCode is not (0 or 1 or 7 or 14 or 30 or 90 or 101 or 102) || scopeCode is not (0 or 1) ||
+                !restrictIds.Add(restrictId) || result.ContainsKey(commodityId))
+                throw new InvalidDataException($"商城限购定义无效或冲突: restrictId={restrictId}, commodity={commodityId}");
+            result.Add(commodityId, new(restrictId, commodityId, periodCode, maximum, scopeCode == 1));
+        }
+        return result;
+    }
 
     static Dictionary<int, Dictionary<int, int>> ParseCoupons(string? text)
     {

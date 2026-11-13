@@ -30,7 +30,7 @@ internal sealed class SkinStorageProjection(InventorySkinStorageService skins, P
             await context.Notify(NotiPacketType.USERINFO,
                 TownPackets.Actor(identity.Character, identity.PvpGrade, identity.Channel, adventureName: identity.AdventureName,
                     sceneState: identity.Phase is SessionPhase.Dungeon or SessionPhase.Settlement
-                        ? ActorSceneState.Dungeon : ActorSceneState.Town, premiumPcRoom: identity.PremiumPcRoom),
+                        ? ActorSceneState.Dungeon : ActorSceneState.Town, premiumPcRoom: identity.PremiumPcRoom, returningAdventurerType: identity.ReturningAdventurerType, marriage: context.MarriageAppearance),
                 "party_frame_actor", identity.IsUnchanged);
     }
 

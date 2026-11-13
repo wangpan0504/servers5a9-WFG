@@ -68,6 +68,21 @@ internal static partial class EnchantmentTests
         foreach (int rarity in new[] { 0, 1, 2 }) VerifyPlan(true, rarity, 1);
         VerifyPlan(false, 0, 1);
 
+        var beadTemplate = new ItemTemplate(beadId, ItemKind.Consumable, 0, 1, 0, 1000, 1, 1, 1,
+            "[free]", ushort.MaxValue, 0, "SyntheticBead");
+        var beadItems = new ItemCatalog(null!, new Dictionary<int, string>(), new Dictionary<int, string>(), 0);
+        beadItems.PrefillTemplates(new Dictionary<int, ItemTemplate>
+        { [beadId] = beadTemplate, [cardId] = cardTemplate, [gearId] = gearTemplate with { Rarity = 2 } });
+        var beadItem = new InventoryItem(84, new(InventoryListType.Main, 82), new(beadId, ItemKind.Consumable, 1));
+        var beadRole = character with { Inventory = new([beadItem, target], Gold: 1000) };
+        var rangeScripts = SyntheticExpertJobRarityScripts(recipe, new(1, 3, 7));
+        int expDraws = 0;
+        var beadService = new DfoServer.Game.Inventory.Services.InventoryEnchantmentService(beadItems, Catalog(false));
+        That(ExpertJobCraft.TryPlanEnchant(beadRole, beadService, rangeScripts, 0, 9, 0, 82, 2_000_000_000,
+            out var beadPlan, out int beadExp, out _, upper => { That(upper == 5, "宝珠附魔按MonsterCardExp的min..max区间采样"); expDraws++; return 4; }) &&
+            expDraws == 1 && beadExp == 27 && beadPlan.After.Find(target.Position)!.Core.EnchantCardId == cardId,
+            "TryPlanEnchant将next委托传入AddCardExp，按[monstercard exp]区间计算熟练度而非固定取min");
+
         void VerifyPlan(bool restricted, int rarity, byte upgrade)
         {
             var sourceCard = source with { Core = source.Core with { EnchantUpgrade = upgrade } };
@@ -99,13 +114,13 @@ internal static partial class EnchantmentTests
         }
     }
 
-    static ExpertJobScriptCatalog SyntheticExpertJobRarityScripts(ExpertJobCardRecipe recipe)
+    static ExpertJobScriptCatalog SyntheticExpertJobRarityScripts(ExpertJobCardRecipe recipe, ExpertJobMonsterCardExp? exp = null)
     {
         // Catalog只有PVF工厂；合成自测在本文件内装配最小只读输入，不新增生产测试API。
         const BindingFlags instance = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
         var scriptType = typeof(ExpertJobScriptCatalog).GetNestedType("JobScript", BindingFlags.NonPublic)!;
         object script = Activator.CreateInstance(scriptType, nonPublic: true)!;
-        scriptType.GetProperty("MonsterCard")!.SetValue(script, new[] { new ExpertJobMonsterCardExp(1, 7, 7) });
+        scriptType.GetProperty("MonsterCard")!.SetValue(script, new[] { exp ?? new ExpertJobMonsterCardExp(1, 7, 7) });
         var jobs = (IDictionary)Activator.CreateInstance(typeof(Dictionary<,>).MakeGenericType(typeof(byte), scriptType))!;
         jobs.Add((byte)1, script);
         var catalog = (ExpertJobScriptCatalog)Activator.CreateInstance(typeof(ExpertJobScriptCatalog), instance,

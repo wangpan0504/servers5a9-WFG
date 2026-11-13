@@ -163,6 +163,7 @@ internal static partial class FormalDungeonTcpTests
                     }
                     else Bytes(death.AsSpan(tail).ToArray(),[0,0,255,0,0],"普通怪不改变剧情Boss标记");
                     peer.Expect(0,37);
+                    ExpectAdventureProgress(fixture, resources, peer);
                 }
                 peer.Barrier();
             }

@@ -70,6 +70,8 @@ internal static partial class LotteryTcpTests
             peer.Barrier();
             That(before == Snapshot(), "罐子耗尽后重放不重复发奖");
         }
+        await BoosterSelectionTcpTests.WaitForInitialDisconnectAsync(fixture,
+            Convert.ToUInt16(fixture.Query("SELECT id FROM characters WHERE name='PotTcp'").Single()[0]));
         using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
         {
             var current = repo.List(owner).Single();
@@ -112,6 +114,7 @@ internal static partial class LotteryTcpTests
         await RestrictedPotsAsync(source, root, resources);
         await FiniteGoldAsync(source, root, resources);
         await GoldCostAsync(source, root, resources);
+        await GoldCostAsync(source, root, resources, pot: 10159699, cost: 100000, openings: 1);
         ItemCore Core(int id, int count = 1) => InventoryRewardGrantService.Create(items.Items.Get(id), count, shopExpiration: true);
         short SourceSlot()
         {

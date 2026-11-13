@@ -33,7 +33,7 @@ internal static partial class AntonRaidGapTcpTests
             "真实28声明小电池五选八及独立终末两组，测试只使用本次抽中的首个电池格");
         var goal = new DungeonPoint(information[15], information[16]);
         var path = AntonTcpProbe.Route(catalog, 218, information[7], map[0], map[1],
-            checked((byte)goal.X), checked((byte)goal.Y));
+            checked((byte)goal.X), checked((byte)goal.Y), avoidBossRooms: true);
         var pathReport = new AntonTcpProbe.AntonProbeReport();
         var memberPathReport = new AntonTcpProbe.AntonProbeReport();
         Load();

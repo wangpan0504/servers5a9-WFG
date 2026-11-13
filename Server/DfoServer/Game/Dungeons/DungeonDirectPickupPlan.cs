@@ -8,7 +8,7 @@ using DfoServer.GameWorld.Items;
 namespace DfoServer.Game.Dungeons;
 
 internal sealed record DungeonDirectPickupEntry(DungeonGroundObject Ground, InventorySlot Destination,
-    int? EpicPieceIndex, bool AccountMaterial, CurrencyKind? Currency);
+    int? EpicPieceIndex, bool AccountMaterial, CurrencyKind? Currency, int Amount);
 
 // 只消费同一次死亡已冻结的物品，不生成掉落、不重抽装备核心；提交仍由原死亡事务负责。
 internal sealed class DungeonDirectPickupPlan
@@ -57,7 +57,7 @@ internal sealed class DungeonDirectPickupPlan
                 ItemTemplate? template = null;
                 if ((ground.IsGold && limits is null) || (!ground.IsGold && !items.TryGet(ground.Core.ItemId, out template))) continue;
                 var candidate = expected with { Inventory = after };
-                var result = ground.IsGold ? DungeonPickupPlanning.Gold(candidate, ground.Content, limits!) :
+                var result = ground.IsGold ? DungeonPickupPlanning.Gold(candidate, ground.Content, limits!, now, clock) :
                     DungeonPickupPlanning.Item(candidate, ground.Content, template!, limits, pieces, now);
                 if (!result.Accepted || result.Plan is not { } plan || !plan.Changed ||
                     plan.ChangedSlots.Length > 1) continue;
@@ -65,8 +65,11 @@ internal sealed class DungeonDirectPickupPlan
                 bool material = currency is null && piece is null && template?.AccountMaterial is not null;
                 bool physical = currency is null && piece is null && !material;
                 if (physical && plan.ChangedSlots.Length != 1) continue;
-                entries.Add(new(ground, physical ? plan.ChangedSlots[0] : new InventorySlot(InventoryListType.Main, 0), piece, material, currency));
+                int amount = ground.IsGold ? checked((int)((long)plan.After.Gold - plan.Before.Gold)) : ground.Core.Count;
+                entries.Add(new(ground, physical ? plan.ChangedSlots[0] : new InventorySlot(InventoryListType.Main, 0), piece, material, currency, amount));
                 after = plan.After;
+                if (plan.CharacterPrecondition?.QualificationExpiresAt is { } deadline)
+                    expiresAt = Math.Min(expiresAt ?? long.MaxValue, deadline);
                 if (!ground.IsGold && ground.Core.ExpireTime > 0)
                     expiresAt = expiresAt is { } previous ? Math.Min(previous, ground.Core.ExpireTime) : ground.Core.ExpireTime;
             }

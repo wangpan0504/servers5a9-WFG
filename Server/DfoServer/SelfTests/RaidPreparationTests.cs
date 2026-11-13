@@ -498,11 +498,14 @@ internal static class RaidPreparationTests
     sealed class ProbeSocialStore(ISocialStore inner) : ISocialStore
     {
         public Action? BeforeRead { get; set; }
+        public AccountFriendGroup[] AccountGroups(SocialActor actor) => inner.AccountGroups(actor);
+        public void SaveAccountGroups(SocialActor actor, AccountFriendGroup[] groups) => inner.SaveAccountGroups(actor, groups);
         public bool IsBlocked(ushort recipient, ushort sender) { BeforeRead?.Invoke(); return inner.IsBlocked(recipient, sender); }
         public SocialPerson? FindSocialPerson(string name, bool adventure = false) => inner.FindSocialPerson(name, adventure);
         public SocialLink[] CharacterLinks(ushort owner, bool blocked) => inner.CharacterLinks(owner, blocked);
         public SocialResult ChangeCharacterLink(SocialActor actor, string name, bool blocked, bool remove, string memo, DateTimeOffset now) => inner.ChangeCharacterLink(actor, name, blocked, remove, memo, now);
         public SocialLink[] AccountFriends(string account) => inner.AccountFriends(account);
+        public IReadOnlyDictionary<string, long> AccountLastSeenUnix(IEnumerable<string> accounts) => inner.AccountLastSeenUnix(accounts);
         public AccountFriendRequest[] AccountRequests(string account) => inner.AccountRequests(account);
         public SocialResult RequestAccountFriend(SocialActor actor, string adventure, string message, byte group, string memo, DateTimeOffset now) => inner.RequestAccountFriend(actor, adventure, message, group, memo, now);
         public SocialResult ResolveAccountFriend(SocialActor actor, string adventure, bool accept, bool remove, bool cancel, string memo = "", byte group = 0) => inner.ResolveAccountFriend(actor, adventure, accept, remove, cancel, memo, group);

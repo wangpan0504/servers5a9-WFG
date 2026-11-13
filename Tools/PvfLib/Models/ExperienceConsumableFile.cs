@@ -12,7 +12,10 @@ public sealed record ExperienceConsumableFile(StackableFile Stackable, Stackable
         var errors = document.Diagnostics.ToList();
         foreach (var duplicate in document.Sections.GroupBy(section => section.Name)
             .Where(group => group.Count() != 1 && !ItemUseFields.IsSharedTag(group.Key)))
-            errors.Add("重复经验物品字段：" + duplicate.Key);
+            // 禁止用途是多个完整字符串块的并集，不是互相冲突的效果或等级声明。
+            if (!(duplicate.Key == "impossible contents" && duplicate.All(section => section.IsBlock &&
+                section.Children.IsEmpty && section.Values.All(token => token.Type == 6))))
+                errors.Add("重复经验物品字段：" + duplicate.Key);
         var effects = document.Sections.Where(section => section.Name == "increase status type").ToArray();
         StackableTypeDeclaration? effect = null;
         if (effects is [{ Children.Length: 0, Values.Length: >= 2 }] && effects[0].Values[0].Type == 6 &&

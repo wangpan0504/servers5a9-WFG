@@ -38,7 +38,7 @@ internal sealed class ClassChangeService(ItemCatalog items, CharacterCatalog cha
         if (first == request.Target) return Reject(3, "same-class");
         if (first == 0 && !ticket.AllowUntransferred) return Reject(19, "untransferred");
         if (stage > 2 || before.Level < ticket.MinimumLevel || before.Level > ticket.MaximumLevel ||
-            (ticket.Jobs & 1 << before.Job) == 0 || ticket.FixedTarget is { } fixedTarget && fixedTarget != request.Target ||
+            ticket.FixedTarget is { } fixedTarget && fixedTarget != request.Target ||
             ticket.Forbidden.Contains((before.Job, request.Target)) ||
             ticket.SourceGrowTypes.Count != 0 && !ticket.SourceGrowTypes.Contains((byte)first))
             return Reject(23, "ticket-qualification");

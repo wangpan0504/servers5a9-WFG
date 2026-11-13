@@ -11,7 +11,10 @@ internal sealed record FormalDungeonReceipt(Character Character, long Generation
     // 房间加载前的身份在本次访问内保持不变；业务Epoch仍随加载、死亡等提交推进。
     public DungeonRunIdentity? RoomLoadingIdentity { get; init; }
     public TimeProvider? BattlePassMissionClock { get; init; }
+    public ImmutableArray<InventorySlot> FatigueEnergySlots { get; init; } = [];
     public bool LostLandStarted { get; init; }
+    // 仅首次真实加载成功时冻结，过房或重复加载不重新启动本地倒计时。
+    public BossRushHud? BossRushStart { get; init; }
     public ImmutableArray<ushort> PartyActors { get; init; } = [];
     public ImmutableArray<DfoServer.Game.Guild.GuildDungeonMembership> GuildMemberships { get; init; } = [];
     public byte PartySlot { get; init; }
@@ -22,6 +25,7 @@ internal sealed record FormalDungeonReceipt(Character Character, long Generation
     public ImmutableArray<DungeonGroundObject> PassiveItems { get; init; } = [];
     // 本次房间访问冻结的AI参数；null不改原生数值，独立对象观测仍可发送仅携场景的私有包。
     public MonsterAiProfile? MonsterAi { get; init; }
+    public DfoServer.GameWorld.Dungeons.DungeonLanding? HelperLanding { get; init; }
     // #233 强袭入场提交时扣除材料变化的背包格，仅入场回执携带。
     public ImmutableArray<InventorySlot> AssaultConsumedSlots { get; init; } = [];
     // 实验性：深渊派对入场票在入场提交时扣掉的背包格与票据（日志 + UPDATE_ITEM_LIST 用）。
@@ -48,6 +52,13 @@ internal sealed record FormalDungeonDeathResult(DungeonRunOutcome Outcome, Forma
     ushort MonsterKey = 0, DungeonExperienceReward? Reward = null, DungeonClearFact? ClearFact = null,
     DungeonGroundObject? Drop = null, byte? PreviousLevel = null)
 {
+    public DfoServer.GameWorld.Items.EquipmentRarityBonus EquipmentRarityBonus { get; init; }
+    public int EpicPieceBonus { get; init; }
+    public int HellRewardEpicPotionPercent { get; init; }
+    public ImmutableArray<int> DungeonEpicBuffIds { get; init; } = [];
+    public int DungeonEpicBonusPercent { get; init; }
+    public int BossDropPercent { get; init; }
+    public DfoServer.Game.Adventure.AdventureProgressionCommit? Adventure { get; init; }
     public Game.Session.TagEvildomClearPreparation? PendingTagEvildomClear { get; init; }
     public Game.Session.ImperialArenaDeathPreparation? PendingImperialArenaDeath { get; init; }
     public Game.ImperialArena.ImperialArenaDeathCommit? ImperialArenaDeath { get; init; }
@@ -63,6 +74,9 @@ internal sealed record FormalDungeonDeathResult(DungeonRunOutcome Outcome, Forma
     public DungeonElevatorReceipt? Elevator { get; init; }
     public IReadOnlyList<ActiveMainQuest>? PreviousQuests { get; init; }
     public IReadOnlyList<InventorySlot> QuestDropSlots { get; init; } = [];
+    public ImmutableArray<DfoServer.GameWorld.Dungeons.SpecialDungeonClearRewardGrant> SpecialClearRewards { get; init; } = [];
+    public ImmutableArray<InventorySlot> SpecialClearRewardSlots { get; init; } = [];
+    public bool SpecialClearRewardMailOverflow { get; init; }
     public IReadOnlyList<ushort> CulledMonsterKeys { get; init; } = [];
     public DungeonRoomClearFact? RoomClearFact { get; init; }
     public DfoServer.GameWorld.Dungeons.DungeonPoint? BossPositionUpdate { get; init; }
@@ -93,6 +107,9 @@ internal sealed record DungeonSettlementPresentation(uint ClearTimeMilliseconds,
     public uint MonsterGrowthContractExperience { get; init; }
     public uint MonsterEquipmentExperience { get; init; }
     public uint MonsterFatigueBurningExperience { get; init; }
+    public uint MonsterGuildExperience { get; init; }
+    public uint MonsterFatigueBuffExperience { get; init; }
+    public uint MonsterPartyExperience { get; init; }
     // 本实例实际到账的领主基础经验合计；客户端结果页“领主”行只读该口径，不取对象明细。
     public uint MonsterBossExperience { get; init; }
     // 按击杀顺序累计；为空时客户端只能显示特殊怪物行而显示不出各自经验。
@@ -110,8 +127,10 @@ internal sealed record FormalDungeonSettlementResult(DungeonRunOutcome Outcome, 
     public uint GainedExperience { get; init; }
     // 通关结算的熟练度到账额度；展示位统一使用两者之和，不把满级入口线的实际收益显示成 0。
     public uint ProficiencyGained { get; init; }
+    public bool LuckyStarEligible { get; init; }
     public bool LuckyStarGained { get; init; }
     public int LuckyStarTotal { get; init; }
+    public int ClearPartyBuffId { get; init; }
     public DungeonCardReward? Card { get; init; }
     public GriefTowerReward? GriefReward { get; init; }
     public InventoryResult? Inventory { get; init; }

@@ -211,7 +211,22 @@ internal sealed class AuctionListingRepository(string path)
     {
         var conditions = new List<string> { "state=0", "expires_at_unix>$now" };
         command.Parameters.AddWithValue("$now", now);
-        if (filter.ItemTemplateId is { } template)
+        if (!filter.ItemTemplateIds.IsDefault)
+        {
+            if (filter.ItemTemplateIds.IsEmpty)
+                conditions.Add("0=1");
+            else
+            {
+                var names = new string[filter.ItemTemplateIds.Length];
+                for (int index = 0; index < names.Length; index++)
+                {
+                    names[index] = "$template" + index;
+                    command.Parameters.AddWithValue(names[index], filter.ItemTemplateIds[index]);
+                }
+                conditions.Add($"item_template_id IN ({string.Join(',', names)})");
+            }
+        }
+        else if (filter.ItemTemplateId is { } template)
         {
             conditions.Add("item_template_id=$template");
             command.Parameters.AddWithValue("$template", template);
@@ -308,6 +323,28 @@ internal sealed class AuctionListingRepository(string path)
         command.Parameters.AddWithValue("$active", AuctionListingState.Active);
         if (command.ExecuteNonQuery() != 1)
             throw new AuctionBuyRaceLostException($"挂牌 {listingId} 的条件更新（state=0→1）影响 0 行：已被买走、已下架或已过期");
+    }
+
+    /// <summary>
+    /// 单件/拆分购买（CMD 334 `AUCTION_BUY_ITEM_APIECE`）未买空整堆时的挂牌更新：
+    /// 在调用方的事务内把 `item_count` 与 `item_entry` 条件更新为剩余数量，保持 `state=0` 在售。
+    /// 条件是 `state=0 AND item_count=$expectedCount`：并发购买或重复点击导致数量已变时影响 0 行，
+    /// 抛出 <see cref="AuctionBuyRaceLostException"/> 让整个事务回滚。
+    /// </summary>
+    internal static void DeductListingCount(SqliteConnection db, SqliteTransaction transaction, int listingId,
+        int expectedCount, int remainingCount, byte[] remainingItemEntry)
+    {
+        using var command = db.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "UPDATE auction_listings SET item_count=$remainingCount,item_entry=$remainingEntry " +
+            "WHERE listing_id=$id AND state=$active AND item_count=$expectedCount";
+        command.Parameters.AddWithValue("$remainingCount", remainingCount);
+        command.Parameters.AddWithValue("$remainingEntry", remainingItemEntry);
+        command.Parameters.AddWithValue("$id", listingId);
+        command.Parameters.AddWithValue("$active", AuctionListingState.Active);
+        command.Parameters.AddWithValue("$expectedCount", expectedCount);
+        if (command.ExecuteNonQuery() != 1)
+            throw new AuctionBuyRaceLostException($"挂牌 {listingId} 的拆分购买条件更新（item_count={expectedCount}→{remainingCount}）影响 0 行：已被买走、下架或数量已变");
     }
 
     /// <summary>

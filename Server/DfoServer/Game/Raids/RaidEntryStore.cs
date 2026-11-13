@@ -64,7 +64,7 @@ internal sealed class RaidEntryStore
     {
         try
         {
-            if (!File.Exists(path)) return Empty();
+            if (!File.Exists(path)) return FullTime();
             return Parse(File.ReadAllText(path));
         }
         catch (Exception ex) when (ex is IOException or JsonException or InvalidDataException or KeyNotFoundException) { return Empty(); }
@@ -82,6 +82,12 @@ internal sealed class RaidEntryStore
 
     static Dictionary<string, List<RaidEntrySchedule.Window>> Empty() =>
         RaidEntrySchedule.Names.ToDictionary(name => name, _ => new List<RaidEntrySchedule.Window>());
+
+    internal static string FullTimeJson() => Serialize(FullTime());
+
+    static Dictionary<string, List<RaidEntrySchedule.Window>> FullTime() =>
+        RaidEntrySchedule.Names.ToDictionary(name => name,
+            _ => Enumerable.Range(1, 7).Select(day => new RaidEntrySchedule.Window(day, 0, 24 * 60)).ToList());
 
     public void Reload()
     {

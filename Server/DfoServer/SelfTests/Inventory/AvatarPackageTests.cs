@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Text.Json;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
@@ -653,7 +654,24 @@ internal static class AvatarPackageTests
             {
                 Reject(character with { Level = 0 }, request, "未满足原minimum level1");
                 if (sample.SourceId == 10309321)
-                    Reject(character with { Job = 0 }, request, "未满足原mage/creator职业");
+                {
+                    var coatTemplate = resources.Items.Get(sample.CoatId);
+                    That(sourceTemplate.Jobs == ((1 << 3) | (1 << 10)) &&
+                        coatTemplate.Jobs == sourceTemplate.Jobs && !sourceTemplate.AllowsUse(character.Level, 0) &&
+                        !coatTemplate.AllowsUse(character.Level, 0),
+                        label + "原mage/creator资源声明与装备穿戴职业限制保持，源激活不沿用穿戴门");
+                    var otherJob = character with { Job = 0 };
+                    var opened = service.Open(otherJob, request, out var openedReceipt, now);
+                    That(opened.Accepted && opened.Plan is not null && openedReceipt is not null &&
+                        otherJob.Inventory == before && character.Inventory == before && before.Find(Bag()) == source &&
+                        before.Items.Length == 1 && source.Core.Count == 1 && opened.Plan.Before == before &&
+                        opened.Plan.After.Find(Bag()) is null && opened.Plan.After.Items.Length == 9 &&
+                        opened.Plan.OverflowItems.Length == 0 &&
+                        JsonSerializer.Serialize(opened.Plan.After) == JsonSerializer.Serialize(result.Plan!.After) &&
+                        openedReceipt.ItemId == sample.SourceId && openedReceipt.Rewards.SequenceEqual(receipt!.Rewards),
+                        label + "合法Job0按上游激活规则完整规划同份九奖、核心、永久孔位与扣源，不修改原输入");
+                    Reject(character with { Job = 47 }, request, "非法职业编号");
+                }
             }
 
             void Reject(Character denied, AvatarPackageOpenRequest invalid, string reason)
@@ -1060,11 +1078,14 @@ internal static class AvatarPackageTests
         var template = new ItemTemplate(990301, ItemKind.Consumable, 0, 80, 0, 1000, 1, 0, 1, "[free]", 1 << 15, 77, "AvatarBox");
         Character character = new(1, 0, "AvatarUse", 0, new(0, 0, 0, 0), null)
         { Job = 15, Level = 80, Skills = [new(77, 1)], Inventory = new([source]) };
-        That(InventoryAvatarPackageService.SourceEligible(character, source, template), "源礼盒的资源等级、职业和已学技能同时满足；排序锁允许使用");
+        That(InventoryAvatarPackageService.SourceEligible(character, source, template) &&
+            InventoryAvatarPackageService.SourceEligible(character with { Job = 0 }, source, template) &&
+            InventoryAvatarPackageService.SourceEligible(character, source, template with { Jobs = 1 }),
+            "源礼盒的等级和已学技能同时满足；排序锁和usable job不另阻止使用");
         foreach (var denied in new[] { template with { UseForbidden = true }, template with { MinimumLevel = 81 },
-            template with { Jobs = 1 }, template with { RequiredSkill = 78 }, template with { Id = 990302 }, template with { Kind = ItemKind.Avatar } })
-            That(!InventoryAvatarPackageService.SourceEligible(character, source, denied), "禁用、等级、职业、技能和模板身份资格拒绝");
-        foreach (var denied in new[] { character with { Level = 79 }, character with { Job = 0 }, character with { Job = 47 },
+            template with { RequiredSkill = 78 }, template with { Id = 990302 }, template with { Kind = ItemKind.Avatar } })
+            That(!InventoryAvatarPackageService.SourceEligible(character, source, denied), "禁用、等级、技能和模板身份资格拒绝");
+        foreach (var denied in new[] { character with { Level = 79 }, character with { Job = 47 },
             character with { Skills = [] }, character with { Skills = [new(77, 0)] } })
             That(!InventoryAvatarPackageService.SourceEligible(denied, source, template), "角色未满足真实使用资格不能开启礼盒");
         var permanent = new InventoryItem(0, new(InventoryListType.Avatar, 0), new(990303, ItemKind.Avatar, 0)) { Avatar = new() };

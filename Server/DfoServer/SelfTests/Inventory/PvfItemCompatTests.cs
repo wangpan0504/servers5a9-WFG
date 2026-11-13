@@ -16,7 +16,9 @@ internal static class PvfItemCompatTests
         That(resources.Items.Get(2683657).Id == 2683657, "分块 impossible contents 的道具可加载");
         That(resources.Items.Get(10310207).Jobs == ushort.MaxValue, "[account] 可用职业按全职业读取");
         That(resources.Items.Get(100400000).EquipmentSlot == 34, "护石按独立槽位 34 加载");
-        That(resources.Items.Get(100360001).EquipmentSlot == 35, "符咒按独立槽位 35 加载");
+        That(resources.Items.Get(100360001) is
+            { Kind: ItemKind.Equipment, EquipmentSlot: 31, IsQuickSlotEquipment: true, QuickSlotEquipment: not null },
+            "符咒按类型31加载为快捷栏装备，不占护石35号穿戴槽");
         That(resources.Items.Get(0).Id == 0, "编号 0 的金币占位可以加载");
         That(resources.Items.Get(490008569).QualityBox is { MinimumPercent: 100, MaximumPercent: 100, RequiredRarity: null, RejectTitle: false },
             "黄金品级箱取最高品级且不按稀有度或称号收窄");
@@ -28,8 +30,8 @@ internal static class PvfItemCompatTests
             AttachType.Length: 0, StackableType: "[enchant waste] 0" }, "现场宝珠10094768的限次交易后账号绑定声明进入真实物品模板");
         That(resources.Items.Get(10094771) is { Kind: GameWorld.Items.ItemKind.Profession, AccountBoundAfterTrade: true, AttachType.Length: 0 },
             "同类附魔卡片10094771也按资源声明获得账号仓库资格，不按宝珠类型或编号特判");
-        That(resources.Items.Get(10002395) is { Kind: GameWorld.Items.ItemKind.Consumable, AccountCargoForbidden: false, AccountBoundAfterTrade: false } capsule &&
-            capsule.AttachType.Contains("[trade limit]", StringComparison.Ordinal), "真实宠物胶囊按限次交易模板读取，不伪装成无条件账号绑定");
+        That(resources.Items.Get(10002395) is { Kind: GameWorld.Items.ItemKind.Consumable, AccountCargoForbidden: true, AccountBoundAfterTrade: false } capsule &&
+            capsule.AttachType.Contains("[trade limit]", StringComparison.Ordinal), "真实宠物胶囊保留限次交易且禁止账号仓库，不伪装成无条件账号绑定");
         foreach (var (id, kind, materialId, cost, declaration) in new[]
         {
             (10161087, ItemKind.Consumable, 10160847, 20, "`character` `agitwarseason` 5"),

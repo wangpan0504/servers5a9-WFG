@@ -58,5 +58,5 @@ internal sealed record LevelUpTicketDefinition(int TemplateId, int MinimumLevel,
     }
 
     public bool Allows(byte level, byte job) => level >= MinimumLevel && level <= MaximumLevel && job < 16 &&
-        (Jobs & 1 << job) != 0 && TargetLevel(level) > level;
+        TargetLevel(level) > level;
 }

@@ -1,4 +1,5 @@
 using DfoServer.GameWorld.Characters;
+using DfoServer.GameWorld.Dungeons;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Game.Auth;
 using DfoServer.Persistence;
@@ -13,7 +14,7 @@ internal static class ServerLifetime
         SkillLearningCatalog learning, ItemResources itemResources, DfoServer.GameWorld.Quests.QuestCatalog quests, ServerLog log,
         DfoServer.GameWorld.Adventure.AdventureCatalog? adventureCatalog = null,
         CharacterGrowthCatalog? growthCatalog = null, Func<CashShopPromotionCatalog>? promotions = null,
-        CashShopPromotionConfiguration? promotionConfiguration = null)
+        CashShopPromotionConfiguration? promotionConfiguration = null, DungeonCatalog? dungeonCatalog = null)
     {
         using var stop = new CancellationTokenSource();
         ConsoleCancelEventHandler onCancel = (_, args) =>
@@ -26,18 +27,35 @@ internal static class ServerLifetime
         AppDomain.CurrentDomain.ProcessExit += onExit;
         try
         {
+            bool resetDefaults = ServerDefaultsUpgrade.Apply(options.DataDirectory, options.EpicRoad2019Enabled);
+            log.Write("server_defaults_upgrade", new { ServerDefaultsUpgrade.Generation, Applied = resetDefaults,
+                Activities = "registered-implemented", RaidWindows = "all-supported-all-day", SupportCompanions = "off-on-upgrade" });
             Directory.CreateDirectory(options.LogDirectory);
             using var watcher = new FileSystemWatcher(options.LogDirectory, "stop.request")
             {
                 EnableRaisingEvents = true
             };
-            watcher.Created += (_, _) => stop.Cancel();
+            void RequestStop()
+            {
+                try
+                {
+                    if (options.LauncherSession.Length == 0 ||
+                        File.ReadAllText(Path.Combine(options.LogDirectory, "stop.request")).Trim() == options.LauncherSession)
+                        stop.Cancel();
+                }
+                catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
+            }
+            watcher.Created += (_, _) => RequestStop();
+            watcher.Changed += (_, _) => RequestStop();
+            watcher.Renamed += (_, _) => RequestStop();
             if (File.Exists(Path.Combine(options.LogDirectory, "stop.request")))
                 throw new InvalidDataException("Remove prior stop.request before starting a new run");
             await ServerRuntime.Create(options, pvf, repository, towns, characters, learning, itemResources, log, quests,
                 adventureCatalog: adventureCatalog, growthCatalog: growthCatalog, promotions: promotions,
                 promotionConfiguration: promotionConfiguration,
-                enablePromotionPage: options.EnablePromotionPage).RunAsync(stop.Token);
+                enablePromotionPage: options.EnablePromotionPage,
+                epicRoad2019Enabled: options.EpicRoad2019Enabled, dungeonCatalog: dungeonCatalog).RunAsync(stop.Token);
         }
         finally
         {

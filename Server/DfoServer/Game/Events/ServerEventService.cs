@@ -4,7 +4,7 @@ internal sealed record ServerEventSchedule(ushort EventId, long Revision = 0, lo
     long? EndsAt = null, bool? OverrideActive = null)
 {
     public bool IsActive(DateTimeOffset now) => OverrideActive ??
-        (EventId is ServerEventService.NolanVisibilityId or ServerEventService.JonathanVisibilityId ||
+        (EventId is ServerEventService.NolanVisibilityId or ServerEventService.JonathanVisibilityId or ServerEventService.WeeklyDungeonVisibilityId ||
          StartsAt is { } start && EndsAt is { } end && now.ToUnixTimeSeconds() >= start && now.ToUnixTimeSeconds() < end ||
          ServerEventService.DefaultActive(EventId) && StartsAt is null && EndsAt is null);
 
@@ -56,6 +56,7 @@ internal sealed class ServerEventService(IServerEventStore store, TimeProvider? 
     ServerEventSchedule endlessAdventureSchedule = store.Read(EndlessAdventurePolicy.EventId);
     public bool IsEndlessAdventureActive(DateTimeOffset now) => Volatile.Read(ref endlessAdventureSchedule).IsActive(now);
     public const ushort BattlePassId = 2520;
+    public const ushort EpicRoadId = 10005;
     ServerEventSchedule battlePassSchedule = new(BattlePassId);
     DateTimeOffset? battlePassStart, battlePassEnd;
     bool battlePassDefaultEnabled, battlePassMissionsPrepared;
@@ -77,9 +78,8 @@ internal sealed class ServerEventService(IServerEventStore store, TimeProvider? 
     public const ushort SeriaLuckId = 2037;
     public const ushort GuildHongbaoId = 2378;
     public const ushort JonathanVisibilityId = 2395;
-    public static bool DefaultActive(ushort id) => id is MileageShopId or NolanVisibilityId or
-        SeriaLuckId or GuildHongbaoId or JonathanVisibilityId or EndlessAdventurePolicy.EventId or
-        PcRoomTimePointId or DailyAttendanceId or WeeklyAttendanceId;
+    public const ushort WeeklyDungeonVisibilityId = 2514;
+    public static bool DefaultActive(ushort id) => IsRegistered(id);
     long promotionRevision;
     public long PromotionRevision => Interlocked.Read(ref promotionRevision);
     public void NotifyPromotionChanged()

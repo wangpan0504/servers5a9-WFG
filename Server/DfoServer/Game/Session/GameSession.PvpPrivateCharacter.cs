@@ -32,4 +32,13 @@ internal sealed partial class GameSession
         pendingPvpPrivateCreation=null;SelectionEpoch++;
         return new CharacterCreationReceipt(created,CaptureRoster());
     });
+
+    public Character? ConvertSelectedPvpPrivateToNormal() => owner.Execute(() =>
+    {
+        if (Selected is not { IsPvpPrivate: true } current)
+            return null;
+        var converted = repository.ConvertPvpPrivateToNormal(owner, current);
+        Selected = converted;
+        return converted;
+    });
 }

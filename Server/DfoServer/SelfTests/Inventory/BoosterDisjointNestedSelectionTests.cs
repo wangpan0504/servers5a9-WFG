@@ -151,13 +151,46 @@ internal static class BoosterDisjointNestedSelectionTests
         const int childId = 490011826;
         var child = resources.Boosters.Get(childId);
         BoosterDefinition Parent(int id) => source with { Selection = new(1, [new(0, 0, [new(id, 1)])]) };
-        void Reject(int id, string reason, bool ordinary = false)
+        void Reject(int id, string reason, bool ordinary = false, ushort? expectedError = null)
         {
             string before = JsonSerializer.Serialize(role);
             var result = service.Open(role, ordinary ? new(3, 1) : Select(id), out var receipt, now);
-            That(!result.Accepted && result.Plan is null && receipt is null && JsonSerializer.Serialize(role) == before,
+            That(!result.Accepted && (expectedError is null || result.Error == expectedError) &&
+                result.Plan is null && receipt is null && JsonSerializer.Serialize(role) == before,
                 "806 " + reason + "整盒拒绝且无计划、回执或输入资产变更");
         }
+
+        definitions[SourceId] = Parent(childId) with { SetsEpicExchangeInstanceType = true };
+        var markedChildDefinition = child with { SetsDisjointInstanceType = true, SetsEpicExchangeInstanceType = true,
+            Selection = new(1, [new(0, 0, [new(16400, 1)])]) };
+        definitions[childId] = markedChildDefinition;
+        var equipment = resources.Items.Get(16400);
+        var equipmentRange = ItemSlotBoundService.Range(ItemKind.Equipment, role.Inventory);
+        var equipmentFull = role with { Inventory = role.Inventory with { Items = role.Inventory.Items.AddRange(
+            Enumerable.Range(equipmentRange.Start, equipmentRange.End - equipmentRange.Start + 1).Select(slot =>
+                new InventoryItem(50000 + slot, Bag((short)slot), InventoryRewardGrantService.Create(equipment, utcNow: now)))) } };
+        string markedBefore = JsonSerializer.Serialize(equipmentFull);
+        var marked = service.Open(equipmentFull, Select(childId), out var markedReceipt, now);
+        That(marked.Accepted && marked.Plan is not null && markedReceipt is not null,
+            "双声明自选父盒允许自身双声明的可用自选子盒，装备页满不占消耗品容量，实际error=" + marked.Error);
+        var markedChild = marked.Plan!.After.Items.Single(item => item.Core.ItemId == childId);
+        That(markedChild.Core == InventoryRewardGrantService.Create(resources.Items.Get(childId), utcNow: now) &&
+            markedChild.Core is { DisjointForbidden: false, DestructionSoulForbidden: false, EpicExchangeOrigin: null, Extension119: 0 } &&
+            markedReceipt!.Rewards.SequenceEqual(new[] { new BoosterGrantedItem(childId, 1) }) &&
+            JsonSerializer.Serialize(equipmentFull) == markedBefore,
+            "自选子盒保持自己的完整模板核心，不继承父盒装备限制、来源或资格位，规划不改变输入");
+
+        definitions[childId] = markedChildDefinition with { Selection = new(1, [new(0, 0, [new(SourceId, 1)])]) };
+        Reject(childId, "史诗父子盒A到B再到A的循环不是直接装备子盒，", expectedError: 19);
+        definitions[childId] = markedChildDefinition with { Selection = new(1, [new(0, 0, [new(1106, 1)])]) };
+        Reject(childId, "史诗子盒的普通消耗品叶不属于直接装备，", expectedError: 19);
+        definitions[childId] = markedChildDefinition with { Pools = [new(1, [new(16400, 1000, 1)])] };
+        Reject(childId, "史诗子盒混入额外奖池，", expectedError: 19);
+
+        definitions[childId] = markedChildDefinition;
+        definitions[SourceId] = Parent(childId) with { SetsEpicExchangeInstanceType = true,
+            Pools = [new(1, [new(16400, 1000, 1)])] };
+        Reject(childId, "史诗自选父盒混入额外奖池不能只按所选子盒放行，", expectedError: 19);
 
         definitions[SourceId] = Parent(1106);
         Reject(1106, "真实普通消耗品不是可用自选子盒，");
@@ -172,8 +205,13 @@ internal static class BoosterDisjointNestedSelectionTests
         foreach (bool disjoint in new[] { false, true })
         {
             definitions[SourceId] = Parent(childId) with { SetsDisjointInstanceType = disjoint, SetsEpicExchangeInstanceType = true };
-            Reject(childId, disjoint ? "分解与史诗双声明仍只准装备，" : "仅史诗声明仍只准装备，");
+            Reject(childId, disjoint ? "分解与史诗双声明不接受缺少对应史诗声明的子盒，" : "史诗声明不接受缺少对应声明的子盒，");
         }
+        // 子盒已具备史诗声明，单独验证父盒的分解声明不能丢失。
+        definitions[SourceId] = Parent(childId) with { SetsDisjointInstanceType = true, SetsEpicExchangeInstanceType = true };
+        definitions[childId] = child with { SetsDisjointInstanceType = false, SetsEpicExchangeInstanceType = true };
+        Reject(childId, "分解与史诗双声明不接受仅具史诗声明的子盒，", expectedError: 19);
+        definitions[childId] = child;
 
         int contract = resources.Contracts.ByItem.Keys.First(id => resources.Contracts.TryAcquisitionContract(id, out _) &&
             resources.Items.Get(id).Kind == ItemKind.Consumable);
@@ -190,6 +228,11 @@ internal static class BoosterDisjointNestedSelectionTests
         definitions[childId] = child;
         That(service.Open(role, new(3, 1), out var plainReceipt, now).Accepted && plainReceipt is not null,
             "普通固定父盒可以发真实可用自选子盒");
+        // 子盒两项声明均满足，单独验证史诗父盒仍须有自己的选择定义。
+        definitions[SourceId] = ordinaryParent with { SetsEpicExchangeInstanceType = true };
+        definitions[childId] = child with { SetsDisjointInstanceType = true, SetsEpicExchangeInstanceType = true };
+        Reject(childId, "非自选史诗父盒不能借完整声明子盒放行，", ordinary: true, expectedError: 19);
+        definitions[childId] = child;
         foreach (var invalidParent in new[]
         {
             ordinaryParent with { Lottery = true },

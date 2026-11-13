@@ -12,6 +12,7 @@ using DfoServer.Game.Skills;
 using DfoServer.GameWorld.Dungeons;
 using DfoServer.GameWorld.Items;
 using DfoServer.Persistence;
+using DfoServer.Network;
 using static DfoServer.Testing.TestCheck;
 using static DfoServer.Testing.TcpPeer;
 using static DfoServer.Testing.PartyDungeonTcpTests;
@@ -96,10 +97,6 @@ internal static partial class Strongway2019TcpTests
             BeginSelection(peer);
             RejectEntry(peer, "真实抗魔达标但活动关闭");
             events.Override(ServerEventService.Strongway2019Id, true);
-            peer.Send(132);
-            var returnedToTown = Drain(peer);
-            That(returnedToTown.Any(packet => packet is { Kind: 1, Opcode: 132, Body: [1] }),
-                "指定直入回归先从原生选图返回城镇");
             byte[] directEntry = new byte[4];
             BinaryPrimitives.WriteUInt32LittleEndian(directEntry, 5359);
             peer.Send(15, directEntry);
@@ -453,14 +450,22 @@ internal static partial class Strongway2019TcpTests
             peer.Barrier();
         }
 
-        void RejectEntry(TcpPeer peer, string reason)
+        void RejectEntry(TcpPeer peer, string reason, uint dungeon = 5359)
         {
             string previous = Assets(peer.Id);
-            peer.Send(16, EntryRequest());
+            var request = EntryRequest();
+            BinaryPrimitives.WriteUInt32LittleEndian(request, dungeon);
+            peer.Send(16, request);
             var rejected = Drain(peer);
             That(rejected.Count(packet => packet is { Kind: 1, Opcode: 16, Body.Length: 4 } && packet.Body[0] == 0 && packet.Body[3] == 0) == 1 &&
                 !rejected.Any(packet => packet.Kind == 0 && packet.Opcode is 28 or 29) && Assets(peer.Id) == previous,
                 reason + "时按ACK16结束等待，不预留attempt、不扣资产、不创建原Run");
+            int ack = Array.FindIndex(rejected.ToArray(), packet => packet is { Kind: 1, Opcode: 16 });
+            int returned = Array.FindIndex(rejected.ToArray(), packet => packet is { Kind: 1, Opcode: 132, Body: [1] });
+            int area = Array.FindIndex(rejected.ToArray(), packet => packet is { Kind: 0, Opcode: 24 });
+            int notice = Array.FindIndex(rejected.ToArray(), packet => packet.Kind == 0 && packet.Opcode == (ushort)NotiPacketType.AAS_TIPS);
+            That(returned > ack && area > returned && notice > area,
+                reason + "失败后自动返回准备区并显示原因，不能要求玩家在空选图页手动退出");
         }
 
         string Experience(ushort id) => fixture.Snapshot("SELECT experience FROM characters WHERE id=$p0", id) +

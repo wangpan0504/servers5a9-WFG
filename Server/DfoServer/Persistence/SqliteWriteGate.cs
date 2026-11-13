@@ -74,6 +74,33 @@ internal static class SqliteWriteGate
         }
     }
 
+    // 不等待。进程内已有写者时立刻失败，调用方把它当成 SQLITE_BUSY，不能在 owner 里排队。
+    // 同一线程已持闸门时也失败：内层再 BEGIN 会自锁，不能借这次尝试把等待藏进去。
+    internal static bool TryTake(string action, out IDisposable? held)
+    {
+        held = null;
+        if (depth != 0 || !Gate.Wait(0)) return false;
+        depth = 1;
+        int running = Interlocked.Increment(ref active);
+        int high = Volatile.Read(ref peak);
+        while (running > high && Interlocked.CompareExchange(ref peak, running, high) != high)
+            high = Volatile.Read(ref peak);
+        SqliteDbDiagnostics.Report("gate_wait", action, 0, null);
+        held = new GateHold();
+        return true;
+    }
+
+    sealed class GateHold : IDisposable
+    {
+        bool disposed;
+        public void Dispose()
+        {
+            if (disposed) return;
+            disposed = true;
+            Release(true);
+        }
+    }
+
     internal static void Release(bool acquired)
     {
         if (acquired)

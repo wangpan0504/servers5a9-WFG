@@ -73,6 +73,10 @@ internal static class AvatarSocketTests
             That(AvatarSocketOpenerDefinition.Parse(bad, sourceTemplate) is null, "畸形、未知参数、无效白名单及其他动作拒绝");
 
         var avatar = AvatarPackageCatalog.ParseAvatar("[avatar type select]\n0 0 0 0 0 0 0\n0 0 0 0 0 0 3 `[S socket]` `[C socket]` `[C socket]`\n[/avatar type select]");
+        var normalizedRareCoat = AvatarPackageCatalog.ParseAvatar(
+            "[equipment type]\n`[coat avatar]` 0\n[grade]\n3\n[avatar type select]\n0 0 0 0 0 0 2 `[C socket]` `[C socket]`\n0 0 0 0 0 0 0\n[/avatar type select]");
+        That(normalizedRareCoat.Types.Any(type => type.Sockets == new AvatarSocketTypes(16, 4, 4, 0, 0)),
+            "稀有上衣/下装PVF仅声明双绿孔时补齐白金槽位");
         var source = new InventoryItem(11, request.Material, new(7421, ItemKind.Consumable, 2) { SortLockFlag = 1, ExpireTime = 1200 });
         var target = new InventoryItem(12, request.Target, new(100, ItemKind.Avatar, 12) { Attr = 7, Durability = 3, SortLockFlag = 1 })
         { Avatar = new() { ExpireTime = 1100, ClearAvatarId = 1234, Color1 = 3, Color2 = 4 } };
@@ -84,6 +88,11 @@ internal static class AvatarSocketTests
             { Socket0 = AvatarSocket.Empty(16), Socket1 = AvatarSocket.Empty(4), Socket2 = AvatarSocket.Empty(4) } } &&
             result.Plan.After.Gold == 1234 && character.Inventory.Find(request.Target) == target,
             "按完整资源开三孔且只扣一个源，保留完整UID、核心、染色、克隆外观、期限和金币，不修改原快照");
+        var legacyTarget = target with { Avatar = target.Avatar with { Socket0 = new(4, 3001), Socket1 = AvatarSocket.Empty(4) } };
+        var legacyUpgrade = Plan(Role(source, legacyTarget));
+        That(legacyUpgrade.Accepted && legacyUpgrade.Plan!.After.Find(request.Target) == legacyTarget with
+            { Avatar = legacyTarget.Avatar with { Socket0 = AvatarSocket.Empty(16), Socket1 = new(4, 3001), Socket2 = AvatarSocket.Empty(4) } },
+            "历史已开双绿孔的稀有上衣/下装可再用7421补齐首槽白金孔并保留已镶嵌绿孔徽章");
         That(result.Plan!.CharacterPrecondition!.Matches(character, 1099) &&
             !result.Plan.CharacterPrecondition.Matches(character, 1100) &&
             !result.Plan.CharacterPrecondition.Matches(character with { Revision = 1 }, 1000), "提交复验最早期限及revision");
@@ -149,8 +158,10 @@ internal static class AvatarSocketTests
         That(items.AvatarSocketOpener(7421) is { Item.Grade: 3, Mode: 2 } rare && rare.Allows(items.Get(101550535)) &&
             items.AvatarSocketOpener(10301316) is { Item.Grade: 1, Mode: 3 } skin && skin.Allows(items.Get(415580044)) &&
             avatars.GetAvatar(101550535).Types.Any(type => type.Sockets == new AvatarSocketTypes(1, 1, 0, 0, 0)) &&
-            avatars.GetAvatar(415580044).Types.Any(type => type.Sockets == new AvatarSocketTypes(239, 239, 0, 0, 0)),
-            "真实7421、10301316分别匹配稀有帽子双红孔及高级皮肤双多色孔");
+            avatars.GetAvatar(415580044).Types.Any(type => type.Sockets == new AvatarSocketTypes(239, 239, 0, 0, 0)) &&
+            avatars.GetAvatar(415500018).Types.Any(type => type.Sockets == new AvatarSocketTypes(16, 4, 4, 0, 0)) &&
+            avatars.GetAvatar(415510018).Types.Any(type => type.Sockets == new AvatarSocketTypes(16, 4, 4, 0, 0)),
+            "真实7421、10301316分别匹配稀有帽子双红孔、高级皮肤双多色孔及女圣职者天空上下装白金+双绿孔");
         foreach (int id in new[] { 10014841, 10093555 })
         {
             var limited = items.AvatarSocketOpener(id);

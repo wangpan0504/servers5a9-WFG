@@ -11,19 +11,55 @@ internal sealed class InventoryService(ItemCatalog catalog, GoldLimitCatalog gol
 {
     readonly TimeProvider time = clock ?? TimeProvider.System;
 
-    public InventoryResult Move(Character character, InventoryMoveRequest request, bool loginWearRestatement = false) =>
+    // 在线入口在owner锁外预读至多两端及六个快捷格；规划中的Get只命中共享模板缓存。
+    public void PrepareMove(Character character, InventoryMoveRequest request)
+    {
+        bool talismanUnequip =
+            (request.Source.List == InventoryListType.Equipment &&
+             (request.Source.Index == ItemSlotBoundService.TalismanEquipmentStart ||
+              request.Source.Index == ItemSlotBoundService.TalismanEquipmentEnd) &&
+             request.Destination.List == InventoryListType.Talisman && request.Destination.Index is >= 0 and < 70) ||
+            (request.Destination.List == InventoryListType.Equipment &&
+             (request.Destination.Index == ItemSlotBoundService.TalismanEquipmentStart ||
+              request.Destination.Index == ItemSlotBoundService.TalismanEquipmentEnd) &&
+             request.Source.List == InventoryListType.Talisman && request.Source.Index is >= 0 and < 70);
+        if (talismanUnequip)
+        {
+            var equipmentSlot = request.Source.List == InventoryListType.Equipment ? request.Source : request.Destination;
+            if (character.Inventory.Find(equipmentSlot)?.Core.Kind == ItemKind.Talisman)
+                for (short offset = 0; offset < 3; offset++)
+                {
+                    var rune = character.Inventory.Find(new(InventoryListType.Talisman,
+                        (short)(ItemSlotBoundService.EquippedRuneStart +
+                            (equipmentSlot.Index - ItemSlotBoundService.TalismanEquipmentStart) * 3 + offset)));
+                    if (rune is not null)
+                        _ = catalog.Get(rune.Core.ItemId);
+                }
+        }
+        if (!QuickSlotEquipmentRules.IsQuickSlot(request.Source) && !QuickSlotEquipmentRules.IsQuickSlot(request.Destination)) return;
+        foreach (var item in character.Inventory.Items)
+            if (item.Core.Kind == ItemKind.Equipment && (item.Position == request.Source || item.Position == request.Destination ||
+                QuickSlotEquipmentRules.IsQuickSlot(item.Position)))
+                _ = catalog.Get(item.Core.ItemId);
+    }
+
+    public InventoryResult Move(Character character, InventoryMoveRequest request, bool loginWearRestatement = false,
+        bool allowQuickSlotEquipmentChange = true) =>
         // 已选中装扮预设时，穿戴/卸下在同一事务内实时回写该预设。
         AvatarPresetService.SyncActive(InventoryMoveService.Plan(character, request, catalog,
-            DateTimeOffset.UtcNow.ToUnixTimeSeconds(), contracts, loginWearRestatement));
-    public InventoryResult Sort(Character character, ItemKind kind, byte condition) => InventorySortService.Plan(character.Inventory, kind, condition, catalog, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+            DateTimeOffset.UtcNow.ToUnixTimeSeconds(), contracts, loginWearRestatement, allowQuickSlotEquipmentChange));
+    public InventoryResult Sort(Character character, ItemKind kind, byte condition) => InventorySortService.Plan(character.Inventory, kind, condition, catalog, time.GetUtcNow().ToUnixTimeSeconds());
     public InventoryResult Sort(Character character, InventorySortRequest request) => InventorySortService.Plan(character.Inventory,
-        request.Kind, request.Condition, catalog, DateTimeOffset.UtcNow.ToUnixTimeSeconds(), request.List);
+        request.Kind, request.Condition, catalog, time.GetUtcNow().ToUnixTimeSeconds(), request.List);
     public InventoryResult Grant(Character character, IReadOnlyList<InventoryReward> rewards) =>
         InventoryRewardGrantService.TryGrantBatch(character, rewards, catalog, goldLimits, pieces, contracts: contracts);
     public InventoryResult Delete(Character character, InventoryDeleteRequest request, bool preserveMaterials = false) =>
         InventoryDeleteService.PlanBatch(character.Inventory, request, preserveMaterials, time);
     public InventoryResult DecreaseDurability(Character character, byte slot)
     {
+        // 类型31由实际疲劳消费统一扣能量；兼容客户端通用48上报，不重复扣或触发免费修理。
+        if (slot == QuickSlotEquipmentDefinition.EquipmentType)
+            return new(true, 0, new(character.Inventory, character.Inventory, "quick_slot_energy_fatigue_owned"));
         var source = character.Inventory.Find(new(InventoryListType.Equipment, slot));
         if (source is null || source.Core.Kind != ItemKind.Equipment)
             return InventoryResult.Reject();

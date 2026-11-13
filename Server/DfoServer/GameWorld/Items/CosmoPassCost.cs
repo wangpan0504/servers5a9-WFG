@@ -7,6 +7,9 @@ namespace DfoServer.GameWorld.Items;
 internal sealed record CosmoPassCost(int ItemId, int Count, int AdditionalStones)
 {
     public const string Path = "etc/freepassitem.etc";
+    // 每日签到得好礼（活动2370）产出的星空裂缝通行证与超·星空裂缝通行证原文明确入场规则，当前通用表未列出。
+    internal const int DailyAttendanceStarPass = 490013043;
+    internal const int DailyAttendanceCosmoPass = 490013049;
     public static ImmutableArray<CosmoPassCost> Load(PvfArchive archive) => archive.Contains(Path)
         ? Parse(archive.ReadTokens(Path),archive.ResolveString) : [];
 
@@ -27,6 +30,8 @@ internal sealed record CosmoPassCost(int ItemId, int Count, int AdditionalStones
                 throw new InvalidDataException("超星空通行证编号、费用或附加条件未确认");
             rows.Add(row);
         }
+        if (!ids.Contains(DailyAttendanceStarPass)) rows.Add(new(DailyAttendanceStarPass,1,2));
+        if (!ids.Contains(DailyAttendanceCosmoPass)) rows.Add(new(DailyAttendanceCosmoPass,1,0));
         return rows.ToImmutable();
     }
 }

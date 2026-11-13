@@ -4,10 +4,12 @@ using DfoServer.GameWorld.BattlePass;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Raids;
+using DfoServer.Game.Session;
 using DfoServer.Game.Skills;
 using DfoServer.GameWorld.Raids;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Persistence;
+using DfoServer.Network.Protocol;
 using static DfoServer.Testing.TestCheck;
 using static DfoServer.Testing.TcpPeer;
 using static DfoServer.Testing.AntonRaidTcpTests;
@@ -86,7 +88,7 @@ internal static partial class LukeRaidRunTcpTests
                     var peer = Open(fixture, account, gamePort: port, channelNumber: 20);
                     if (deathPolicy is not null)
                     {
-                        peer.ExpectedOpenEvents = [2532, 266, 2520];
+                        peer.ExpectedOpenEvents = [282, 2449, 414, 181, 2532, 266, 2520];
                         peer.ExpectedBattlePassEnd = checked((uint)deathPolicy.End.ToUnixTimeSeconds());
                     }
                     peer.Select(); peers.Add(peer);
@@ -140,9 +142,7 @@ internal static partial class LukeRaidRunTcpTests
                     "真实开盒后原生658自动检测查询返回全员门票就绪");
                 Until(leader, 1, 658);
                 foreach (var peer in peers) Drain(peer);
-                leader.Send(666);
-                var leaderStart = new List<WirePacket>();
-                Bytes(Until(leader, 1, 666, leaderStart).Body, [1], "默认Runtime直接启用完整卢克开战，无注入合成策略");
+                var leaderStart = await StartProductionAsync(peers, raidKey, injectBusy: count == 4);
                 foreach (var peer in peers)
                 {
                     var started = Drain(peer);
@@ -439,8 +439,17 @@ internal static partial class LukeRaidRunTcpTests
                                 foreach (var row in frozen)
                                 {
                                     That(row.Eligible, "二阶段权益页只取阶段事务真实签发的成员资格");
+                                    var personalOffer = row.Offers.Single(offer => offer.Kind == 1);
                                     var offer = row.Offers.Single(offer => offer.Kind == 0);
                                     var items = offer.LukeAdditionalResults.Insert(0, offer.LukeResult!);
+                                    int rockCount = offer.Grants.Single(grant => grant.ItemId == 10159623).Count;
+                                    byte expectedSquadCode = offer.Grants.Length == 3 || rockCount >= 30 ? (byte)1 :
+                                        offer.Grants.Length == 2 && rockCount < 30 ? (byte)0 :
+                                        throw new InvalidOperationException("二阶段团队档位形状不在官方8档");
+                                    That(personalOffer.LukeResult!.RawCode == 0 &&
+                                        personalOffer.LukeAdditionalResults.All(item => item.RawCode == 0) &&
+                                        items.All(item => item.RawCode == expectedSquadCode),
+                                        "二阶段持久资格按所中团队档位RawD冻结一致code，同阶段个人奖励保持code0");
                                     var itemBody = Build(itemsWriter =>
                                     {
                                         itemsWriter.Write(checked((byte)items.Length));
@@ -726,6 +735,83 @@ internal static partial class LukeRaidRunTcpTests
             while (wait.Elapsed < TimeSpan.FromSeconds(10))
             { if (condition()) { That(true, message); return; } await Task.Delay(10); }
             That(false, message);
+        }
+
+        async Task<List<WirePacket>> StartProductionAsync(List<TcpPeer> members, uint raidKey, bool injectBusy)
+        {
+            var leader = members[0];
+            int observedStarts = fixture.Events().Count(row => row.GetProperty("Kind").GetString() == "raid_start_request");
+            SemaphoreSlim? held = null;
+            try
+            {
+                if (injectBusy)
+                {
+                    // 沿既有同进程探针取得原会话，只占用一次成员门禁，确定性覆盖拒绝及释放后恢复。
+                    const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+                    var host = typeof(TcpTestFixture).GetField("runtimeHost", flags)!.GetValue(fixture)!;
+                    var protocol = host.GetType().GetFields(flags).Select(field => field.GetValue(host)).OfType<GameProtocolHandler>().Single();
+                    var directory = typeof(GameProtocolHandler).GetFields(flags).Select(field => field.GetValue(protocol)).OfType<OnlineSessionDirectory>().Single();
+                    var gate = directory.FindConnectionByCharacterId(members[^1].Id)!.Session.CommandGate;
+                    That(await gate.WaitAsync(TimeSpan.FromSeconds(5)), "确定性Busy夹具须取得当前成员原命令门禁");
+                    held = gate;
+                }
+                var timer = System.Diagnostics.Stopwatch.StartNew();
+                for (int attempt = 0; attempt < 32 && timer.Elapsed < TimeSpan.FromSeconds(5); attempt++)
+                {
+                    // 两个既有只读快照分别覆盖资产表与全部设置表，合计不遗漏全库任何表。
+                    string before = Snapshot();
+                    leader.Send(666);
+                    var frames = new List<WirePacket>();
+                    var ack = Until(leader, 1, 666, frames).Body;
+                    var detail = await NextStartLogAsync();
+                    That(detail.GetProperty("Self").GetUInt16() == leader.Id &&
+                        detail.GetProperty("Key").GetString() == raidKey.ToString("X8") &&
+                        detail.GetProperty("Members").GetInt32() == members.Count,
+                        "开战日志必须对应本次团长、攻坚队和完整人数，不消费其它请求的Busy");
+                    bool busy = ack.SequenceEqual(new byte[] { 0, 19, 0 }) &&
+                        detail.GetProperty("Reason").GetString() == "raid-member-command-busy" &&
+                        !detail.GetProperty("Accepted").GetBoolean() && detail.GetProperty("Error").GetInt32() == 19;
+                    if (held is not null)
+                    {
+                        That(busy, "显式占用成员原门禁时真实666严格返回Busy，不扣票或绕过门禁");
+                        held.Release();
+                        held = null;
+                    }
+                    if (!busy)
+                    {
+                        Bytes(ack, [1], "默认Runtime直接启用完整卢克开战，无注入合成策略");
+                        That(detail.GetProperty("Accepted").GetBoolean() && detail.GetProperty("Error").GetInt32() == 0,
+                            "成功ACK同时对应真实开战成功日志，不把其它19或错误原因作为重试");
+                        return frames;
+                    }
+                    foreach (var member in members) frames.AddRange(Drain(member));
+                    That(frames.All(packet => packet.Opcode is not (9 or 14 or 594 or 587 or 1184 or 776 or 583)),
+                        "每次Busy不发布名单、资产、费用、开战状态、塔罗或战况");
+                    That(Snapshot() == before, "每次Busy保持全库资产、位置、入场账本及额度原样");
+                    if (injectBusy && attempt == 0)
+                        Console.WriteLine("PASS Luke production explicit member gate Busy preserves all tables and sends no start state");
+                    await Task.Yield();
+                }
+                throw new InvalidOperationException("Luke生产开战门禁超过32次或5秒仍Busy，保留现场");
+
+                string Snapshot() => ClientSettingsSnapshots.Capture(fixture.Database, true) + "\n" +
+                    ClientSettingsSnapshots.Capture(fixture.Database, false);
+                async Task<System.Text.Json.JsonElement> NextStartLogAsync()
+                {
+                    while (timer.Elapsed < TimeSpan.FromSeconds(5))
+                    {
+                        var rows = fixture.Events().Where(row => row.GetProperty("Kind").GetString() == "raid_start_request").ToArray();
+                        if (rows.Length > observedStarts) return rows[observedStarts++].GetProperty("Detail");
+                        // 只轮询已落盘完整日志这一可观测条件，不用固定休眠猜测门禁释放。
+                        await Task.Delay(10);
+                    }
+                    throw new InvalidOperationException("等待本次生产666结构化日志超过5秒");
+                }
+            }
+            finally
+            {
+                held?.Release();
+            }
         }
     }
     static void AwaitPhaseTwo(LukeRaidClockTests.Clock clock, TcpPeer[] peers, TcpPeer leader)

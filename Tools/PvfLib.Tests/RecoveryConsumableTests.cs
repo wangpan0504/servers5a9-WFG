@@ -4,13 +4,35 @@ namespace PvfLib.Tests;
 
 internal static class RecoveryConsumableTests
 {
+    static void RepeatedPurchaseMaterials()
+    {
+        string[] strings = ["[hp recovery]", "+", "myself", "[need material]", "[/need material]"];
+        string Resolve(int at) => strings[at];
+        PvfToken[] prefix = [new(3, 0), new(6, 1), new(0, 410), new(0, 1000), new(6, 2),
+            new(3, 3), new(0, 5050508), new(0, 30), new(3, 4)];
+        PvfToken[] price = [new(3, 3), new(0, 10004697), new(0, 25), new(3, 4)];
+        var parsed = RecoveryConsumableFile.Parse(10004688, "stackable/repeated-price.stk", [..prefix, ..price], Resolve);
+        That(parsed.Diagnostics.IsEmpty && parsed.HpRecovery is { Amount: 410 } && parsed.DeclaredFields.Contains("need material"),
+            "两段完整商店材料价格不影响消耗品效果解析，价格声明仍保留");
+        foreach (PvfToken[] bad in new PvfToken[][] { [new(3, 3), new(3, 4)],
+            [new(3, 3), new(0, 10004697), new(3, 4)], [new(3, 3), new(0, 10004697), new(0, 0), new(3, 4)],
+            [new(3, 3), new(6, 1), new(0, 25), new(3, 4)] })
+            That(!RecoveryConsumableFile.Parse(10004688, "stackable/repeated-price.stk", [..prefix, ..bad], Resolve).Diagnostics.IsEmpty,
+                "重复价格含空值、残缺、非正整数或错类型时仍保留诊断");
+        Reject<InvalidDataException>(() => RecoveryConsumableFile.Parse(10004688, "stackable/repeated-price.stk",
+            [..prefix, new(3, 3), new(0, 10004697), new(0, 25)], Resolve));
+    }
+
     public static void Run()
     {
+        RepeatedPurchaseMaterials();
+        UseRestrictionDeclarations();
         string[] strings = ["[cool time]", "[cooltime group]", "[hp recovery]", "+", "myself", "[need material]", "[sub type]",
             "[stat change duration]", "party", "[effect maintenance]", "[cooltime maintenance]", "[quest exp bonus rate]", "[exp bonus rate]",
             "[total usable count]", "[attach type]", "[trade]", "[account]", "[action usable dungeon]", "[/action usable dungeon]",
             "[stat change]", "[/stat change]", "physical attack", "%", "physical attack bonus",
-            "[stackable type]", "[disguise]", "[string data]", "[/string data]", "monster", "[int data]", "[/int data]"];
+            "[stackable type]", "[disguise]", "[string data]", "[/string data]", "monster", "[int data]", "[/int data]",
+            "[icon mark]", "item/IconMark.img"];
         string Resolve(int at) => strings[at];
         PvfToken[] valid = [new(3, 0), new(0, 10000), new(3, 1), new(0, 0), new(3, 2),
             new(6, 3), new(0, 410), new(0, 1000), new(6, 4)];
@@ -24,6 +46,16 @@ internal static class RecoveryConsumableTests
         var disguise = RecoveryConsumableFile.Parse(10312386, "stackable/disguise.stk", [..disguiseHeader,..disguiseTail], Resolve);
         That(disguise.Disguise == new DisguiseDeclaration("monster",63039,60) && disguise.Diagnostics.IsEmpty,
             "变身保留完整形态及秒数，源模板ID与形态ID分离");
+        PvfToken[] marks = [new(3,31),new(6,32),new(0,142),new(3,31),new(6,32),new(0,34)];
+        var marked = RecoveryConsumableFile.Parse(490013485,"stackable/marked-disguise.stk",
+            [..disguiseHeader,..disguiseTail,..marks],Resolve);
+        That(marked.Diagnostics.IsEmpty && marked.Disguise == disguise.Disguise,
+            "多条完整图标标记不误拒绝变身，原形态与时长保持");
+        foreach (PvfToken[] invalidMarks in new PvfToken[][] { marks[..^1], [..marks[..^1],new(6,32)],
+            [..marks[..^1],new(0,-1)] })
+            That(!RecoveryConsumableFile.Parse(490013485,"stackable/marked-disguise.stk",
+                [..disguiseHeader,..disguiseTail,..invalidMarks],Resolve).Diagnostics.IsEmpty,
+                "重复图标标记含截断、错误类型或负索引时仍保留诊断");
         foreach (PvfToken[] tail in new PvfToken[][] {
             [new(3,26),new(6,28),new(3,27)],
             [new(3,26),new(6,28),new(3,27),new(3,29),new(0,63039),new(3,30)],
@@ -126,6 +158,43 @@ internal static class RecoveryConsumableTests
         {
             result = RecoveryConsumableFile.Parse(1, "stackable/example.stk", [..valid,..tail], Resolve);
             That(result.TotalUsableCount is null && !result.Diagnostics.IsEmpty, "畸形或重复日次数不能被解释为无限使用");
+        }
+    }
+
+    static void UseRestrictionDeclarations()
+    {
+        string[] strings = ["[cool time]", "[cooltime group]", "[limit dungeon]", "[/limit dungeon]",
+            "[impossible contents]", "[/impossible contents]", "gift", "raid dungeon"];
+        string Resolve(int at) => strings[at];
+        PvfToken[] header = [new(3, 0), new(0, 30000), new(3, 1), new(0, 865)];
+        RecoveryConsumableFile Read(params PvfToken[] restrictions) => RecoveryConsumableFile.Parse(490013727,
+            "stackable/restriction-fixture.stk", [.. header, .. restrictions], Resolve);
+        var absent = Read();
+        That(absent.LimitDungeons.IsEmpty && absent.ImpossibleContents.IsEmpty && absent.Diagnostics.IsEmpty,
+            "未声明使用限制保持空集合，不给普通药补禁图或禁止用途");
+        That(Read(new(3, 2), new(3, 3)).LimitDungeons is { IsDefault: false, IsEmpty: true },
+            "完整空禁图块保持原有无限制含义，不因本次名单传递收窄普通药资格");
+        var complete = Read(new(3, 2), new(0, 210), new(0, 5313), new(3, 3),
+            new(3, 4), new(6, 6), new(3, 5), new(3, 4), new(6, 7), new(6, 6), new(3, 5));
+        That(complete.LimitDungeons.SequenceEqual(new[] { 210, 5313 }) &&
+            complete.ImpossibleContents.SequenceEqual(new[] { "gift", "raid dungeon" }) && complete.Diagnostics.IsEmpty,
+            "显式禁图完整保留，多个完整禁止用途块按原序并集读取，不丢第二块raid声明");
+        foreach (PvfToken[] tail in new PvfToken[][] {
+            [new(3, 2), new(0, 0), new(3, 3)],
+            [new(3, 2), new(0, -1), new(3, 3)], [new(3, 2), new(0, 210), new(6, 6), new(3, 3)],
+            [new(3, 2), new(0, 210), new(3, 3), new(3, 2), new(0, 5313), new(3, 3)] })
+        {
+            var malformed = Read(tail);
+            That(malformed.LimitDungeons.IsDefault && !malformed.Diagnostics.IsEmpty,
+                "非正、混合类型或重复禁图声明明确无效，不过滤坏项成为部分或空名单");
+        }
+        foreach (PvfToken[] tail in new PvfToken[][] {
+            [new(3, 4), new(0, 1), new(3, 5)], [new(3, 4), new(6, 7)],
+            [new(3, 4), new(3, 2), new(0, 210), new(3, 3), new(3, 5)] })
+        {
+            var malformed = Read(tail);
+            That(malformed.ImpossibleContents.IsDefault && !malformed.Diagnostics.IsEmpty,
+                "错误类型、未闭合或嵌套禁止用途声明保留失败状态，不能默认为无限制");
         }
     }
 }

@@ -72,7 +72,7 @@ internal static partial class DungeonSettlementTests
                 "满级通关的经验条保持95级入口线，整单奖励等额推进熟练度");
             Check(AdventureRow("level") is 3L && AdventureRow("experience") is 270L &&
                 (string)AdventureRow("remainder")! == expected.Remainder.ToString(CultureInfo.InvariantCulture) &&
-                AdventureRow("capsule_experience") is 100L && AdventureRow("brave_experience") is 0L &&
+                AdventureRow("capsule_experience") is 200L && AdventureRow("brave_experience") is 0L &&
                 AdventureRow("revision") is 1L && Points() is { Length: 20 } points &&
                 BinaryPrimitives.ReadUInt32LittleEndian(points) == 200 && points.Skip(4).All(value => value == 0) &&
                 Position(role.Id) == checked((long)(cap + Reward.TotalExperience)),

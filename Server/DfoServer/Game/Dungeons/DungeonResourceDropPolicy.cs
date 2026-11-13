@@ -11,7 +11,9 @@ internal sealed class DungeonResourceDropPolicy(DungeonDropRuleCatalog rules, Du
     HarlemHellEpicDropPolicy? harlemEpics = null, HarlemAbyssBonusDropPolicy? abyssBonuses = null, SleepyHollowMaterialDropPolicy? sleepyHollow = null,
     OperationHopeRewardPolicy? hopeRewards = null, DimensionRewardPolicy? dimensionRewards = null,
     DungeonDropControlSettings? dropControl = null, LegacyHellDropPolicy? legacyHell = null,
-    DungeonRiftEpicDropPolicy? riftEpics = null, PandemoniumRegionalDropPolicy? regional = null, AssaultMaterialDropPolicy? assaultMaterials = null)
+    DungeonRiftEpicDropPolicy? riftEpics = null, PandemoniumRegionalDropPolicy? regional = null, AssaultMaterialDropPolicy? assaultMaterials = null,
+    EpicRoad2019SimulatedDropPolicy? epicRoadSimulated = null, TayberrsDropPolicy? tayberrs = null,
+    CarbonCrystalDropPolicy? carbonCrystal = null)
 {
     public const string Rule = "pvf-monster-reference-v2";
     public static ImmutableArray<string> RetainedFields { get; } = ["drop prob[4]", "rarity row[3]",
@@ -22,12 +24,19 @@ internal sealed class DungeonResourceDropPolicy(DungeonDropRuleCatalog rules, Du
     // 只在一次入图准备中复用不可变规则；对象编号、位置和实际随机结果仍归各只怪物。
     public Func<DungeonPlannedMonster, DungeonDropGenerationPlan> PrepareEntry(DungeonEntryPlan entry, DungeonHellRewardPolicy? hellRewards = null)
     {
+        if (TayberrsDropPolicy.Applies(entry))
+        {
+            var tayberrsPolicy = tayberrs ?? new TayberrsDropPolicy(new(), resolveItem);
+            var tayberrsMultipliers = entry.DropControlCaptured ? entry.DropMultipliers : dropControl?.Current.Resolve(entry);
+            return monster => DungeonDropControlSnapshot.Apply(tayberrsPolicy.Prepare(entry, monster), tayberrsMultipliers)
+                .WithDisjointRestrictions(entry.DisjointForbiddenDropRarities);
+        }
         bool ordinaryLuke = entry.IsOrdinaryLuke && entry.DungeonId is >= 5101 and <= 5106 && entry.IsOrdinary && !entry.IsPractice;
         if (ordinaryLuke && special?.OrdinaryLukeCards.Count != 24)
             throw new NotSupportedException("普通卢克缺少已批准的24张专属卡片资源合同");
-        var plans = new Dictionary<(int MonsterId, int Level, byte Type, byte SpawnType, int HellRolls, bool Boss, bool Wave, bool CanReward, bool CosmoBoss, bool LegendRare, bool SleepyHollowBoss, bool DimensionTerminal, bool RiftRewards, bool RegionalReward, bool AssaultMaterial), DungeonDropGenerationPlan>();
+        var plans = new Dictionary<(int MonsterId, int Level, byte Type, byte SpawnType, int HellRolls, bool Boss, bool Wave, bool CanReward, bool CosmoBoss, bool LegendRare, bool SleepyHollowBoss, bool DimensionTerminal, bool RiftRewards, bool RegionalReward, bool AssaultMaterial, bool EpicRoadSimulated, bool CarbonCrystal, bool WeekDungeonReward), DungeonDropGenerationPlan>();
         var epicEquipment = harlemEpics?.Pool(entry);
-        var dropMultipliers = dropControl?.Current.Resolve(entry);
+        var dropMultipliers = entry.DropControlCaptured ? entry.DropMultipliers : dropControl?.Current.Resolve(entry);
         bool regionalDrops = regional?.Applies(entry) == true;
         return monster =>
         {
@@ -37,18 +46,21 @@ internal sealed class DungeonResourceDropPolicy(DungeonDropRuleCatalog rules, Du
                 sleepyHollow?.IsRewardBoss(entry, monster) == true,
                 entry.Dimension is not null && monster.SourceMap is { } source && entry.IsTerminalMap(source),
                 riftEpics?.Matches(entry, monster) == true,
-                regionalDrops && PandemoniumRegionalDropPolicy.CanReward(monster), assaultMaterials?.Matches(entry, monster) == true);
+                regionalDrops && PandemoniumRegionalDropPolicy.CanReward(monster), assaultMaterials?.Matches(entry, monster) == true,
+                epicRoadSimulated?.Matches(entry, monster) == true,
+                carbonCrystal is not null && CarbonCrystalDropPolicy.CanReward(entry, monster), WeekDungeonRewardPolicy.Matches(entry, monster));
             if (plans.TryGetValue(key, out var existing)) return existing;
             // APC 不套普通怪概率；深渊奖励与不带奖励的普通计划分别保存。
-            var plan = monster.SpawnType > 3
+            var plan = WeekDungeonRewardPolicy.Prepare(entry, monster, (id, type) =>
+                Prepare(id, monster.CandidateLevel, type, entry.Difficulty, entry.BasisLevel, entry.PartyMemberCount)) ?? (monster.SpawnType > 3
                 ? new DungeonDropGenerationPlan("hell-party-apc", [], amplification: amplification)
-                : Prepare(monster.MonsterId, monster.CandidateLevel, monster.RewardType, entry.Difficulty, entry.BasisLevel, entry.PartyMemberCount);
+                : Prepare(monster.MonsterId, monster.CandidateLevel, monster.RewardType, entry.Difficulty, entry.BasisLevel, entry.PartyMemberCount));
             if (riftEpics is not null) plan = riftEpics.Extend(plan, entry, monster);
             if (monster.HellRewardRolls > 0 && hellRewards is not null)
                 plan = hellRewards.Extend(plan, entry.BasisLevel ?? monster.CandidateLevel, entry.HellPartyMode,
                     monster.HellRewardRolls, entry.Difficulty, entry.IsHellLegend || epicEquipment is not null || materials?.UsesHarlemFragments(entry) == true,
                     epicEquipment, entry.IsInfernoParty ? entry.Maze.IsInfernoSpecial ? 13 : 11 : null,
-                    legacyHell?.EquipmentRange(entry));
+                    legacyHell?.EquipmentRange(entry), legacyHell?.MatchesOrdinaryReward(entry, monster) == true);
             if (legacyHell is not null) plan = legacyHell.Extend(plan, entry, monster);
             if (harlemEpics is not null) plan = harlemEpics.Extend(plan, entry, monster, hellRewards);
             if (harlemEpics is not null) plan = harlemEpics.ExtendLegendRare(plan, entry, monster);
@@ -77,7 +89,10 @@ internal sealed class DungeonResourceDropPolicy(DungeonDropRuleCatalog rules, Du
                 plan = new(plan.ResourceSource + ";luke-normal-card-compat-v1;" + DungeonSpecialDropCatalog.CardPath, plan.Trials.Add(trial),
                     plan.ReferenceQuality, plan.Amplification) { OrdinaryLukeDailySource = monster.MonsterId };
             }
+            if (carbonCrystal is not null) plan = carbonCrystal.Extend(plan, entry, monster);
             plan = DungeonDropControlSnapshot.Apply(plan, dropMultipliers);
+            if (epicRoadSimulated is not null) plan = epicRoadSimulated.Extend(plan, entry, monster);
+            plan = plan.WithDisjointRestrictions(entry.DisjointForbiddenDropRarities);
             plans.Add(key, plan);
             return plan;
         };
@@ -138,7 +153,8 @@ internal sealed class DungeonResourceDropPolicy(DungeonDropRuleCatalog rules, Du
         {
             new(Rate(0), null, 1, 1, gold, multiplier, ReferenceGold: true, Category: DungeonDropCategory.Gold),
             new(Rate(1), null, 1, 1, RarityPools: Pools(1), Category: DungeonDropCategory.Materials),
-            new(Rate(2), null, 1, 1, RarityPools: Pools(2), Category: DungeonDropCategory.Equipment),
+            new(Rate(2), null, 1, 1, RarityPools: Pools(2), Category: DungeonDropCategory.Equipment)
+                { RarityBonusGroup = DungeonRarityBonusGroup.OrdinaryEquipment },
             new(Rate(3), null, 1, 1, RarityPools: Pools(3), Category: DungeonDropCategory.Materials)
         };
         var declaration = resolveMonster(monsterId);
@@ -147,7 +163,8 @@ internal sealed class DungeonResourceDropPolicy(DungeonDropRuleCatalog rules, Du
             var explicitItems = rows.Where(row => row.Parameter > 0).Select(row => new DungeonWeightedDropItem(resolveItem(row.ItemId), row.Parameter));
             var pool = new DungeonItemDropPool(explicitItems);
             if (pool.TotalWeight > 0)
-                trials.Add(new(DungeonExplicitDropPolicy.TriggerThreshold, pool, 1, 1, Category: DungeonDropCategory.MonsterItems));
+                trials.Add(new(DungeonExplicitDropPolicy.TriggerThreshold, pool, 1, 1, Category: DungeonDropCategory.MonsterItems)
+                    { RarityBonusGroup = DungeonRarityBonusGroup.MonsterSpecific });
         }
         if (special?.IndependentByMonster.TryGetValue(monsterId, out var independent) == true)
         foreach (var row in independent)
@@ -162,17 +179,43 @@ internal sealed class DungeonResourceDropPolicy(DungeonDropRuleCatalog rules, Du
             var pool = SpecialPool(source);
             if (pool.TotalWeight > 0)
                 trials.Add(new(threshold, pool, 1, 1, ProbabilityDenominator: 1000000, Attempts: attempts,
-                    GrowthContractEligible: row.ListFlag == 1 && monsterType == 3));
+                    GrowthContractEligible: row.ListFlag == 1 && monsterType == 3)
+                    { IndependentDrop = true,
+                        RarityBonusGroup = row.ListFlag == 1 ? DungeonRarityBonusGroup.IndependentLottery : DungeonRarityBonusGroup.None });
         }
         if (special?.WorldByLevel.TryGetValue(level, out var world) == true)
         {
             var pool = SpecialPool(world.Items);
             if (pool.TotalWeight > 0)
-                trials.Add(new(Math.Min(pool.TotalWeight, 100000), pool, 1, 1, ProbabilityDenominator: 100000));
+                trials.Add(new(Math.Min(pool.TotalWeight, 100000), pool, 1, 1, ProbabilityDenominator: 100000)
+                    { RarityBonusGroup = DungeonRarityBonusGroup.WorldLottery });
         }
         return new(Rule, trials, referenceQuality: true, amplification);
 
         DungeonItemDropPool SpecialPool(IEnumerable<DungeonSpecialDropItem> source) => new(source
             .Where(row => row.ItemId > 0 && row.Weight > 0).Select(row => new DungeonWeightedDropItem(resolveItem(row.ItemId), row.Weight)));
+    }
+
+    public DungeonDropGenerationPlan PrepareTayberrsPreview(DungeonDefinition definition, DungeonPlannedMonster monster)
+    {
+        if (definition.IsTayberrsStory)
+            return new(TayberrsDropPolicy.StoryRule, []);
+        if (!definition.IsTayberrs || !monster.IsBoss ||
+            monster.MonsterId is not (TayberrsDropPolicy.PartyBossMonsterId or TayberrsDropPolicy.SingleBossMonsterId))
+            return new(TayberrsDropPolicy.Rule, []);
+        return (tayberrs ?? new TayberrsDropPolicy(new(), resolveItem)).PrepareBossPreview();
+    }
+
+    public DungeonDropGenerationPlan PrepareEpicRoadPreview(DungeonDefinition definition, DungeonPlannedMonster monster, byte difficulty)
+    {
+        if (EpicRoadResourcePaths.Dungeons.GetValueOrDefault(definition.Id) != definition.Path || monster.SourceMap is not { } map)
+            throw new InvalidDataException("活动掉落预览需要正式副本与实际来源地图");
+        var maze = definition.Mazes.FirstOrDefault(maze => maze.MapSpecification?.Contains(map) == true)
+            ?? throw new InvalidDataException("活动掉落来源地图不在正式迷宫");
+        var boss = maze.MapSpecification!.Single(row => row.Kind == "boss");
+        // 预览不创建角色或实例；只把已核的正式路线交给同一个奖励准备器，倍率随后仅应用一次。
+        var entry = new DungeonEntryPlan(0, 0, checked((uint)definition.Id), 0, 0, difficulty, maze, maze.MapSpecification![0], boss)
+            { BasisLevel = definition.BasisLevel, DropControlCaptured = true };
+        return PrepareEntry(entry)(monster);
     }
 }

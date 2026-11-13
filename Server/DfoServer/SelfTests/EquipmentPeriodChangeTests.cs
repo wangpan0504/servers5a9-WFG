@@ -68,10 +68,10 @@ internal static class EquipmentPeriodChangeTests
         var shopSlot = new InventorySlot(InventoryListType.Main, 12);
         var design = new InventoryItem(1, designSlot, new(Design, ItemKind.Consumable, 3));
         var shopMaterial = new InventoryItem(2, shopSlot, new(ShopMaterial, ItemKind.Material, 1000));
-        // 强化11、增幅、附魔与随机属性都要随实例保留，只有物品ID变化。
+        // 强化11、增幅、附魔与随机属性随实例保留，升级只清除特效。
         var weapon = new InventoryItem(3, weaponSlot, new(SourceWeapon, ItemKind.Equipment, 123456)
         {
-            Attr = 11, EnchantCardId = 1234, AmplifyType = 1, AmplifyValue = 55, Random0 = new(1, 2, 3), Extension27 = 888
+            Attr = 11, EnchantCardId = 1234, AmplifyType = 1, AmplifyValue = 55, Random0 = new(1, 2, 3), Extension27 = 888, Rune = 1
         });
         var character = new Character(1, 0, "Period", 1, new(1, 0, 1, 1), null)
         { Level = 95, Job = 1, Inventory = new([design, shopMaterial, weapon]) };
@@ -81,8 +81,8 @@ internal static class EquipmentPeriodChangeTests
         var updated = plan.Plan!.After.Find(weaponSlot)!;
         That(updated.Core.ItemId == ProductWeapon && updated.Uid == weapon.Uid &&
             updated.Core.Attr == 11 && updated.Core.EnchantCardId == 1234 && updated.Core.AmplifyValue == 55 &&
-            updated.Core.Random0 == new RandomOption(1, 2, 3) && updated.Core.Extension27 == 888,
-            "★ 只换物品ID；强化、附魔、增幅、随机属性与UID全部保留");
+            updated.Core.Random0 == new RandomOption(1, 2, 3) && updated.Core.Extension27 == 888 && updated.Core.Rune == 0,
+            "★ 升级清除特效；强化、附魔、增幅、随机属性与UID全部保留");
         That(plan.Plan.After.Find(designSlot)!.Core.Count == 2,
             "制作图本身按源消费一件");
         That(plan.Plan.After.Find(shopSlot)!.Core.Count == 1000,
@@ -108,7 +108,7 @@ internal static class EquipmentPeriodChangeTests
             var old = weapon with { Core = weapon.Core with { Durability = durability } };
             var converted = service.Plan(character with { Inventory = new([design, old]) }, designSlot, weaponSlot, true);
             That(converted.Accepted && converted.Plan!.After.Find(weaponSlot) == old with
-                { Core = old.Core with { ItemId = ProductWeapon, Durability = Math.Min(durability, (ushort)20) } },
+                { Core = old.Core with { ItemId = ProductWeapon, Rune = 0, Durability = Math.Min(durability, (ushort)20) } },
                 "换模板将超上限耐久钳制到新上限，已损坏和零耐久不补满，其余核心及UID保留");
         }
         int expires = checked((int)clock.GetUtcNow().ToUnixTimeSeconds() + 10);

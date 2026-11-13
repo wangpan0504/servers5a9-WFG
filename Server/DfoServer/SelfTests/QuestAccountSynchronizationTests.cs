@@ -20,8 +20,37 @@ internal static class QuestAccountSynchronizationTests
     {
         int before = Count;
         var first = quests.Get(8709); var next = quests.Get(8710);
+        var epicRoad = quests.Get(8712);
         That(quests.All.Where(QuestAccountPolicy.PaidSynchronization).Select(q => q.Id).Order().SequenceEqual(new[] { 8709, 8710 }),
             "新版PVF带奖账号会面只覆盖两项，不开放活动或无奖励marker");
+        That(epicRoad.Definition is { Diagnostics.Length: 0, AccountQuest: false } definition &&
+            definition.Fields.Where(field => field.Name == "synchronization account quest").ToArray() is
+                [{ Children.Length: 0, Values: [{ Type: 0, Value: 1, Text: null }] }] &&
+            epicRoad.RewardType == "[item]" && epicRoad.Rewards.SequenceEqual(new[]
+            {
+                new QuestRewardToken(0, 0, null), new QuestRewardToken(0, 100, null)
+            }),
+            "官方8712保留显式账号同步标记与100金币资源奖励");
+        That(QuestAccountPolicy.SharedCompletion(epicRoad),
+            "官方8712显式账号同步标记进入一次领奖事务");
+        That(QuestAccountPolicy.ExplicitSynchronization(epicRoad) &&
+            QuestEligibility.InspectResource(epicRoad).Entry == QuestResourceEntry.Event,
+            "8712同步字段只识别资源形状，活动任务仍保留专用事件分类");
+        That(QuestEligibility.InspectResource(epicRoad, strongway2019Active: false,
+                epicRoad2019Active: true).Entry == QuestResourceEntry.Ordinary,
+            "10005开启后8712进入普通接取资格，默认关闭仍保留Event");
+        var epicRoadCandidate = new Character(1, 0, "EpicRoadQuest", 1, towns.Room, null) { Level = 95 };
+        That(!QuestEligibility.Candidates(epicRoadCandidate, quests).Contains(8712) &&
+            QuestEligibility.Candidates(epicRoadCandidate, quests, epicRoad2019Active: true).Contains(8712),
+            "活动开启时8712同时进入可见候选，关闭时不因隐藏候选分支漏开");
+        var unknownSynchronization = epicRoad with { Definition = epicRoad.Definition! with
+        {
+            Fields = epicRoad.Definition.Fields.Select(field => field.Name == "synchronization account quest"
+                ? field with { Values = [new(0, 2, null)] } : field).ToImmutableArray()
+        } };
+        That(!QuestAccountPolicy.ExplicitSynchronization(unknownSynchronization) &&
+            QuestCoverage.Unconfirmed(unknownSynchronization).Contains("synchronization account quest"),
+            "未知同步枚举仍保留未确认，不借字段名开放账号事务");
         foreach (var quest in new[] { first, next })
         {
             That(!quest.Definition!.AccountQuest && QuestAccountPolicy.SharedCompletion(quest) && QuestCoverage.HasOrdinaryDeclarations(quest),

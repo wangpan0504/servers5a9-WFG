@@ -139,6 +139,7 @@ internal static partial class FormalDungeonTcpTests
     static void ClearTayberrs(TcpTestFixture fixture, TcpPeer peer, DungeonDefinition definition, byte[] map, byte[] info,
         TcpTestResources resources)
     {
+        bool defaultDrops = string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("DFO_TAYBERRS_DROP_RULES"));
         int startMap = (int)U32(map, 14);
         var maze = definition.Mazes.First(row => row.HellParty is null && row.QuestConnectionTokens.Count == 0 &&
             row.MapSpecification is { } maps && maps.Any(spec => spec.Id == startMap));
@@ -146,16 +147,50 @@ internal static partial class FormalDungeonTcpTests
         var route = QuestStoryRouteTests.Path(maze.StaticTopology, new(map[0], map[1]), goal);
         foreach (var point in route)
         {
+            bool bossRoom = point == goal;
+            bool sawSimpleReward = false;
             for (int index = 0; index < map[18]; index++)
             {
                 int offset = 19 + index * 22;
                 if (map[offset + 13] > 3 || map[offset + 21] != 0) continue;
+                bool isBoss = map[offset + 13] == 3;
                 var report = Death(U16(map, offset + 6), peer.Id, map[offset + 12]);
                 peer.Send(39, report);
-                foreach (var notice in PartyDungeonTcpTests.Drain(peer).Where(packet => packet is { Kind: 0, Opcode: 38 }))
+                var drained = PartyDungeonTcpTests.Drain(peer);
+                foreach (var notice in drained.Where(packet => packet is { Kind: 0, Opcode: 38 }))
+                {
+                    ushort dropCount = U16(notice.Body, 2);
+                    if (!bossRoom || !isBoss)
+                        That(dropCount == 0, "泰波尔斯小怪与绿名怪不产生任何地面掉落");
+                    else
+                    {
+                        for (int dropIndex = 0; dropIndex < dropCount; dropIndex++)
+                        {
+                            uint dropItemId = U32(notice.Body, 4 + dropIndex * 131 + 6);
+                            That(defaultDrops ? dropItemId == TayberrsDropPolicy.CarbonCrystalId :
+                                dropItemId is TayberrsDropPolicy.CarbonCrystalId or TayberrsDropPolicy.AbyssInvitationId,
+                                "泰波尔斯默认领主地面只掉碳结晶体，邀请函须显式配置：" + dropItemId);
+                        }
+                    }
                     PickupResourceDrops(fixture, peer, notice.Body, 0, resources);
+                }
+                if (bossRoom && isBoss)
+                {
+                    var simple = drained.Single(packet => packet is { Kind: 0, Opcode: 1610 }).Body;
+                    uint count = U32(simple, 0);
+                    That(count is 1 or 2 && simple.Length == 4 + count * 8 &&
+                        U32(simple, 4) == 10305821 && U32(simple, 8) == 2 &&
+                        (count == 1 || U32(simple, 12) == 10305820 && U32(simple, 16) == 1) &&
+                        drained.Any(packet => packet is { Kind: 0, Opcode: 14 }),
+                        "泰波尔斯领主死亡同步下发NOTI 14入包差量与NOTI 1610获得物品横幅");
+                    sawSimpleReward = true;
+                }
             }
-            if (point == goal) break;
+            if (point == goal)
+            {
+                That(sawSimpleReward, "泰波尔斯终点领主死亡必触发NOTI 1610");
+                break;
+            }
             var next = route[Array.IndexOf(route, point) + 1];
             byte[] move = new byte[100]; move[0] = (byte)next.X; move[1] = (byte)next.Y;
             peer.Send(45, move); peer.Expect(1, 45, [1]); map = peer.Expect(0, 29).Body;

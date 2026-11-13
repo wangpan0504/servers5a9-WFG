@@ -37,6 +37,18 @@ internal static class MonsterCardBindPackets
         return body;
     }
 
+    // 027BA310：CMD 1122 (CARD_COMPOUND) 成功时读取 [1:u8, 0:i32, rewardItemId:i32, 0:i32, rarityUpgraded:i32, 0:i32] 共 21 字节。
+    public static byte[] CompoundSuccess(MonsterCardBindReceipt receipt)
+    {
+        if (receipt.Rewards.Length < 1 || receipt.Rewards[0].ItemId <= 0)
+            throw new InvalidDataException("怪物卡片合成成功缺少奖励编号");
+        byte[] body = new byte[21];
+        body[0] = 1;
+        BinaryPrimitives.WriteInt32LittleEndian(body.AsSpan(5), receipt.Rewards[0].ItemId);
+        BinaryPrimitives.WriteInt32LittleEndian(body.AsSpan(13), receipt.RarityUpgraded ? 1 : 0);
+        return body;
+    }
+
     public static byte[] Failure(ushort error = 22)
     {
         if (error is < 4 or > 23)

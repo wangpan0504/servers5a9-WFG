@@ -133,12 +133,13 @@ internal static partial class FormalDungeonTcpTests
                     "实际386当前轮对手39经Handler后得到完整零掉落38，保持原生死亡尾部");
                 bool terminal = opponent == last;
                 var notices = TournamentDrain(peer);
-                That(notices.All(packet => packet is { Kind: 0, Opcode: 31 or 115 } ||
+                That(notices.All(packet => packet is { Kind: 0, Opcode: 31 or 115 or 1349 } ||
                     packet is { Kind: 0, Opcode: 37 } && sample.Quest != 0 ||
                     packet is { Kind: 1, Opcode: 33, Body.Length: 7 } && sample.Quest != 0 &&
                     packet.Body[0] == 1 && U16(packet.Body, 1) == sample.Quest && U32(packet.Body, 3) == 0),
                     "逐轮死亡不补造Actor或普通奖励页，任务仅同步本次二觉条件");
                 CheckZeroExperienceNotices(notices);
+                CheckAdventureProgress(notices, required: sample.Quest == 0);
                 That(notices.Count(packet => packet.Opcode == 31) == (terminal ? 1 : 0) &&
                     notices.Count(packet => packet.Opcode == 115) == (terminal ? 1 : 0),
                     "仅全部合法轮次结束后发送一次115与31许可");
@@ -159,10 +160,11 @@ internal static partial class FormalDungeonTcpTests
             peer.Send(46, result);
             var settled = TournamentDrain(peer);
             That(settled.Count(packet => packet is { Kind: 0, Opcode: 388 }) == 1 &&
-                settled.All(packet => packet is { Kind: 0, Opcode: 388 } ||
+                settled.All(packet => packet is { Kind: 0, Opcode: 388 or 1349 } ||
                     packet is { Kind: 0, Opcode: 37 } && sample.Quest != 0),
                 "大会真实46呈现388，90级零经验同步原余额，不发送普通34/35");
             CheckZeroExperienceNotices(settled);
+            CheckAdventureProgress(settled);
             byte[] clear = settled.Single(packet => packet.Opcode == 388).Body;
             var cards = ReadTournamentCards(clear, definition.TournamentRewards!);
             That(SettlementCount() == 1 && ClaimCount() == 0,
@@ -216,6 +218,20 @@ internal static partial class FormalDungeonTcpTests
                 "SELECT count(*) FROM character_dungeon_tournament_rewards WHERE character_id=$p0", created.Id).Single()[0]);
             string ExperienceState() => fixture.Snapshot("SELECT level,experience FROM characters WHERE id=$p0", created.Id) +
                 fixture.Snapshot("SELECT proficiency_level,proficiency_experience FROM character_dungeon_state WHERE character_id=$p0", created.Id);
+            void CheckAdventureProgress(IReadOnlyList<WirePacket> packets, bool required = false)
+            {
+                var refresh = packets.Where(packet => packet is { Kind: 0, Opcode: 1349 }).ToArray();
+                That(refresh.Length <= 1 && (!required || refresh.Length == 1), "大会实际获得冒险团经验时同步一次进度");
+                if (refresh.Length == 0) return;
+                var body = refresh[0].Body;
+                var progress = fixture.Query("SELECT level,experience,capsule_experience FROM account_adventures WHERE account=$p0", account).Single();
+                That(body.Length == 50 && U16(body, 0) == peer.Id && U32(body, 2) == 40 &&
+                    U32(body, 6) == Convert.ToUInt32(progress[0]) &&
+                    BinaryPrimitives.ReadUInt64LittleEndian(body.AsSpan(14)) == Convert.ToUInt64(progress[1]) &&
+                    BinaryPrimitives.ReadUInt64LittleEndian(body.AsSpan(22)) == resources.Adventure.Experience.GetValueOrDefault(Convert.ToInt32(progress[0]) + 1) &&
+                    BinaryPrimitives.ReadUInt64LittleEndian(body.AsSpan(30)) == Convert.ToUInt64(progress[2]),
+                    "大会1349身份及进度等于本次真实已提交账号状态，不补造Actor或奖励页");
+            }
             void CheckZeroExperienceNotices(IReadOnlyList<WirePacket> packets)
             {
                 var growth = packets.Where(packet => packet is { Kind: 0, Opcode: 37 }).ToArray();

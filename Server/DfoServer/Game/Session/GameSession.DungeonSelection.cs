@@ -146,11 +146,16 @@ internal sealed partial class GameSession
             throw new InvalidOperationException("Dungeon-selection phase changed");
         ValidateDungeonSelection();
         // 先提交入口外落点，再消费选择身份；提交失败仍保留原MapSelect，不发送回城成功。
+        using var fiendwarReturn = restorePosition && NeedsFiendwarFinalReturn() && raidCombat is { } raid
+            ? raid.Battle.ReserveFiendwarReturn(raid.Actor, null) : null;
+        var returnPosition = fiendwarReturn is null ? CurrentDungeonSelection.ReturnPosition :
+            FiendwarReturnPosition(fiendwarReturn.Destination);
         if (CurrentDungeonSelection.IsTutorial && Selected!.Tutorial is { Completed: false })
             Selected = repository.CommitTutorialCheckpoint(owner, TutorialCheckpoint(Selected, "skip", Guid.NewGuid(), 0, 0,
                 null, 0, true)).Character;
-        else if (restorePosition && Selected!.Position != CurrentDungeonSelection.ReturnPosition)
-            Selected = repository.Save(owner, Selected, CurrentDungeonSelection.ReturnPosition, Selected.Return);
+        else if (restorePosition && Selected!.Position != returnPosition)
+            Selected = repository.Save(owner, Selected, returnPosition, Selected.Return);
+        fiendwarReturn?.Install();
         CurrentDungeonSelection = null;
         pendingQuestReplay = null;
         CancelDungeonContinuation();

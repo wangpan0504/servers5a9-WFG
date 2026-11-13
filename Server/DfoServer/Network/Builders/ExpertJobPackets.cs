@@ -265,4 +265,44 @@ internal static class ExpertJobPackets
         writer.Write(endurance);
         return stream.ToArray();
     }
+
+    public static byte[] PrivateStoreOpened(ushort owner, string title)
+    {
+        using var stream = new MemoryStream();
+        using var writer = new BinaryWriter(stream);
+        writer.Write((byte)1);
+        writer.Write(owner);
+        PacketEncoding.WriteString(writer, title);
+        return stream.ToArray();
+    }
+
+    public static byte[] PrivateStoreEntered(DfoServer.Game.ExpertJob.PrivateStoreRecord store)
+    {
+        using var stream = new MemoryStream();
+        using var writer = new BinaryWriter(stream);
+        writer.Write((byte)1);
+        writer.Write(store.OwnerId);
+        PacketEncoding.WriteString(writer, store.Title);
+        writer.Write(checked((byte)store.Offers.Length));
+        foreach (var offer in store.Offers)
+        {
+            writer.Write(offer.StallSlot);
+            writer.Write(offer.ItemId);
+            writer.Write(offer.Count);
+            writer.Write(offer.UnitPrice);
+        }
+        return stream.ToArray();
+    }
+
+    public static byte[] PrivateStoreBought(ushort owner, byte stallSlot, int remainingCount, uint buyerGold)
+    {
+        using var stream = new MemoryStream();
+        using var writer = new BinaryWriter(stream);
+        writer.Write((byte)1);
+        writer.Write(owner);
+        writer.Write(stallSlot);
+        writer.Write(remainingCount);
+        writer.Write(buyerGold);
+        return stream.ToArray();
+    }
 }

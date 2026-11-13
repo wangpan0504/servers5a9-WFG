@@ -43,11 +43,13 @@ internal static class RaidPackets
 
     // NOTI 0x24F RAID_MODIFY op2（023C8937）：u32 key, u32 2, 整条记录（01DD08E0，与 0x24E 记录同形、无尾 u8）；只更新已有记录，不存在即丢弃。
     public static byte[] UpdateRecord(uint key, byte[] title, byte raidType, ushort leader, byte[] leaderName, byte leaderSquad = 0,
-        byte state = 0, byte phase = 0, bool canStart = false, bool guide = false, byte recruitRoles = 7) => Build(writer =>
+        byte state = 0, byte phase = 0, bool canStart = false, bool guide = false, byte recruitRoles = 7, byte leaderPreyPosition = 0,
+        IReadOnlyDictionary<(ushort Character, int Dungeon), uint>? preyRetryDeadlines = null) => Build(writer =>
     {
         writer.Write(key);
         writer.Write(2u);
-        WriteRecord(writer, key, title, raidType, leader, leaderName, leaderSquad, state, phase, canStart, guide, recruitRoles);
+        WriteRecord(writer, key, title, raidType, leader, leaderName, leaderSquad, state, phase, canStart, guide, recruitRoles, leaderPreyPosition,
+            preyRetryDeadlines: preyRetryDeadlines);
     });
 
     // ACK658 RAID_ENTRY_COST_INFO（0233C3E0，0234A067 注册）：成功直接返回，不读字段；失败才走 01DC6600。
@@ -73,7 +75,8 @@ internal static class RaidPackets
     // u8 +0x38；u32 +0x3C；u16 +0x40；u32 X；u8 丢弃；str(0x11) +0x44；u8 +0x64；u16 +0x66；u32 +0x68；u32 m + m×(u32,u32)；
     // u8 +0x80；u32 +0x84；u8 +0x81；u16 +0x88；u8 +0x8A。
     // 02178237读取+0x38并以7AFA格式显示个人当前阶段通关数；其余未证字段保持0。
-    public static void WriteMember(BinaryWriter writer, ushort character, byte[] name, byte squad = 0, byte clearCount = 0)
+    public static void WriteMember(BinaryWriter writer, ushort character, byte[] name, byte squad = 0, byte clearCount = 0, byte preyPosition = 0,
+        ushort preyLocation = 0, IReadOnlyDictionary<(ushort Character, int Dungeon), uint>? preyRetryDeadlines = null)
     {
         writer.Write(character);
         writer.Write((byte)0);
@@ -87,10 +90,13 @@ internal static class RaidPackets
         writer.Write(0u);                    // X
         writer.Write((byte)0);               // 丢弃
         writer.Write(0u);                    // str(0x11) +0x44，L=0
-        writer.Write((byte)0);               // +0x64
-        writer.Write((ushort)0);             // +0x66
+        writer.Write(preyPosition);          // +0x64，普雷分队*10+座次，0表示未编队。
+        writer.Write(preyLocation);          // +0x66，原生u16当前地点，与+0x64编队位置独立。
         writer.Write(0u);                    // +0x68
-        writer.Write(0u);                    // m
+        var retries = preyRetryDeadlines?.Where(row => row.Key.Character == character).OrderBy(row => row.Key.Dungeon).ToArray();
+        writer.Write(checked((uint)(retries?.Length ?? 0))); // +0x6C，每个副本的绝对服务器秒到期时刻。
+        if (retries is not null)
+            foreach (var retry in retries) { writer.Write(checked((uint)retry.Key.Dungeon)); writer.Write(retry.Value); }
         writer.Write((byte)0);               // +0x80
         writer.Write(0u);                    // +0x84
         writer.Write((byte)0);               // +0x81
@@ -102,7 +108,8 @@ internal static class RaidPackets
     // u8 +0x28；u8 +0x30 阶段下标（-1 当 0）；u32 +0x34；u8 +0xDC +0xDE +0xDF +0xE0 +0xE1 +0xE2 +0xE3 +0xE5 +0xE4；队长成员块 +0x38。
     // +0xE4低三位为输出/协同/辅助招募掩码，0216E580→0216E330回填勾选；未知字节保持0。
     public static void WriteRecord(BinaryWriter writer, uint key, byte[] title, byte raidType, ushort leader, byte[] leaderName, byte leaderSquad = 0,
-        byte state = 0, byte phase = 0, bool canStart = false, bool guide = false, byte recruitRoles = 7)
+        byte state = 0, byte phase = 0, bool canStart = false, bool guide = false, byte recruitRoles = 7, byte leaderPreyPosition = 0,
+        ushort leaderPreyLocation = 0, IReadOnlyDictionary<(ushort Character, int Dungeon), uint>? preyRetryDeadlines = null)
     {
         writer.Write(key);
         WriteText(writer, title, TextLimit);
@@ -115,16 +122,19 @@ internal static class RaidPackets
         writer.Write(guide ? (byte)1 : (byte)0);
         writer.Write(new byte[7]);           // +0xDE +0xDF +0xE0 +0xE1 +0xE2 +0xE3 +0xE5
         writer.Write(recruitRoles);         // +0xE4
-        WriteMember(writer, leader, leaderName, leaderSquad);
+        WriteMember(writer, leader, leaderName, leaderSquad, preyPosition: leaderPreyPosition, preyLocation: leaderPreyLocation,
+            preyRetryDeadlines: preyRetryDeadlines);
     }
 
     // NOTI 0x24E RAID_LIST（023CAE20）：u32 n；n × { 记录 ; u8 → 记录+0xC4 }；重复 key 不覆盖旧记录。
     // +0xC4 > 1 时 START_RAID 跳过客户端人数检查，语义未证明，写 0。
     public static byte[] RaidList(uint key, byte[] title, byte raidType, ushort leader, byte[] leaderName, byte leaderSquad = 0,
-        byte state = 0, byte phase = 0, bool canStart = false, bool guide = false, byte recruitRoles = 7) => Build(writer =>
+        byte state = 0, byte phase = 0, bool canStart = false, bool guide = false, byte recruitRoles = 7, byte leaderPreyPosition = 0,
+        IReadOnlyDictionary<(ushort Character, int Dungeon), uint>? preyRetryDeadlines = null) => Build(writer =>
     {
         writer.Write(1u);
-        WriteRecord(writer, key, title, raidType, leader, leaderName, leaderSquad, state, phase, canStart, guide, recruitRoles);
+        WriteRecord(writer, key, title, raidType, leader, leaderName, leaderSquad, state, phase, canStart, guide, recruitRoles, leaderPreyPosition,
+            preyRetryDeadlines: preyRetryDeadlines);
         writer.Write((byte)0);
     });
 
@@ -140,20 +150,21 @@ internal static class RaidPackets
     });
 
     public static byte[] OpenWithSquads(uint key, IReadOnlyList<(ushort Character, byte[] Name, byte Squad)> members,
-        IReadOnlyDictionary<ushort, byte>? clearCounts = null) => Build(writer =>
+        IReadOnlyDictionary<ushort, byte>? clearCounts = null, IReadOnlyDictionary<ushort, byte>? preyPositions = null,
+        IReadOnlyDictionary<(ushort Character, int Dungeon), uint>? preyRetryDeadlines = null) => Build(writer =>
     {
         writer.Write(key); writer.Write(3u);
-        WriteMembers(writer, members, clearCounts);
+        WriteMembers(writer, members, clearCounts, preyPositions, preyRetryDeadlines: preyRetryDeadlines);
     });
 
     public static byte[] RaidListBatch(IReadOnlyList<(uint Key, byte[] Title, byte Type, ushort Leader, byte[] Name, byte Squad, bool CanStart, byte RecruitRoles)> rows,
-        IReadOnlySet<uint>? guides = null) => Build(writer =>
+        IReadOnlySet<uint>? guides = null, IReadOnlyDictionary<uint, byte>? leaderPreyPositions = null) => Build(writer =>
     {
         writer.Write((uint)rows.Count);
         foreach (var row in rows)
         {
             WriteRecord(writer, row.Key, row.Title, row.Type, row.Leader, row.Name, row.Squad, canStart: row.CanStart, guide: guides?.Contains(row.Key) == true,
-                recruitRoles: row.RecruitRoles);
+                recruitRoles: row.RecruitRoles, leaderPreyPosition: leaderPreyPositions?.GetValueOrDefault(row.Key) ?? 0);
             writer.Write((byte)0);
         }
     });
@@ -161,13 +172,13 @@ internal static class RaidPackets
     // NOTI756/023CAEF0：三个u32，随后逐条完整记录、u8人数及人数个u8；尾无额外正文。
     public static byte[] SearchResults(uint total, uint offset,
         IReadOnlyList<(uint Key, byte[] Title, byte Type, ushort Leader, byte[] Name, byte Squad, bool CanStart, byte Members, byte RecruitRoles)> rows,
-        IReadOnlySet<uint>? guides = null) => Build(writer =>
+        IReadOnlySet<uint>? guides = null, IReadOnlyDictionary<uint, byte>? leaderPreyPositions = null) => Build(writer =>
     {
         writer.Write(total); writer.Write(offset); writer.Write((uint)rows.Count);
         foreach (var row in rows)
         {
             WriteRecord(writer, row.Key, row.Title, row.Type, row.Leader, row.Name, row.Squad, canStart: row.CanStart, guide: guides?.Contains(row.Key) == true,
-                recruitRoles: row.RecruitRoles);
+                recruitRoles: row.RecruitRoles, leaderPreyPosition: leaderPreyPositions?.GetValueOrDefault(row.Key) ?? 0);
             writer.Write(row.Members);
             writer.Write(new byte[row.Members]); // 逐成员附加状态尚未恢复，保持未知零值，不冒充准备或通关资格。
         }
@@ -176,12 +187,15 @@ internal static class RaidPackets
     // 02349A20成功：mode0读记录，mode1读成员，mode2两者；21失败仍读mode/key。
     public static byte[] Information(byte mode, uint key, byte[] title, byte type, ushort leader, byte[] name,
         IReadOnlyList<(ushort Character, byte[] Name, byte Squad)> members, byte state = 0, byte phase = 0, bool canStart = false, bool guide = false,
-        IReadOnlyDictionary<ushort, byte>? clearCounts = null, byte recruitRoles = 7) => Build(writer =>
+        IReadOnlyDictionary<ushort, byte>? clearCounts = null, byte recruitRoles = 7, IReadOnlyDictionary<ushort, byte>? preyPositions = null,
+        IReadOnlyDictionary<ushort, ushort>? preyLocations = null,
+        IReadOnlyDictionary<(ushort Character, int Dungeon), uint>? preyRetryDeadlines = null) => Build(writer =>
     {
         if (mode > 2) throw new InvalidDataException("团本查询mode错误");
         writer.Write((byte)1); writer.Write(mode); writer.Write(key);
-        if (mode is 0 or 2) WriteRecord(writer, key, title, type, leader, name, members.Single(m => m.Character == leader).Squad, state, phase, canStart, guide, recruitRoles);
-        if (mode is 1 or 2) WriteMembers(writer, members, clearCounts);
+        if (mode is 0 or 2) WriteRecord(writer, key, title, type, leader, name, members.Single(m => m.Character == leader).Squad, state, phase, canStart, guide, recruitRoles,
+            preyPositions?.GetValueOrDefault(leader) ?? 0, preyLocations?.GetValueOrDefault(leader) ?? 0, preyRetryDeadlines);
+        if (mode is 1 or 2) WriteMembers(writer, members, clearCounts, preyPositions, preyLocations, preyRetryDeadlines);
     });
 
     public static byte[] InformationFailure(byte mode, uint key) => Build(writer =>
@@ -190,11 +204,14 @@ internal static class RaidPackets
     });
 
     static void WriteMembers(BinaryWriter writer, IReadOnlyList<(ushort Character, byte[] Name, byte Squad)> members,
-        IReadOnlyDictionary<ushort, byte>? clearCounts = null)
+        IReadOnlyDictionary<ushort, byte>? clearCounts = null, IReadOnlyDictionary<ushort, byte>? preyPositions = null,
+        IReadOnlyDictionary<ushort, ushort>? preyLocations = null,
+        IReadOnlyDictionary<(ushort Character, int Dungeon), uint>? preyRetryDeadlines = null)
     {
         writer.Write(checked((byte)members.Count));
         foreach (var member in members) WriteMember(writer, member.Character, member.Name, member.Squad,
-            clearCounts?.GetValueOrDefault(member.Character) ?? 0);
+            clearCounts?.GetValueOrDefault(member.Character) ?? 0, preyPositions?.GetValueOrDefault(member.Character) ?? 0,
+            preyLocations?.GetValueOrDefault(member.Character) ?? 0, preyRetryDeadlines);
     }
 
     // 023A1070/023A12D0：服务器和频道取本地全局，不在本消息中重复写入。

@@ -1,6 +1,7 @@
 using static DfoServer.Testing.TestCheck;
 using DfoServer.Development.Auction;
 using DfoServer.Game.Auction;
+using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.GameWorld.Items;
@@ -167,10 +168,26 @@ internal static class AuctionReplyTests
         That(BitConverter.ToInt16(reply, 6) == 1, "本批条数是 u16");
         That(BitConverter.ToInt32(reply, 8) == 0x11223344, "挂牌 id 在记录 [0..3]");
         That(BitConverter.ToInt32(reply, 12) == 1_700_086_400, "到期时间在记录 [4..7]");
-        That(reply[16] == 0, "记录 [8] 保持 0");
+        That(reply[16] == 0, "默认大区身份为0，调用方可显式传入当前真实大区");
+        var seller = AuctionPackets.EncodeListing(listing with { SellerName = "中文甲乙丙丁" }, sellerServerIndex: 7);
+        That(seller[8] == 7 && CharacterName.Encoding.GetString(seller, 21, 12) == "中文甲乙丙丁" && seller[33] == 0,
+            "搜索记录包含原属大区及12B CP936卖家名，13B区末字节保留NUL供原生自买判断");
+        var longSeller = AuctionPackets.EncodeListing(listing with { SellerName = "ABCDEFGHIJK中文" });
+        That(CharacterName.Encoding.GetString(longSeller, 21, 11) == "ABCDEFGHIJK" && longSeller[32] == 0 && longSeller[33] == 0,
+            "历史异常长卖家名仅截完整编码字符，不把半个中文或尾字节写入下一字段");
+        var identityReply = AuctionPackets.SearchReply(0, 1, [listing], sellerServerIndex: 7);
+        That(identityReply[16] == 7 && CharacterName.Encoding.GetString(identityReply, 29, 12) == listing.SellerName,
+            "批量编码传递同一真实大区和挂牌卖家名，不把名字留空");
         That(BitConverter.ToInt32(reply, 17) == 12_000, "无出价时「当前竞拍」列取起拍价");
         That(BitConverter.ToInt32(reply, 21) == -1, "纯竞拍的一口价写 -1 而不是 0");
         That(BitConverter.ToInt32(AuctionPackets.EncodeListing(listing with { CurrentBid = 15_500 }), 9) == 15_500, "有出价时「当前竞拍」列取最高出价");
+        var buyout = listing with { BuyoutPrice = 5_000, ItemCount = 3 };
+        var buyoutRecord = AuctionPackets.EncodeListing(buyout);
+        That(BitConverter.ToInt32(buyoutRecord, 9) == -1 && BitConverter.ToInt32(buyoutRecord, 13) == 15_000 &&
+            buyout.StartingPrice == listing.StartingPrice && buyout.DisplayPrice == listing.DisplayPrice,
+            "无出价的一口价挂牌隐藏当前竞拍行，售价总额及库内起拍/均价来源不变");
+        That(BitConverter.ToInt32(AuctionPackets.EncodeListing(buyout with { CurrentBid = 15_500 }), 9) == 15_500,
+            "已有真实出价的兼容挂牌保留当前竞价，不把历史出价隐藏");
         That(reply.Skip(8 + 126).All(value => value == 0), "记录 [126..167] 保持 0（剩余时间字段未确认，不写）");
         var batch = AuctionPackets.SearchReply(0, 25, [listing, listing]);
         That(BitConverter.ToInt32(batch, 2) == 25 && BitConverter.ToInt16(batch, 6) == 2 && batch.Length == 8 + 2 * 168,
@@ -195,6 +212,25 @@ internal static class AuctionReplyTests
         That(block.Skip(13).All(value => value == 0), "块内未确认字段保持 0");
         Bytes(AuctionPackets.ItemBlock(core), block, "从物品核心直接构造的块与从条目快照构造的一致");
         Reject<InvalidDataException>(() => AuctionPackets.ItemBlock(new byte[10], 1), "过短的条目快照拒绝");
+        Reject<InvalidDataException>(() => AuctionPackets.ItemBlock(new byte[18], 3), "缺少升级字节的条目快照拒绝");
+        foreach (int itemId in new[] { 10306743, 10306744 })
+        {
+            // 卡片和宝珠共用实例升级字段，但其位置由83B消费者独立确认，不从123B布局类推。
+            var upgraded = new ItemCore(itemId, ItemKind.Material, 2) { Attr = 7, EnchantUpgrade = 2 };
+            var snapshot = AuctionPackets.ItemEntrySnapshot(upgraded);
+            var upgradedBlock = AuctionPackets.ItemBlock(snapshot, (int)upgraded.Kind);
+            That(upgradedBlock[61] == 2 && upgradedBlock[5] == 7 &&
+                upgradedBlock.Where((_, index) => index >= 13 && index != 61).All(value => value == 0),
+                "83B块+61保留实例升级，强化仍在+5，其余未知字段不类推");
+            Bytes(upgradedBlock, AuctionPackets.ItemBlock(upgraded), "卡片/宝珠的快照与直接核心投影一致");
+            var listing = new AuctionListing(17, 9, "卖家", itemId, (byte)ItemKind.Material, 2,
+                snapshot, 100, 100, 0, 1_700_000_000, 1_700_086_400);
+            That(AuctionPackets.EncodeListing(listing)[43 + 61] == 2 &&
+                AuctionPackets.EncodeMyListing(listing, AuctionMyListReply.Registed151, 1_700_000_000)[30 + 61] == 2,
+                "搜索与我的上架两条展示路径均保留升级卡片/宝珠等级");
+            That(AuctionPackets.ItemCoreFromEntry(snapshot, ItemKind.Material) == upgraded,
+                "挂牌持久快照保留完整核心，展示修复不改变还原内容");
+        }
         BlockValueFloor();
     }
 

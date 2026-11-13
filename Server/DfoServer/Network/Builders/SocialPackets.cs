@@ -39,7 +39,9 @@ internal static class SocialPackets
             PacketEncoding.WriteString(w, p.Adventure); PacketEncoding.WriteString(w, row.Link.Memo);
             // 023B4F39写行+CC；012B2045/2058要求频道非零且此标记为0才绘制在线角色。
             // 在线与否由channel表示，不能把Online写入客户端的不可用标记。
-            w.Write(0u); w.Write((byte)0); w.Write(row.Link.Group); w.Write((byte)0);
+            long elapsed = row.Online ? 0 : Math.Max(0, row.OfflineElapsedSeconds);
+            w.Write(checked((uint)Math.Min(elapsed, uint.MaxValue)));
+            w.Write((byte)0); w.Write(row.Link.Group); w.Write((byte)0);
         }
     });
     public static byte[] CharacterPresence(SocialRow row) => Build(w =>
@@ -59,10 +61,11 @@ internal static class SocialPackets
             w.Write(0x7FFEAE7Fu);
         }
     });
-    public static byte[] AccountGroups() => Build(w =>
+    public static byte[] AccountGroups(AccountFriendGroup[] groups) => Build(w =>
     {
-        // 023D0800固定读取四行，没有数量头；空名称由客户端使用本地默认组名。
-        for (byte i = 0; i < 4; i++) { w.Write(i); PacketEncoding.WriteString(w, ""); }
+        // 023D0800固定读取四行，没有数量头；老账号空名称回放本地默认组名和图标。
+        if (groups.Length != 4) throw new InvalidDataException("冒险团分组必须为四组");
+        foreach (var group in groups) { w.Write(group.Icon); PacketEncoding.WriteString(w, group.Name); }
     });
     public static byte[] AccountAck(string name, byte group, string memo, bool includeDetails, byte? mode = null) => Build(w =>
     {

@@ -66,6 +66,15 @@ internal static partial class DevelopmentGm
                 return SearchItems(catalog, args, false);
             case DevelopmentAction.ItemFilter:
                 return SearchItems(catalog, args, true);
+            case DevelopmentAction.NpcFavorMax:
+            {
+                // 全量资源解析在账号锁外，提交只处理有界的好感度行。
+                var targets = (catalog.NpcFavor ?? throw new InvalidDataException("NPC好感度目录未装配")).All();
+                var updated = Commit(live, owners, repository, request, true,
+                    character => InventoryNpcFavorMaxService.Plan(character, targets), "NPC好感度无法完整写入，请检查资源及255行上限");
+                return Ok(new { characterId = updated.Id, name = updated.Name, rev = updated.Revision, total = targets.Length,
+                    text = $"已将全部 {targets.Length} 个可培养NPC的好感度设为各自上限；重新进入角色后生效。" });
+            }
             case DevelopmentAction.Wallet:
                 return DescribeWallet(Target(live, owners, repository, request, false, (_, character) => character));
             case DevelopmentAction.ExpertJob:
@@ -282,8 +291,10 @@ internal static partial class DevelopmentGm
                     var core = item.Core;
                     if (upgrade is not null || amplify is not null)
                     {
-                        if (core.Kind != ItemKind.Equipment) return InventoryResult.Reject();
+                        if (core.Kind != template.Kind || InventoryRewardGrantService.MaximumUpgrade(template) == 0 ||
+                            amplify is not null && core.Kind != ItemKind.Equipment) return InventoryResult.Reject();
                         int level = upgrade ?? (core.Attr & 31);
+                        if (level > InventoryRewardGrantService.MaximumUpgrade(template)) return InventoryResult.Reject();
                         var amp = amplify ?? (core.AmplifyType, core.AmplifyValue);
                         core = core with { Attr = (byte)((core.Attr & 0xE0) | level), AmplifyType = amp.Item1, AmplifyValue = amp.Item2 };
                     }
@@ -376,7 +387,7 @@ internal static partial class DevelopmentGm
                         {
                             itemId = attachment.Item.Core.ItemId, name = TryTemplate(resources.Items, attachment.Item.Core.ItemId)?.Name,
                             count = attachment.Item.Core.IsStackable ? attachment.Item.Core.Value : 1,
-                            upgrade = attachment.Item.Core.Kind == ItemKind.Equipment ? attachment.Item.Core.Attr & 31 : 0, amplifyType = attachment.Item.Core.AmplifyType, amplifyValue = attachment.Item.Core.AmplifyValue
+                            upgrade = attachment.Item.Core.Kind is ItemKind.Equipment or ItemKind.GuildMedal ? attachment.Item.Core.Upgrade : 0, amplifyType = attachment.Item.Core.AmplifyType, amplifyValue = attachment.Item.Core.AmplifyValue
                         })
                     })
                 });
@@ -588,9 +599,9 @@ internal static partial class DevelopmentGm
 
     static void RequireEquipmentOptions(ItemTemplate template, int upgrade, int refinement)
     {
-        if (template.Kind != ItemKind.Equipment && (upgrade != 0 || refinement != 0))
-            throw new InvalidDataException("只有普通装备可以指定强化或锻造");
-        if (refinement != 0 && template.EquipmentSlot != 12)
+        if (upgrade < 0 || upgrade > InventoryRewardGrantService.MaximumUpgrade(template))
+            throw new InvalidDataException("该物品强化等级须为0–" + InventoryRewardGrantService.MaximumUpgrade(template));
+        if (refinement != 0 && (template.Kind != ItemKind.Equipment || template.EquipmentSlot != 12))
             throw new InvalidDataException("只有普通武器可以指定锻造");
     }
 

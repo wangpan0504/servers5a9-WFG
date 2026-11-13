@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using DfoServer.Game.Characters;
@@ -28,6 +29,7 @@ internal sealed partial class CharacterRepository
         new("character_crack_daily", "character_id", "character_id,account,day,clear_count,daily_reward"),
         new("character_dungeon_incount", "character_id", "character_id,account,dungeon,day,daily_used,week,weekly_used"),
         new("character_dungeon_incount_extra", "character_id", "character_id,account,dungeon,day,daily_extra,week,weekly_extra"),
+        new("character_dungeon_reward_extra", "character_id", "character_id,account,kind,target,day,daily_extra,week,weekly_extra"),
         new("character_dungeon_state", "character_id", "character_id,account,next_object_key,last_attempt,capsule_experience,proficiency_level,proficiency_experience,recommended_dungeon_clears"),
         new("character_ekern_cycle", "character_id", "character_id,account,service_day,normal_clears,trial_clears"),
         new("character_epic_production", "character_id", "character_id,weapon_id,charge,service_week,weekly_uses,since_big_chance,special_uses,additional_weekly_uses,intermediate_material_remainder,ordinary_material_remainder"),
@@ -38,8 +40,10 @@ internal sealed partial class CharacterRepository
         new("character_fatigue", "character_id", "character_id,account,used,maximum,used_maximum,remaining,context_auxiliary,selection_auxiliary"),
         new("character_fatigue_acceleration", "character_id", "character_id,account,enabled"),
         new("character_fatigue_reset_days", "character_id", "character_id,service_day"),
+        new("character_fatigue_battery", "character_id", "character_id,charging,buff"),
         new("character_fiendwar_title_facts", "character_id", "character_id,account,quest_id,total,applied"),
         new("character_game_settings", "character_id", "character_id,account,game_options"),
+        new("character_hotkey_settings", "character_id", "character_id,account,profile,hotkeys"),
         new("character_gold_card_uses", "character_id", "character_id,account,service_day,used"),
         new("character_grief_tower", "character_id", "character_id,account,game_day,cleared,layer,instance_id,task_attempt"),
         new("character_growup_change", "character_id", "character_id,account,change_count"),
@@ -57,6 +61,7 @@ internal sealed partial class CharacterRepository
         new("character_quest_daily_clear", "character_id", "character_id,account,quest_id,day,event_id,revision"),
         new("character_quest_effect_receipts", "character_id", "character_id,operation_id,before_revision,revision,claimed_quests,changed_items"),
         new("character_quest_notify", "character_id", "character_id,account,entries"),
+        new("character_npc_bookmarks", "character_id", "character_id,account,entries"),
         new("character_quest_special_reward_claims", "character_id", "character_id,quest_id,operation_id"),
         new("character_quest_stage_claims", "character_id", "character_id,account,source_acceptance_id,trigger_acceptance_id,target_level,before_experience,after_experience,amount,revision"),
         new("character_quest_stage_witnesses", "character_id", "character_id,account,source_acceptance_id,source_quest_id,source_revision,target_level,rule_version,status,proof"),
@@ -98,10 +103,13 @@ internal sealed partial class CharacterRepository
         "account_dazzlement_tower_bindings",
         "account_evildom_war_guides",
         "account_fiendwar_guides",
+        "account_single_dungeon_bindings",
         "account_material_audit",
+        "account_monster_mock_battle_runs",
         "account_pcroom_timepoint_days",
         "account_pcroom_timepoint_segments",
         "account_pcroom_timepoint_claims",
+        "account_returning_reward_claims",
         "account_weekly_attendance",
         "account_pvp_private_characters",
         "account_pvp_total_teams",
@@ -112,7 +120,11 @@ internal sealed partial class CharacterRepository
         "cash_shop_promotion_orders",
         "character_beast_dungeon_reservations",
         "character_beast_stage_rewards",
+        "character_revised_beast_stage_rewards",
+        "character_revised_beast_rewards",
         "character_boss_selection_buff",
+        "character_various_buffs",
+        "character_clear_reward_resets",
         "character_dungeon_card_options",
         "character_dungeon_card_rewards",
         "character_dungeon_drop_batches",
@@ -207,14 +219,56 @@ internal sealed partial class CharacterRepository
         foreach (string table in names)
         {
             var columns = CopyColumns(db, tx, table);
-            if (table == "characters" && !columns.SequenceEqual(CopyCharacterColumns) ||
-                specs.TryGetValue(table, out var spec) && !columns.SequenceEqual(spec.Fields.Split(',')))
-                throw new InvalidDataException("角色存档结构已变化，当前版本尚未核对复制兼容性：" + table);
+            string[]? expected = table == "characters" ? CopyCharacterColumns :
+                specs.TryGetValue(table, out var spec) ? spec.Fields.Split(',') : null;
+            if (expected is not null)
+            {
+                // 复制始终显式指定字段名；正常迁移追加字段后的物理列顺序不影响语义。
+                // 启动时对字段类型、默认值和约束的既有校验仍然保留，不在此猜写新字段。
+                var missing = expected.Except(columns, StringComparer.Ordinal).ToArray();
+                var extra = columns.Except(expected, StringComparer.Ordinal).ToArray();
+                if (missing.Length != 0 || extra.Length != 0)
+                    throw new InvalidDataException("角色存档结构不兼容：" + CopySchemaLabel(table) +
+                        "；缺少字段：" + CopySchemaNames(missing) +
+                        "；额外字段：" + CopySchemaNames(extra) + "。" + CopySchemaAdvice(extra.Length != 0));
+                // 现有 CharacterRepository.Read 仍按下标读取前 19 列，只有后缀字段使用名字读取。
+                if (table == "characters")
+                {
+                    int mismatch = Enumerable.Range(0, 19).FirstOrDefault(index => columns[index] != expected[index], -1);
+                    if (mismatch >= 0)
+                        throw new InvalidDataException("角色核心字段顺序不兼容：characters；第" + (mismatch + 1) +
+                            "列当前：" + CopySchemaLabel(columns[mismatch]) + "；预期：" + expected[mismatch] + "。" + CopySchemaAdvice(true));
+                }
+            }
             if (!specs.ContainsKey(table) && !UncopiedCharacterTables.Contains(table) &&
                 (table.StartsWith("character_", StringComparison.Ordinal) || columns.Intersect(ownerFields).Any()))
-                throw new InvalidDataException("发现尚未核对复制规则的角色关联表：" + table);
+                throw new InvalidDataException("发现未适配的角色关联表：" + CopySchemaLabel(table) +
+                    "；当前字段：" + CopySchemaNames(columns) + "；预期：须先适配复制规则。" + CopySchemaAdvice(true));
         }
-        if (CopyTables.Any(table => !names.Contains(table.Name))) throw new InvalidDataException("角色复制所需的存档结构不完整");
+        var missingTables = CopyTables.Select(table => table.Name).Append("characters").Except(names, StringComparer.Ordinal).ToArray();
+        if (missingTables.Length != 0)
+            throw new InvalidDataException("角色复制所需的存档结构不完整；缺少表：" + CopySchemaNames(missingTables) + "。" + CopySchemaAdvice(false));
+    }
+
+    static string CopySchemaAdvice(bool newerOrCustom) => newerOrCustom
+        ? "请先停服备份，改用支持此存档的配套服务端；自定义结构需作者适配。不要手动删除字段或表，也不要降级存档。"
+        : "请先停服备份，用配套服务端正常启动完成迁移，再刷新原角色；仍失败请反馈完整提示，不要手动改表。";
+
+    // 每次只报首个名字及总项数；单个名字不超过 96 个 UTF-8 字节，避免异常结构撑大 GM 提示。
+    static string CopySchemaNames(string[] names) => names.Length == 0 ? "无" :
+        CopySchemaLabel(names[0]) + (names.Length == 1 ? "" : "等" + names.Length + "项");
+
+    static string CopySchemaLabel(string name)
+    {
+        var result = new StringBuilder();
+        int bytes = 0;
+        foreach (var rune in name.EnumerateRunes())
+        {
+            if (bytes + rune.Utf8SequenceLength > 93) { result.Append('…'); break; }
+            result.Append(rune.ToString());
+            bytes += rune.Utf8SequenceLength;
+        }
+        return result.ToString();
     }
 
     static void CopyCharacterRows(SqliteConnection db, SqliteTransaction tx, Character source,

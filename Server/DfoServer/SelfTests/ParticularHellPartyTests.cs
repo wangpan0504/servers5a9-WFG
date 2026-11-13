@@ -148,8 +148,13 @@ internal static class ParticularHellPartyTests
         That(sections.Any(row => row.Name == "specific goldcard group" && row.Use == ClearRewardSectionUse.PartlyRead) &&
             DungeonCardPriceCatalog.Load(pvf).TayberrsPaidRewards.Length == 4,
             "金币奖励只接入类型71的101组，其余组保留未发放状态");
-        foreach (string name in new[] { "special dungeon clear reward",
-            "chronicle set reward rate", "reward dungeon type list", "reward item list" })
+        That(sections.Any(row => row.Name == "special dungeon clear reward" && row.Use == ClearRewardSectionUse.PartlyRead) &&
+            sections.Any(row => row.Name == "clear reward" && row.Use == ClearRewardSectionUse.ReadAlready) &&
+            sections.Any(row => row.Name == "mail message" && row.Use == ClearRewardSectionUse.ReadAlready),
+            "特殊地下城通关奖励段只接入类型71泰波尔斯clear reward与mail message");
+        foreach (string name in new[] {
+            "chronicle set reward rate", "reward dungeon type list", "reward item list",
+            "special clear reward", "special clear reward item list" })
             That(sections.Any(row => row.Name == name && row.Use == ClearRewardSectionUse.NotGranted),
                 "未证明的通关奖励段不发放 " + name);
         That(ClearRewardSections.ExtraItemGrants().Count == 0, "未证明的通关奖励段不产生物品");
@@ -181,10 +186,10 @@ internal static class ParticularHellPartyTests
             "裂缝奖励不写进死亡包或翻牌包");
         Console.WriteLine($"crack-dimension grant reward int data item {band.Items[0].ItemId} count {band.Items[0].Count} levels {band.MinLevel}-{band.MaxLevel}");
         Console.WriteLine($"crack-dimension grant daily reward info clears {crack.Daily.Clears} item {crack.Daily.ItemId} count {crack.Daily.Count}");
-        That(!File.ReadAllText(Path.Combine(ServerRoot(), "Network", "Projection", "TownProjection.cs")).Contains("PARTICULAR_HELL", StringComparison.Ordinal) &&
+        That(File.ReadAllText(Path.Combine(ServerRoot(), "Network", "Projection", "TownProjection.cs")).Contains("RiftDailyProjection.RefreshParticularHellAsync(context)", StringComparison.Ordinal) &&
             !File.ReadAllText(Path.Combine(ServerRoot(), "Network", "Projection", "TownProjection.cs")).Contains("CRACK_OF_DAYBREAK", StringComparison.Ordinal),
-            "进城初始化不发送裂缝次数包");
-        Console.WriteLine("rift count packets stay test-only; town init does not send PARTICULAR_HELL or CRACK_OF_DAYBREAK_INFO");
+            "进城恢复魔界角色专用次数，黎明仍仅在所属区域刷新");
+        Console.WriteLine("particular-hell initializes current-character counts; daybreak remains area-scoped");
     }
 
     static string ServerRoot([CallerFilePath] string thisFile = "")

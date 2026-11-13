@@ -132,10 +132,18 @@ internal static class BoosterSelectionTcpTests
             Entry(defaultEquipment, 19, 101000007, InventoryRewardGrantService.InitialQuality);
             SendSelect(peer, 67, [3290, 3311]);
             peer.Expect(1, 160, [0, 19, 0]);
+            // ACK160早于自动刷新；等原命令完整结束再由外部GM改等级，避免刷新前后读取不同资格。
+            peer.Send(1278);
+            ushort completedSequence = unchecked((ushort)(peer.NextClientSequence - 1));
+            peer.Expect(1, 1278, [1]);
+            That(SpinWait.SpinUntil(() => fixture.Events().Any(row => row.GetProperty("Kind").GetString() == "command_completed" &&
+                row.GetProperty("Detail").GetProperty("Character").GetUInt16() == peer.Id &&
+                row.GetProperty("Detail").GetProperty("Sequence").GetUInt16() == completedSequence), TimeSpan.FromSeconds(10)),
+                "原拒绝请求及1278的自动刷新全部结束后才升级，不把ACK当完整命令尾界");
             That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort, "level SelectTcp 75", out var levelReply) &&
                 levelReply.StartsWith("OK "), "通过原GM入口满足觉醒之息源盒真实最低75级，Lv1完整选择仍拒绝");
             peer.SendBarrier();
-            // GM可落在上一请求ACK后的自动刷新前，邮件因此只允许先于每日序列或后于本次屏障。
+            // GM邮件通知与下一条请求仍可交错，但每日刷新固定包序不变。
             var (dailyNotice, earlyMail) = ReadDailyNotice(peer.Read);
             using (var readOwner=owners.Acquire(fixture.Options.DevelopmentAccount,()=>{}))
             {
@@ -480,7 +488,7 @@ internal static class BoosterSelectionTcpTests
                 var last = InventoryRewardGrantService.Create(rewardTemplate, utcNow: DateTimeOffset.UtcNow, shopExpiration: true);
                 var nestedExpectedCore = first with { ExpireTime = reward.Core.ExpireTime };
                 if (equipment)
-                    nestedExpectedCore = nestedExpectedCore with { EpicExchangeOrigin = new(1, sourceId), Extension119 = 0x01, DisjointForbidden = sourceId is 490011783 or 490011888 or 490011893 or 490011895 };
+                    nestedExpectedCore = nestedExpectedCore with { EpicExchangeOrigin = new(1, sourceId), Extension119 = 0, DisjointForbidden = sourceId is 490011783 or 490011888 or 490011893 or 490011895 };
                 var expected = before.Inventory with { Items = before.Inventory.Items.Where(item => item.Position != Bag(slot))
                     .Append(reward).OrderBy(item => item.Position.List).ThenBy(item => item.Position.Index).ToImmutableArray() };
                 That(rewardTemplate.Kind == (equipment ? ItemKind.Equipment : ItemKind.Consumable) &&

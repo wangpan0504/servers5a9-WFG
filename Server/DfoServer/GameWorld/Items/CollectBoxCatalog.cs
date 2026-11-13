@@ -49,7 +49,7 @@ internal sealed class CollectBoxEntry
     public long? ResolveExpiration(long? saved)
     {
         // 2020春节原九珠收集箱按常驻政策解析有效期限，资源日期与历史存档保持原值。
-        if (isPermanentSpring2020)
+        if (isPermanentSpring2020 || (BaseExpiration is null && MaximumExpiration is null))
             return null;
         long? resolved = saved ?? BaseExpiration ?? MaximumExpiration;
         return resolved is { } value && MaximumExpiration is { } maximum ? Math.Min(value, maximum) : resolved;
@@ -130,8 +130,6 @@ internal sealed class CollectBoxCatalog
         long? maximumExpiration = Date(block, "max expiration date");
         if (baseExpiration is { } baseline && maximumExpiration is { } maximum && baseline > maximum)
             throw new InvalidDataException("PVF宝珠收集箱基础期限晚于上限");
-        if (extensions.Count > 0 && baseExpiration is null && maximumExpiration is null)
-            throw new InvalidDataException("PVF可续期宝珠收集箱缺少期限");
         return new(checked((byte)index), position[0], position[1], baseExpiration, maximumExpiration, slots, extensions);
     }
 

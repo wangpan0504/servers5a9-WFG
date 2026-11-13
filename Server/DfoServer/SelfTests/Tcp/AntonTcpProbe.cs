@@ -319,7 +319,7 @@ internal static partial class AntonTcpProbe
     }
 
     internal static void Enter(TcpPeer peer, RaidDungeonCatalog catalog, int dungeon, AntonProbeReport report, bool clear,
-        bool leave = true, bool requireClearNotice = true, Action<byte[]>? beforeRoomClear = null)
+        bool leave = true, bool requireClearNotice = true, bool allowPhaseReward = false, Action<byte[]>? beforeRoomClear = null)
     {
         bool fiendwar = IsFiendwarDungeon(dungeon);
         if (!fiendwar) peer.Send(15, DungeonId(dungeon));
@@ -357,7 +357,7 @@ internal static partial class AntonTcpProbe
             peer.Send(45, move);
             var moved = Flush(peer, $"45 -> {path[i].X},{path[i].Y}");
             Note(report, moved);
-            map = moved.LastOrDefault(p => p is { Kind: 0, Opcode: 29 } && p.Body.Length >= 19)
+            map = moved.LastOrDefault(IsRoomMap)
                 ?? throw new InvalidOperationException($"{dungeon} 移动到 {path[i].X},{path[i].Y} 没有 29");
             peer.Send(37, new byte[8]);
             Note(report, Flush(peer, "37 下一房"));
@@ -388,14 +388,33 @@ internal static partial class AntonTcpProbe
         BinaryPrimitives.WriteUInt16LittleEndian(check.AsSpan(2), bossKey);
         BinaryPrimitives.WriteUInt32LittleEndian(check.AsSpan(13), bossLevel);
         BinaryPrimitives.WriteUInt64LittleEndian(check.AsSpan(17), 504);
+        bool tremor = dungeon is 212 or 214;
+        if (tremor)
+        {
+            bool passive = TremorUsesPassiveTerminal(catalog, dungeon, info.Body[7]);
+            // 当前资源可显式声明15467；空条件走终点加载，有物件条件则由首次合法终末提交一次许可。
+            peer.Send(39, QuestPassiveClearTcpTests.PassiveDeath(15467));
+            var late = Flush(peer, "15467原资源终末分支");
+            Note(report, late);
+            if (late.Count(packet => packet is { Kind: 0, Opcode: 31 }) != (passive ? 1 : 0) ||
+                late.Any(packet => packet is { Kind: 0, Opcode: 115 }))
+                throw new InvalidOperationException("震颤首次15467许可须匹配真实ClearConditions且不伪造Boss确认");
+            peer.Send(39, QuestPassiveClearTcpTests.PassiveDeath(15467));
+            var duplicate = Flush(peer, "通关后重复15467");
+            Note(report, duplicate);
+            if (duplicate.Any(packet => packet is { Kind: 0, Opcode: 31 or 115 }))
+                throw new InvalidOperationException("震颤通关后的15467不能再发31或伪造115");
+        }
         if (formalSettles)
             RequireRunSettlement(report, confirmationsBefore, permissionsBefore, dungeon);
-        peer.Send(117, check);
+        // 震颤由全员终点加载结算，不补造key0的117。
+        if (!tremor) peer.Send(117, check);
         int seen = report.Opcode586;
-        var cleared = Flush(peer, "117 确认 " + dungeon);
+        var cleared = Flush(peer, (tremor ? "终点加载结算 " : "117 确认 ") + dungeon);
         Note(report, cleared);
         // 正式Run已随39发送许可，117仅协调重放；未启用正式Run的诊断保持原确认合同。
-        if (cleared.Any(p => p is { Kind: 0, Opcode: 31 or 34 or 35 or 600 or 601 } or { Kind: 1, Opcode: 72 }))
+        if (cleared.Any(p => p is { Kind: 0, Opcode: 31 or 34 or 35 } or { Kind: 1, Opcode: 72 }) ||
+            !allowPhaseReward && cleared.Any(p => p is { Kind: 0, Opcode: 600 or 601 }))
             throw new InvalidOperationException(dungeon + " 的117误发普通结算、阶段牌面或未请求的EPLP确认");
         if (formalSettles && cleared.Any(packet => packet is { Kind: 0, Opcode: 115 }))
             throw new InvalidOperationException(dungeon + " 的117重发了已提交Run的Boss确认");
@@ -416,9 +435,14 @@ internal static partial class AntonTcpProbe
     {
         bossKey = 0;
         bossLevel = 0;
+        // 已清起点回访使用16B缓存29，不含演员表；不能要求重生或再次上报死亡。
+        if (map.Length == 16 && map[13] == 0) return;
         int count = map[18];
         if (map.Length < 19 + count * 22)
             throw new InvalidOperationException("29 演员表被截断");
+        // 震颤终点由已提交双支路击杀和37加载完成；假客户端不能击杀场景外69308伪造通过。
+        if (bossRoom && TcpPeer.U32(map, 14) is 32222 or 32242 && map[0] == 1 && map[1] == 0)
+            return;
         // 部分圣地将Boss排在演员表首行；先确认其他敌人，再击杀会立即结束Run的Boss。
         foreach (int i in Enumerable.Range(0, count).OrderBy(index => map[19 + index * 22 + 13] == 3))
         {
@@ -456,7 +480,7 @@ internal static partial class AntonTcpProbe
             throw new InvalidOperationException("Boss 房没有可击杀对象");
     }
 
-    internal static DungeonPoint[] Route(RaidDungeonCatalog catalog, int dungeon, byte ordinal, byte x, byte y, byte bossX, byte bossY)
+    internal static DungeonPoint[] Route(RaidDungeonCatalog catalog, int dungeon, byte ordinal, byte x, byte y, byte bossX, byte bossY, bool avoidBossRooms = false)
     {
         var definition = catalog.Find(dungeon) ?? throw new InvalidOperationException("团本目录没有副本 " + dungeon);
         var maze = definition.Mazes.FirstOrDefault(row => row.SourceOrdinal == ordinal)
@@ -465,7 +489,19 @@ internal static partial class AntonTcpProbe
         maze = catalog.ResolveMaze(definition, maze, _ => 0);
         if (!maze.StaticTopology.Supported)
             throw new InvalidOperationException($"{dungeon} 静态路线不可用：{maze.StaticTopology.UnsupportedReason}");
-        return QuestStoryRouteTests.Path(maze.StaticTopology, new DungeonPoint(x, y), new DungeonPoint(bossX, bossY));
+        var topology = maze.StaticTopology;
+        if (avoidBossRooms)
+            topology = topology with { Links = topology.Links!.Where(link =>
+                !maze.Bosses.Contains(link.First) && !maze.Bosses.Contains(link.Second)).ToArray() };
+        if (!avoidBossRooms && catalog.Type == 0 && dungeon is 212 or 214 &&
+            x == 1 && y == 1 && bossX == 1 && bossY == 0)
+        {
+            var route = new List<DungeonPoint> { new(x, y) };
+            foreach (var target in new DungeonPoint[] { new(0, 1), new(2, 1), new(bossX, bossY) })
+                route.AddRange(QuestStoryRouteTests.Path(topology, route[^1], target).Skip(1));
+            return route.ToArray();
+        }
+        return QuestStoryRouteTests.Path(topology, new DungeonPoint(x, y), new DungeonPoint(bossX, bossY));
     }
 
     static List<WirePacket> Flush(TcpPeer peer, string why)
@@ -557,7 +593,8 @@ internal static partial class AntonTcpProbe
     }
 
     internal static void EnterSquad(TcpPeer leader, TcpPeer member, RaidDungeonCatalog catalog, int dungeon,
-        AntonProbeReport leaderReport, AntonProbeReport memberReport, bool leave = true, Action? loaded = null)
+        AntonProbeReport leaderReport, AntonProbeReport memberReport, bool leave = true, Action? loaded = null,
+        bool sendPlayResult = false)
     {
         int leaderConfirmations = leaderReport.Opcode115, leaderPermissions = leaderReport.Opcode31;
         int memberConfirmations = memberReport.Opcode115, memberPermissions = memberReport.Opcode31;
@@ -605,7 +642,7 @@ internal static partial class AntonTcpProbe
             var memberMoved = Barrier(member, $"45 队员 -> {path[i].X},{path[i].Y}");
             Note(leaderReport, moved);
             Note(memberReport, memberMoved);
-            map = moved.LastOrDefault(packet => packet is { Kind: 0, Opcode: 29 } && packet.Body.Length >= 19)
+            map = moved.LastOrDefault(IsRoomMap)
                 ?? throw new InvalidOperationException($"{dungeon} 移动到 {path[i].X},{path[i].Y} 没有 29");
             SameSquadMap(map, memberMoved.LastOrDefault(packet => packet is { Kind: 0, Opcode: 29 }));
             leader.Send(37, new byte[8]);
@@ -625,9 +662,29 @@ internal static partial class AntonTcpProbe
         BinaryPrimitives.WriteUInt16LittleEndian(check.AsSpan(2), bossKey);
         BinaryPrimitives.WriteUInt32LittleEndian(check.AsSpan(13), bossLevel);
         BinaryPrimitives.WriteUInt64LittleEndian(check.AsSpan(17), 504);
+        if (dungeon is 212 or 214)
+        {
+            bool passive = TremorUsesPassiveTerminal(catalog, dungeon, info.Body[7]);
+            leader.Send(39, QuestPassiveClearTcpTests.PassiveDeath(15467));
+            var lateLeader = Flush(leader, "15467分队原资源终末");
+            var lateMember = Barrier(member, "15467队员原资源终末");
+            Note(leaderReport, lateLeader);
+            Note(memberReport, lateMember);
+            if (new[] { lateLeader, lateMember }.Any(rows =>
+                rows.Count(packet => packet is { Kind: 0, Opcode: 31 }) != (passive ? 1 : 0) ||
+                rows.Any(packet => packet is { Kind: 0, Opcode: 115 })))
+                throw new InvalidOperationException("震颤两名成员首次15467许可须各自匹配真实资源条件");
+            leader.Send(39, QuestPassiveClearTcpTests.PassiveDeath(15467));
+            var duplicateLeader = Flush(leader, "通关后重复分队15467");
+            var duplicateMember = Barrier(member, "通关后队员15467");
+            Note(leaderReport, duplicateLeader);
+            Note(memberReport, duplicateMember);
+            if (duplicateLeader.Concat(duplicateMember).Any(packet => packet is { Kind: 0, Opcode: 31 or 115 }))
+                throw new InvalidOperationException("双人震颤通关后的15467不能再发31或伪造115");
+        }
         RequireRunSettlement(leaderReport, leaderConfirmations, leaderPermissions, dungeon);
         RequireRunSettlement(memberReport, memberConfirmations, memberPermissions, dungeon);
-        foreach (var sender in new[] { leader, member, leader })
+        foreach (var sender in dungeon is 212 or 214 ? Array.Empty<TcpPeer>() : new[] { leader, member, leader })
         {
             BinaryPrimitives.WriteUInt16LittleEndian(check, sender.Id);
             sender.Send(117, check);
@@ -640,6 +697,14 @@ internal static partial class AntonTcpProbe
         }
         if (memberReport.Symbols.Count == memberSymbolsBefore && memberReport.States.Count == memberStatesBefore)
             throw new InvalidOperationException("队员没有收到本次清图的583血量或586状态更新");
+        if (sendPlayResult)
+        {
+            // 安徒恩每张正式图清图后客户端都会上传46；必须在仍处于结算阶段时验证两名成员均可安全消费。
+            leader.Send(46, DungeonSettlementProtocolTests.Report((leader.Id, 99), (member.Id, 98)));
+            member.Send(46, DungeonSettlementProtocolTests.Report((leader.Id, 99), (member.Id, 98)));
+            _ = Barrier(leader, "46 安徒恩图 " + dungeon);
+            _ = Barrier(member, "46 安徒恩图队员 " + dungeon);
+        }
         if (!leave) return;
         leader.Send(42);
         member.Send(42);
@@ -647,17 +712,32 @@ internal static partial class AntonTcpProbe
         Note(memberReport, Barrier(member, "42 队员返回"));
     }
 
+    static bool TremorUsesPassiveTerminal(RaidDungeonCatalog catalog, int dungeon, byte ordinal)
+    {
+        var definition = catalog.Find(dungeon) ?? throw new InvalidDataException("震颤正式定义缺失");
+        var maze = definition.Mazes.FirstOrDefault(row => row.SourceOrdinal == ordinal)
+            ?? throw new InvalidDataException("震颤原迷宫缺失");
+        return maze.ClearConditions.Count == 0 ? false :
+            maze.ClearConditions.SequenceEqual([new DungeonClearCondition("destroy object", 15467, 1)]) ? true :
+                throw new InvalidDataException("震颤资源不是已验证的空条件或15467单物件条件");
+    }
+
     static void SameSquadMap(WirePacket leader, WirePacket? member)
     {
+        if (leader.Body.Length == 16 && leader.Body[13] == 0 && member is not null && member.Body.SequenceEqual(leader.Body)) return;
         if (member is null || member.Body.Length < 19 || leader.Body[0] != member.Body[0] || leader.Body[1] != member.Body[1] ||
             TcpPeer.U32(leader.Body, 14) != TcpPeer.U32(member.Body, 14))
             throw new InvalidOperationException("29 分队地图键或房间坐标不同步");
     }
 
+    static bool IsRoomMap(WirePacket packet) => packet is { Kind: 0, Opcode: 29 } &&
+        (packet.Body.Length >= 19 || packet.Body.Length == 16 && packet.Body[13] == 0);
+
     static void RequireRunSettlement(AntonProbeReport report, int confirmationsBefore, int permissionsBefore, int dungeon)
     {
-        if (report.Opcode115 != confirmationsBefore + 1 || report.Opcode31 != permissionsBefore + 1)
-            throw new InvalidOperationException(dungeon + " 的正式Run未向该参与成员恰好发送一次115和31");
+        int confirmations = dungeon is 212 or 214 ? 0 : 1;
+        if (report.Opcode115 != confirmationsBefore + confirmations || report.Opcode31 != permissionsBefore + 1)
+            throw new InvalidOperationException($"{dungeon} 的正式Run应向该成员发送{confirmations}次115和一次31");
     }
 
     static void RequireSettlementOrder(List<WirePacket> packets, ushort key)
@@ -708,6 +788,7 @@ internal static partial class AntonTcpProbe
                     throw new InvalidOperationException("601必须为成功10B、合法阶段/rank及已封存任务标志");
                 report.Opcode601++;
             }
+            if (IsRoomMap(packet)) report.MapVisits++;
             if (packet is { Kind: 0, Opcode: 29 } && packet.Body.Length >= 18)
                 report.Maps.Add(packet.Body.ToArray());
         }
@@ -896,6 +977,7 @@ internal static partial class AntonTcpProbe
         public List<byte[]> Symbols { get; } = [];
         public List<byte[]> Timers { get; } = [];
         public List<byte[]> Maps { get; } = [];
+        public int MapVisits { get; set; }
         public string Summary() =>
             $"started={Started} entered210={Entered210} reward={Reward} noti586={Opcode586} 596={Opcode596} 597={Opcode597} 600={Opcode600} 601={Opcode601} rejectedCards={RejectedCards} cardUnavailable={CardUnavailable} steps={string.Join(',', Steps)}";
     }

@@ -47,6 +47,15 @@ internal sealed class TcpTestFixture : IAsyncDisposable
         return map.HellQuests.Any(quest => !completed.Contains(quest));
     }
 
+    internal bool ExpectsParticularHellSelection(ushort characterId)
+    {
+        var towns = townCatalog ?? resources?.Towns;
+        if (towns is null) return false;
+        var position = Query("SELECT town,area FROM characters WHERE id=$p0", characterId).Single();
+        return towns.Areas[(Convert.ToByte(position[0]), Convert.ToByte(position[1]))].DungeonWorldMap is { } world &&
+            towns.DungeonMaps[world].Options.Any(option => option.DungeonId == 316);
+    }
+
     // 选图状态预期取当前角色位置与独立日账本，不从收到的1545正文反推。
     internal byte? ExpectedDaybreakSelectionRemaining(ushort characterId)
     {
@@ -127,7 +136,21 @@ internal sealed class TcpTestFixture : IAsyncDisposable
     readonly Func<int, DfoServer.GameWorld.Items.ItemTemplate>? promotionItemResolver;
     readonly bool enablePromotionPage;
     readonly bool useDefaultActivities;
+    readonly bool monsterMockBattle;
+    internal bool IsolatedMockBattleSuppressed { get; private set; }
+
+    internal void PrepareIsolatedMockBattle()
+    {
+        if (monsterMockBattle) return;
+        // 独立宿主按正式默认值装配谋略战；无关业务夹具显式关闭，保持重启前后的资产准备。
+        var store = new ServerEventRepository(Database);
+        var initial = store.Read(DfoServer.Game.Events.ServerEventService.NolanVisibilityId);
+        if (initial.OverrideActive != false) store.Save(initial, initial with { OverrideActive = false });
+        IsolatedMockBattleSuppressed = true;
+    }
     readonly Random? fiendwarMazeRandom;
+    readonly DfoServer.GameWorld.Items.SecretShopCatalog? secretShopRules;
+    internal bool DefaultSecretShopSuppressed => resources is not null && secretShopRules is null;
     int cliSequence;
     readonly string pvfSource;
     string? previousPhase;
@@ -136,16 +159,22 @@ internal sealed class TcpTestFixture : IAsyncDisposable
         bool connectionAddress = false, DfoServer.Game.Raids.LukeRaidStartPolicy? lukeStartPolicy = null,
         Func<int, int>? evildomHiddenDraw = null, DfoServer.GameWorld.Towns.TownCatalog? townCatalog = null,
         Func<DfoServer.GameWorld.Items.CashShopPromotionCatalog>? promotions = null, bool sharedResourcePath = false, bool enablePromotionPage = false,
-        Random? fiendwarMazeRandom = null, Func<int, DfoServer.GameWorld.Items.ItemTemplate>? promotionItemResolver = null, bool useDefaultActivities = false)
+        Random? fiendwarMazeRandom = null, Func<int, DfoServer.GameWorld.Items.ItemTemplate>? promotionItemResolver = null, bool useDefaultActivities = false,
+        bool? monsterMockBattle = null, DfoServer.GameWorld.Items.SecretShopCatalog? secretShopRules = null)
     {
         if (sharedResourcePath && (resources is null ||
             !Path.GetFullPath(source.PvfPath).Equals(Path.GetFullPath(resources.PvfPath), StringComparison.OrdinalIgnoreCase)))
             throw new InvalidOperationException("Shared resource path requires the same read-only TcpTestResources");
+        if (resources is not null && source.EpicRoad2019Enabled != resources.EpicRoad2019Enabled)
+            throw new InvalidOperationException("共享副本资源的补充目录模式与运行选项不一致");
         this.promotions = promotions;
         this.promotionItemResolver = promotionItemResolver;
         this.enablePromotionPage = enablePromotionPage;
         this.fiendwarMazeRandom = fiendwarMazeRandom;
+        this.secretShopRules = secretShopRules;
         this.useDefaultActivities = useDefaultActivities;
+        // 无关业务夹具显式不装配谋略战，防止登录日补给改写其资产准备；默认活动专项仍走正式默认值。
+        this.monsterMockBattle = monsterMockBattle ?? useDefaultActivities;
         this.resources = resources;
         this.questCatalog = questCatalog;
         this.townCatalog = townCatalog;
@@ -165,6 +194,19 @@ internal sealed class TcpTestFixture : IAsyncDisposable
             LogDirectory = Path.Combine(Root, "Logs"),
             SessionTtlSeconds = 300
         };
+        if (resources is not null && !Directory.Exists(Options.DataDirectory)) InitializeNewSharedDefaults();
+    }
+
+    // 仅全新共享资源夹具在调用方seed前完成真实发行升级；已有Data及CLI冷启动保持原路径。
+    void InitializeNewSharedDefaults()
+    {
+        Directory.CreateDirectory(Options.DataDirectory);
+        using var gate = new FileStream(Path.Combine(Options.DataDirectory, "server.lock"),
+            FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        TcpTestDatabaseTemplate.CopyIfMissing(Database, Path.GetDirectoryName(Root)!);
+        if (ServerDefaultsUpgrade.Apply(Options.DataDirectory, Options.EpicRoad2019Enabled))
+            // 业务夹具明确使用空活动控制表测试auto及各自开关；不修改真实升级完成代次。
+            Sql("DELETE FROM server_events");
     }
 
     static ServerOptions AllocatePorts(ServerOptions source, bool gm, bool packetHttp)
@@ -209,7 +251,8 @@ internal sealed class TcpTestFixture : IAsyncDisposable
         info.WorkingDirectory = Root;
         foreach (string argument in new[] { "--server-ip", Options.AdvertisedAddress, "--listen-ip", Options.ListenAddress,
             "--channel-port", Options.ChannelPort.ToString(), "--game-port", Options.GamePort.ToString(),
-            "--gm-port", Options.GmPort.ToString(), "--recharge-web-port", Options.RechargeWebPort.ToString(), "--session-ttl", Options.SessionTtlSeconds.ToString() })
+            "--gm-port", Options.GmPort.ToString(), "--recharge-web-port", Options.RechargeWebPort.ToString(), "--session-ttl", Options.SessionTtlSeconds.ToString(),
+            "--file-logs", Options.FileLogsEnabled ? "On" : "Off" })
             info.ArgumentList.Add(argument);
         if (Options.PacketHttpPort != 0)
         {
@@ -324,10 +367,12 @@ internal sealed class TcpTestFixture : IAsyncDisposable
         if (!useDefaultActivities)
         {
             var eventStore = new ServerEventRepository(Database);
-            foreach (ushort id in new ushort[] { 2257, 228, 2370, 2208 })
+            foreach (ushort id in new ushort[] { 64, 312, 10005, 2257, 228, 2370, 2208, 2514 }
+                .Concat(Options.BattlePassSeasonKey is null ? [DfoServer.Game.Events.ServerEventService.BattlePassId] : Array.Empty<ushort>()))
                 if (eventStore.Read(id) is { Revision: 0 } initial)
                     eventStore.Save(initial, initial with { OverrideActive = false });
         }
+        if (isolatedProcess) PrepareIsolatedMockBattle();
         if (File.Exists(pvfSource) && !File.Exists(Options.PvfPath))
         {
             Directory.CreateDirectory(Path.GetDirectoryName(Options.PvfPath)!);
@@ -336,7 +381,9 @@ internal sealed class TcpTestFixture : IAsyncDisposable
         if (resources is not null && !isolatedProcess)
         {
             var quests = (questCatalog ?? resources.Quests).WithCreatures(resources.ItemResources.Creatures).WithItems(resources.ItemResources.Items);
-            var promotionCatalog = promotions is null ? ServerRuntime.LoadCashShopPromotions(resources.ItemResources) : null;
+            var promotionCatalog = promotions is null ? ServerRuntime.LoadCashShopPromotions(resources.ItemResources,
+                hellTicketIds: DfoServer.Game.Dungeons.HellPartyTicketConsumers.From(townCatalog ?? resources.Towns,
+                    resources.Dungeons)) : null;
             DfoServer.GameWorld.Items.CashShopPromotionCatalog CurrentPromotions() => promotions?.Invoke() ?? promotionCatalog!;
             TcpTestDatabaseTemplate.CopyIfMissing(Database, Path.GetDirectoryName(Root)!);
             hostStop = new();
@@ -362,7 +409,9 @@ internal sealed class TcpTestFixture : IAsyncDisposable
                 repository.OpenAdventureLedger(DateTimeOffset.UtcNow);
                 var runtime = ServerRuntime.Create(options, resources.Archive, repository, townCatalog ?? resources.Towns,
                     resources.Characters, resources.Learning, resources.ItemResources, log, quests, resources.Tutorials,
-                    options.DevelopmentDungeonEntryProbe == DungeonEntryProbeMode.Disabled ? resources.TutorialScenes : null, resources.Adventure, resources.Expeditions, clock,resources.Growth,lukeStartPolicy,evildomHiddenDraw, promotions: CurrentPromotions, enablePromotionPage: enablePromotionPage, fiendwarMazeRandom: fiendwarMazeRandom, promotionItemResolver: promotionItemResolver);
+                    options.DevelopmentDungeonEntryProbe == DungeonEntryProbeMode.Disabled ? resources.TutorialScenes : null, resources.Adventure, resources.Expeditions, clock,resources.Growth,lukeStartPolicy,evildomHiddenDraw, promotions: CurrentPromotions, enablePromotionPage: enablePromotionPage, fiendwarMazeRandom: fiendwarMazeRandom, promotionItemResolver: promotionItemResolver, epicRoad2019Enabled: options.EpicRoad2019Enabled, dungeonCatalog: resources.Dungeons, enableMonsterMockBattle: monsterMockBattle,
+                    // 无关业务隔离随机商人支线，专项显式提供出现表；生产Runtime不使用此缺省。
+                    secretShopRules: secretShopRules ?? Inventory.SecretShopTests.Silent());
                 Volatile.Write(ref runtimeHost, runtime);
                 try { await runtime.RunAsync(hostStop.Token); }
                 finally { Volatile.Write(ref runtimeHost, null); }
@@ -370,6 +419,7 @@ internal sealed class TcpTestFixture : IAsyncDisposable
         }
         else
         {
+            if (secretShopRules is not null) throw new InvalidOperationException("显式神秘商店目录需要同进程Runtime装配");
             if (evildomHiddenDraw is not null) throw new InvalidOperationException("显式魔界随机源需要同进程Runtime装配");
             if (fiendwarMazeRandom is not null) throw new InvalidOperationException("显式漩涡迷宫随机源需要同进程Runtime装配");
             if (lukeStartPolicy is not null) throw new InvalidOperationException("显式Luke执行策略需要真实同进程Runtime装配");

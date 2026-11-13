@@ -20,6 +20,7 @@ internal sealed partial class ItemCatalog
     readonly GameWorld.Creatures.CreatureCatalog? creatures;
     readonly EchonEquipmentCatalog? echon;
     readonly EchonEquipmentCatalog? newEchon;
+    readonly EquipmentQuestDropSetCatalog? questDropSets;
     readonly ConcurrentDictionary<int, ItemTemplate> templates = new();
     readonly object dropCandidatesGate = new();
     ImmutableArray<ItemTemplate> dropCandidateSnapshot;
@@ -72,11 +73,12 @@ internal sealed partial class ItemCatalog
         ["earring"] = 25,
         // 声明后的整数是资源子类型；护石模板共用34，实际两个穿戴槽为34/35。
         ["talisman"] = 34,
-        ["charm"] = 35
+        ["charm"] = QuickSlotEquipmentDefinition.EquipmentType
     };
 
     readonly int equipmentSellRate;
     readonly Lazy<ImmutableArray<CosmoPassCost>> cosmoPasses;
+    readonly Lazy<ImmutableArray<LegendHellPassCost>> legendHellPasses;
     readonly Lazy<ImmutableArray<OrdinaryHellPassCost>> ordinaryHellPasses;
     readonly Lazy<RuneSystemFile> runeSystem;
     readonly Lazy<TalismanRefineCost> talismanRefineCost;
@@ -90,7 +92,8 @@ internal sealed partial class ItemCatalog
         IReadOnlyDictionary<int, string> stackable, int equipmentSellRate, IReadOnlySet<int>? premiumServiceItems = null,
         IReadOnlyDictionary<int, PremiumContract>? acquisitionContracts = null, GameWorld.Creatures.CreatureCatalog? creatures = null,
         EchonEquipmentCatalog? echon = null, EchonEquipmentCatalog? newEchon = null,
-        IReadOnlyDictionary<int, AccountCargoAcquisition>? acquisitionCargo = null)
+        IReadOnlyDictionary<int, AccountCargoAcquisition>? acquisitionCargo = null,
+        EquipmentQuestDropSetCatalog? questDropSets = null)
     {
         pvf = archive;
         accountMaterialLimits = new(() => ReadAccountMaterialLimits(archive));
@@ -104,7 +107,9 @@ internal sealed partial class ItemCatalog
         this.creatures = creatures;
         this.echon = echon;
         this.newEchon = newEchon;
+        this.questDropSets = questDropSets;
         cosmoPasses = new(() => CosmoPassCost.Load(archive));
+        legendHellPasses = new(() => LegendHellPassCost.Load(archive));
         ordinaryHellPasses = new(() => OrdinaryHellPassCost.Load(archive));
         runeSystem = new(() => RuneSystemFile.Parse(
             archive.ReadTokens("etc/runesystem.etc"), archive.ResolveString));
@@ -136,9 +141,10 @@ internal sealed partial class ItemCatalog
     public bool TryGet(int id, [NotNullWhen(true)] out ItemTemplate? template)
     {
         if (templates.TryGetValue(id, out template)) return true;
-        bool isEquipment = equipment.TryGetValue(id, out string? path);
-        if (!isEquipment && !stackable.TryGetValue(id, out path)) return false;
-        if (!pvf.Contains((isEquipment ? "equipment/" : "stackable/") + path)) return false;
+        string? path = null;
+        bool isEquipment = equipment?.TryGetValue(id, out path) == true;
+        if (!isEquipment && stackable?.TryGetValue(id, out path) != true) return false;
+        if (pvf is null || !pvf.Contains((isEquipment ? "equipment/" : "stackable/") + path)) return false;
         template = Get(id);
         return true;
     }
@@ -376,7 +382,8 @@ internal sealed partial class ItemCatalog
 
     public ImmutableArray<CosmoPassCost> CosmoPasses() => cosmoPasses.Value
         .Where(row => stackable.ContainsKey(row.ItemId) && Get(row.ItemId).Kind == ItemKind.Material).ToImmutableArray();
-
+    public ImmutableArray<LegendHellPassCost> LegendHellPasses() => legendHellPasses.Value
+        .Where(row => stackable.ContainsKey(row.ItemId) && Get(row.ItemId).Kind == ItemKind.Material).ToImmutableArray();
     public ImmutableArray<OrdinaryHellPassCost> OrdinaryHellPasses() => ordinaryHellPasses.Value
         .Where(row => stackable.ContainsKey(row.ItemId) && Get(row.ItemId).Kind is ItemKind.Material or ItemKind.Quest).ToImmutableArray();
 
@@ -659,8 +666,9 @@ internal sealed partial class ItemCatalog
             throw new InvalidDataException("无效 PVF 物品定义: " + id);
         string impossible = text.Block("impossible contents");
         string name = text.Section("name").Trim('`', ' ', '\r', '\n');
+        string normalizedStackableType = stackableType.Replace("`", "").Trim();
         ushort cargoTarget = 0;
-        if (!isEquipment && name.Contains("金库", StringComparison.Ordinal) &&
+        if (!isEquipment && normalizedStackableType == "[etc] 0" && name.Contains("金库", StringComparison.Ordinal) &&
             !name.Contains("帐号", StringComparison.Ordinal) && !name.Contains("账号", StringComparison.Ordinal) &&
             (name.Contains("升级", StringComparison.Ordinal) || path!.Contains("safe_upgradekit", StringComparison.OrdinalIgnoreCase)))
         {
@@ -674,21 +682,28 @@ internal sealed partial class ItemCatalog
         // 积分金库券的最终服务项未声明容量；该具名金库档位为120格，前两层仍走原礼包奖池。
         if (!isEquipment && id == 490705297 && kind == ItemKind.Consumable &&
             path!.Equals("cash/chn_490705297.stk", StringComparison.OrdinalIgnoreCase) &&
-            name == "坚固的金刚石金库扩展券" && stackableType.Replace("`", "").Trim() == "[etc] 0")
+            name == "坚固的金刚石金库扩展券" && normalizedStackableType == "[etc] 0")
             cargoTarget = 120;
         var accountTrade = !isEquipment && StackableTradeLimitDeclaration.Read(text) is { } declaration &&
             declaration.Attachment.Equals("[account]", StringComparison.OrdinalIgnoreCase) ? declaration : null;
+        var expiration = ItemExpiration.Parse(text);
+        var partSetIds = isEquipment ? AntiEvilSetCatalog.ReadMemberSetIds(text) : [];
+        int rarity = Int("rarity", 0);
         return new(id, kind, slot, (byte)minimum, (ushort)durability, stackLimit,
-            Int("weight", 0), Int("rarity", 0), Int("grade", 0), text.Section("attach type"),
+            Int("weight", 0), rarity, Int("grade", 0), text.Section("attach type"),
             jobMask, checked((ushort)Int("required skill", 0)),
-            name, stackableType.Replace("`", "").Trim())
+            name, normalizedStackableType)
         {
             AntiEvil = isEquipment && (text.Has("anti evil") || text.Has("add anti evil"))
                 ? AntiEvilUpgradeCatalog.ReadEquipmentBase(source => AntiEvilUpgradeCatalog.ReadEquipmentBaseDocument(
                     pvf.ReadTokens(source), pvf.ResolveString),
                     pvf.ResolveString, "equipment/" + path) : 0,
             UsableExpired = isEquipment && text.Has("usable expired item"),
-            PartSetIds = isEquipment ? AntiEvilSetCatalog.ReadMemberSetIds(text) : [],
+            PartSetIds = partSetIds,
+            QuestItemDropRateBonus = isEquipment || kind == ItemKind.Rune ? EquipmentQuestDropBonusFile.Read(text) : 0,
+            UpgradeBonuses = isEquipment || kind == ItemKind.Rune ? EquipmentUpgradeBonuses.Read(text) : default,
+            QuestItemDropSetBonuses = isEquipment && questDropSets is not null
+                ? partSetIds.Where(setId => setId > 0).SelectMany(setId => questDropSets.Get(setId)).ToImmutableArray() : [],
             UsableWorlds = GameWorld.Items.StackableUseRules.ParseWorlds(ItemUseFields.UsableWorlds(text)),
             IsPremiumService = premiumServiceItems.Contains(id) || !isEquipment && IsPremiumStackable(text) || cargoTarget > 0 || acquisitionCargo.ContainsKey(id),
             AcquisitionContract = acquisitionContracts.GetValueOrDefault(id),
@@ -701,15 +716,19 @@ internal sealed partial class ItemCatalog
             CreatureInitialMode = kind == ItemKind.Creature && creatures?.Get(id) is { Egg: false, UsesExperienceItems: true } ? (byte)1 : (byte)0,
             CreatureName = kind == ItemKind.Creature ? creatures?.Get(id)?.Name : null,
             PersonalCargoForbidden = impossible.Contains("charac cargo", StringComparison.OrdinalIgnoreCase),
-            AccountCargoForbidden = impossible.Contains("account cargo", StringComparison.OrdinalIgnoreCase),
+            AccountCargoForbidden = impossible.Contains("account cargo", StringComparison.OrdinalIgnoreCase) || !isEquipment && IsCreatureCapsule(id),
             AccountMaterial = ReadAccountMaterial(id, isEquipment, kind, text, stackLimit),
+            AccountCommonItem = !isEquipment && StackableDefinition(id)?.HasCommonInventory == true,
             AccountBoundAfterTrade = accountTrade is not null,
             AccountBindingTradeLimit = accountTrade?.Count ?? 0,
             PersonalCargoUpgradeTarget = cargoTarget,
             AdvancesPersonalCargo = !isEquipment && StackableActionDeclaration.TryRead(text, out var cargoAction) &&
                 StackableActionCatalog.Arguments(cargoAction) is { Label: "[upgrade cargo]", Parameters.Count: 0 },
-            ShopPrice = ItemShopPrice.Parse(text, isEquipment, equipmentSellRate),
-            Expiration = ItemExpiration.Parse(text),
+            AdvancesAccountCargo = !isEquipment && StackableActionDeclaration.TryRead(text, out var accountCargoAction) &&
+                StackableActionCatalog.Arguments(accountCargoAction) is { Label: "[upgrade account cargo]", Parameters.Count: 0 },
+            ShopPrice = EpicRoad2019ShopLimits.Apply(id, ItemShopPrice.Parse(text, isEquipment, equipmentSellRate)),
+            Expiration = EpicRoad2019ItemLifetime.Restore(id, expiration),
+            EpicRoad2019FixedExpirationRestored = EpicRoad2019ItemLifetime.Applies(id, expiration.AbsoluteTime),
             RefinementTicket = isEquipment ? null : RefinementTicketDefinition.Parse(text),
             CharacterSlotMaximum = name == "角色栏扩展券" &&
                 int.TryParse(Regex.Match(text.Section("explain"), @"总上限为\s*(\d+)").Groups[1].Value, out int maxSlots) ? maxSlots : 0,
@@ -724,16 +743,22 @@ internal sealed partial class ItemCatalog
             GrowthEquipment = isEquipment && (text.Has("level section ani") || !string.IsNullOrWhiteSpace(text.Section("level linear ability")) ||
                 PvfScript.Integers(text.Section("equipment grow")) is [> 0, > 0]),
             RandomOptionEquipment = isEquipment && text.Has("random option"),
+            MagicSealedEquipment = kind == ItemKind.Equipment && (rarity is 2 or 3) &&
+                text.TryGetInt32("random option", out int randomOption) && randomOption > 0,
             PeriodEquipment = isEquipment && (PvfScript.Integers(text.Section("usable period")).Any(value => value > 0) ||
                 PvfScript.Integers(text.Section("expiration date")).Any(value => value > 0)),
 
             AvatarSockets = kind == ItemKind.Avatar ? ReadAvatarSockets(text) : default,
             CloneAvatar = kind == ItemKind.Avatar && (Int("clear avatar", 0) == 1 || text.ContainsString("item category", "clear avatar")),
             BorrowAvatarAppearance = kind == ItemKind.Avatar,
+            CannotBeCloneTitle = isEquipment && text.ContainsString("item category", "cannot be clone title"),
+            CannotBeHiddenByCloneTitle = isEquipment && text.ContainsString("item category", "cannot be hidden by clone title"),
             AvatarGiftType = isEquipment ? null : AvatarTypeSelectionFile.GiftType(text),
             EmblemTargetSockets = kind == ItemKind.Emblem ? ReadEmblemTargetSockets(text) : (ushort)0,
             GuardianGemEffects = kind == ItemKind.GuardianGem ? ReadGuardianGemEffects(text) : [],
             ExperiencePercent = isEquipment ? ReadExperiencePercent(text) : 0,
+            QuickSlotEquipment = isEquipment && slot == QuickSlotEquipmentDefinition.EquipmentType
+                ? QuickSlotEquipmentDefinition.Parse(text) : null,
             ExperienceForbiddenModules = Regex.Matches(text.Block("impossible equip module"), @"`([^`]+)`")
                 .Select(match => match.Groups[1].Value.Trim().Trim('[', ']')).ToImmutableHashSet(StringComparer.OrdinalIgnoreCase),
             CreatureEgg = kind == ItemKind.Creature && creatures?.Get(id)?.Egg == true,

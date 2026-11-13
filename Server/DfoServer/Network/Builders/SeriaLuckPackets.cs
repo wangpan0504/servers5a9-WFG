@@ -20,7 +20,8 @@ internal static class SeriaLuckPackets
     // 额外事件沿用 2037 的已验证记录形状（u32 1、两空串、标志 0）；需要活动状态的事件另附数值块。
     public static byte[] EventInfoCompressed(IReadOnlyList<ushort>? extraEvents = null,
         IReadOnlyList<ushort>? activeEvents = null, IReadOnlyList<EventInfoDesignPage>? designPages = null,
-        IReadOnlyDictionary<ushort, uint>? firstValues = null, bool includeSeriaLuck = true)
+        IReadOnlyDictionary<ushort, uint>? firstValues = null, bool includeSeriaLuck = true,
+        IReadOnlyDictionary<ushort, IReadOnlyList<uint>>? eventValues = null)
     {
         extraEvents ??= [];
         activeEvents ??= [];
@@ -32,6 +33,8 @@ internal static class SeriaLuckPackets
             throw new InvalidDataException("EVENT_INFO 活动状态必须唯一、存在于附加事件集合且不超过254项");
         if (firstValues is not null && firstValues.Keys.Any(id => !activeEvents.Contains(id)))
             throw new InvalidDataException("EVENT_INFO 首值必须属于活动状态集合");
+        if (eventValues is not null && eventValues.Any(row => !activeEvents.Contains(row.Key) || row.Value.Count != 12))
+            throw new InvalidDataException("EVENT_INFO 数值块必须属于活动状态集合且包含12项");
         var directoryIds = extraEvents.Concat(designPages.Select(page => page.EventId)).ToArray();
         if (directoryIds.Any(id => id is 0 or 9 or SeriaLuckEventId) ||
             directoryIds.Distinct().Count() != directoryIds.Length || directoryIds.Length >= ushort.MaxValue)
@@ -85,9 +88,15 @@ internal static class SeriaLuckPackets
             foreach (ushort id in activeEvents)
             {
                 writer.Write(id);
-                writer.Write(firstValues is not null && firstValues.TryGetValue(id, out uint value) ? value : 0u);
-                for (int index = 1; index < 12; index++)
-                    writer.Write(0u);
+                if (eventValues is not null && eventValues.TryGetValue(id, out var values))
+                {
+                    foreach (uint value in values) writer.Write(value);
+                }
+                else
+                {
+                    writer.Write(firstValues is not null && firstValues.TryGetValue(id, out uint value) ? value : 0u);
+                    for (int index = 1; index < 12; index++) writer.Write(0u);
+                }
             }
         }
         plain.Position = 0;

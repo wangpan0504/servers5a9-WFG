@@ -24,6 +24,8 @@ internal static class ClientSettingsSnapshotsTests
                 INSERT INTO account_client_settings VALUES('z',x'02'),('a',x'01');
                 CREATE TABLE character_client_settings(character_id INTEGER, payload BLOB);
                 CREATE TABLE character_game_settings(character_id INTEGER, payload BLOB);
+                CREATE TABLE character_hotkey_settings(character_id INTEGER,account TEXT,profile INTEGER,payload BLOB);
+                INSERT INTO character_hotkey_settings VALUES(7,'a',0,x'0102'),(2,'a',1,x'0304');
                 CREATE TABLE account_hotkey_settings(account TEXT,profile INTEGER,payload BLOB);
                 INSERT INTO account_hotkey_settings VALUES('a',1,x'FF'),('a',0,x'00');
                 CREATE TABLE account_quick_chat(account TEXT,bank INTEGER,payload BLOB);
@@ -32,22 +34,25 @@ internal static class ClientSettingsSnapshotsTests
                 CREATE TABLE account_recent_emoticons(account TEXT,entries BLOB);
                 INSERT INTO account_recent_emoticons VALUES('a',zeroblob(72));
                 CREATE TABLE character_quest_notify(character_id INTEGER,account TEXT,entries BLOB);
+                CREATE TABLE character_npc_bookmarks(character_id INTEGER,account TEXT,entries BLOB);
                 INSERT INTO character_quest_notify VALUES(7,'a',x'02000000010000000000000000000000');
                 """);
             string LegacyAssets() => JsonSerializer.Serialize(TcpTestFixture.Rows(database,
-                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT IN ('account_client_settings','character_client_settings','character_game_settings','account_hotkey_settings','account_quick_chat','account_chat_emoticons','account_recent_emoticons','character_quest_notify') ORDER BY name")
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT IN ('account_client_settings','character_client_settings','character_game_settings','account_hotkey_settings','character_hotkey_settings','account_quick_chat','account_chat_emoticons','account_recent_emoticons','character_quest_notify','character_npc_bookmarks') ORDER BY name")
                 .Select(row => TcpTestFixture.Rows(database, $"SELECT * FROM [{row[0]}] ORDER BY rowid")));
             string expectedSettings = string.Concat(new[]
             {
                 "SELECT * FROM account_client_settings ORDER BY account", "SELECT * FROM character_client_settings ORDER BY character_id",
                 "SELECT * FROM character_game_settings ORDER BY character_id", "SELECT * FROM account_hotkey_settings ORDER BY account,profile",
+                "SELECT * FROM character_hotkey_settings ORDER BY character_id,profile",
                 "SELECT * FROM account_quick_chat ORDER BY account,bank",
                 "SELECT * FROM account_chat_emoticons ORDER BY account,emoticon_id",
                 "SELECT * FROM account_recent_emoticons ORDER BY account",
-                "SELECT * FROM character_quest_notify ORDER BY character_id"
+                "SELECT * FROM character_quest_notify ORDER BY character_id",
+                "SELECT * FROM character_npc_bookmarks ORDER BY character_id"
             }.Select(sql => JsonSerializer.Serialize(TcpTestFixture.Rows(database, sql))));
             That(ClientSettingsSnapshots.Capture(database, true) == LegacyAssets(), "单连接全资产快照与旧逐表路径逐字一致：排序、整数、real、文本、NULL、blob和空表");
-            That(ClientSettingsSnapshots.Capture(database, false) == expectedSettings, "设置八表顺序、聊天指令、最近列表及任务书签与逐表串接JSON一致");
+            That(ClientSettingsSnapshots.Capture(database, false) == expectedSettings, "设置表顺序、聊天指令、最近列表、任务及人物辞典收藏与逐表串接JSON一致");
             string before = ClientSettingsSnapshots.Capture(database, true);
             Sql("CREATE TABLE new_asset(id INTEGER PRIMARY KEY); INSERT INTO new_asset VALUES(1); UPDATE assets SET quantity=42 WHERE id=2;");
             That(ClientSettingsSnapshots.Capture(database, true) == LegacyAssets() && ClientSettingsSnapshots.Capture(database, true) != before,

@@ -15,15 +15,16 @@ internal static class Issue153CinematicLayerTests
 {
     internal static void Run(TownCatalog towns, CharacterCatalog characters, ItemResources items, QuestCatalog quests,
         SkillLearningCatalog skills, CharacterGrowthCatalog growth, DungeonCatalog dungeons, DungeonRoomCatalog rooms,
-        DungeonClearExperienceCatalog clears, QuestRewardParameterCatalog parameters)
+        DungeonKillExperienceCatalog kills, DungeonClearExperienceCatalog clears, QuestRewardParameterCatalog parameters)
     {
         int checks = Count;
-        Verify3452CinematicLayer(towns,characters,items,quests,skills,growth,dungeons,rooms);
+        Verify3452CinematicLayer(towns,characters,items,quests,skills,growth,dungeons,rooms,kills);
         Console.WriteLine($"PASS {Count-checks} #153 第6项：3452 换层（非实机）");
     }
 
     static void Verify3452CinematicLayer(TownCatalog towns, CharacterCatalog characters, ItemResources items, QuestCatalog quests,
-        SkillLearningCatalog skills, CharacterGrowthCatalog growth, DungeonCatalog dungeons, DungeonRoomCatalog rooms)
+        SkillLearningCatalog skills, CharacterGrowthCatalog growth, DungeonCatalog dungeons, DungeonRoomCatalog rooms,
+        DungeonKillExperienceCatalog kills)
     {
         var (position, done) = TownAt(towns,156,54,3451,3452);
         using var f = new QuestSceneTests.Fixture(towns,characters,skills,growth,quests,false,54,done.ToArray(),position:position);
@@ -46,6 +47,38 @@ internal static class Issue153CinematicLayerTests
         That(next.Snapshot.CurrentMap.Id == 70351,"#153 第二层是 70351 对话/蘑菇层");
         That(f.Session.MoveFormalDungeon(0,4,1) is null,
             "#153 70351 未清图时第三次 kind1 不能返回 70193，不放宽其它地图");
+        Clear(next);
+        That(f.Session.MoveFormalDungeon(1,4,0) is not null,"真实3452清末层后直接进入第二房");
+        var second = f.Session.CompleteFormalDungeonLoading()!;
+        That(second.Snapshot.CurrentMap.Id == 70194,"第二房资源与现场复现相同");
+        Clear(second);
+        uint fatigue = f.Session.DungeonSnapshot!.ConsumedFatigue;
+        for (int visit=0;visit<2;visit++)
+        {
+            var restored = f.Session.MoveFormalDungeon(0,4,0);
+            That(restored is not null && restored.Snapshot.CurrentMap.Id == 70193 &&
+                restored.Snapshot is { MapOperation:DungeonMapOperation.RestoreBase,MapPayload:DungeonMapPayload.Cached } &&
+                restored.Snapshot.LivingMonsters.Count == 0,"真实3452折返显式恢复基础首房，不复用70351的怪物缓存");
+            byte[] packet = DfoServer.Network.Builders.DungeonPackets.StartMap(restored!.Entry,restored.Monsters,
+                restored.MapSeed,restored.Snapshot.MapOperation,restored.Snapshot.MapPayload,restored.PassiveItems);
+            That(packet.Length == 16 && packet[2] == 2 && packet[13] == 0,
+                "真实Session投影NOTI29使用基础缓存恢复合同且不重发已死怪物");
+            That(f.Session.CompleteFormalDungeonLoading() is not null &&
+                f.Session.DungeonSnapshot!.ConsumedFatigue == fatigue,"折返加载不重复扣疲劳");
+            That(f.Session.ConfirmFormalDungeonLayerBase(0,4) && !f.Session.ConfirmFormalDungeonLayerBase(0,4) &&
+                f.Session.MoveFormalDungeon(0,4,1) is null && f.Session.DungeonSnapshot!.CurrentMap.Id == 70193,
+                "同坐标kind1仅确认一次，重复换层请求不重放剧情");
+            That(f.Session.MoveFormalDungeon(1,4,0) is not null,"恢复首房后原真实门禁允许继续进入已清第二房");
+            var revisited = f.Session.CompleteFormalDungeonLoading()!;
+            That(revisited.Snapshot is { MapOperation:DungeonMapOperation.Current,MapPayload:DungeonMapPayload.Cached } &&
+                revisited.Snapshot.LivingMonsters.Count == 0,"普通第二房仍保持自己的清房缓存");
+        }
+        void Clear(FormalDungeonReceipt receipt)
+        {
+            foreach (var monster in receipt.Monsters.Monsters.Where(row => row.IsBlocking))
+                That(f.Session.ObserveFormalDungeonDeath(FormalDungeonSessionTests.Observation(receipt,monster),kills,growth).Outcome == DungeonRunOutcome.Accepted,
+                    "真实3452逐只提交清房死亡，不直接修改死亡集合或强开门");
+        }
     }
 
     static (Location Position, HashSet<int> Done) TownAt(TownCatalog towns, int dungeonId, byte level, int prerequisite, params int[] exclude)

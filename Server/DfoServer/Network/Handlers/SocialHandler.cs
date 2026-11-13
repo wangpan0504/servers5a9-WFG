@@ -16,18 +16,28 @@ internal sealed class SocialHandler(ISocialStore store, SocialService service, O
             CmdPacketType.REGISITER_TO_BLACKLIST, CmdPacketType.DELETE_TO_BLACKLIST, CmdPacketType.REQUEST_BLACKLIST,
             CmdPacketType.ACCOUNT_FRIEND_ADD_REQUEST, CmdPacketType.ACCOUNT_FRIEND_ACCEPT, CmdPacketType.ACCOUNT_FRIEND_DELETE,
             CmdPacketType.ACCOUNT_FRIEND_REFUSE_CANCEL, CmdPacketType.UPDATE_ACCOUNT_FRIEND_INFO,
-            CmdPacketType.UPDATE_BLACK_USER_MEMO_INFO, CmdPacketType.ACCOUNT_FRIEND_REFRESH })
+            CmdPacketType.UPDATE_BLACK_USER_MEMO_INFO, CmdPacketType.UPDATE_ACCOUNT_FRIEND_GROUP_INFO, CmdPacketType.ACCOUNT_FRIEND_REFRESH })
             commands.Register(opcode, HandleAsync, nameof(SocialHandler), UserStateRequirement.WorldReady);
     }
     async Task<CommandResult> HandleAsync(GameConnectionContext context, Packet packet)
     {
         if (context.Session.CaptureSocialActor() is not { } actor) return CommandResult.Handled;
         var opcode = (CmdPacketType)packet.Opcode;
+        if (opcode == CmdPacketType.UPDATE_ACCOUNT_FRIEND_GROUP_INFO)
+        {
+            var groups = SocialRequests.AccountGroups(packet.Body);
+            store.SaveAccountGroups(actor, groups);
+            log.Write("social_committed", new { Connection = context.Id, Character = actor.Character.Id, packet.Opcode });
+            await context.Reply(opcode, SocialPackets.Ack(0), "account_friend_groups_saved", actor.IsCurrent);
+            // 成功ACK不重建分组下拉；仅回放本次已提交的四组，不另读库或刷新好友列表。
+            await context.Notify(NotiPacketType.ACCOUNT_FRIEND_GROUP_INFO, SocialPackets.AccountGroups(groups), "account_friend_groups", actor.IsCurrent);
+            return CommandResult.Handled;
+        }
         if (opcode == CmdPacketType.ACCOUNT_FRIEND_REFRESH)
         {
             if (packet.Body.Length != 0) throw new InvalidDataException("好友刷新请求必须为空");
-            // 登录已安装默认分组；主动刷新时仍恢复同一组信息。
-            await context.Notify(NotiPacketType.ACCOUNT_FRIEND_GROUP_INFO, SocialPackets.AccountGroups(), "account_friend_groups", actor.IsCurrent);
+            var groups = store.AccountGroups(actor);
+            await context.Notify(NotiPacketType.ACCOUNT_FRIEND_GROUP_INFO, SocialPackets.AccountGroups(groups), "account_friend_groups", actor.IsCurrent);
             service.Refresh(actor.Owner.Account);
             return CommandResult.Handled;
         }

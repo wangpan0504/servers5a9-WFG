@@ -177,8 +177,9 @@ internal static class LevelUpTicketTests
         using(var f=Make(61,10004716,job:0,materialCount:6))
         {
             var before=f.Read();
-            TestCheck.Reject<InvalidDataException>(()=>service.Prepare(before,Slot),"职业不符仍然拒绝");
-            That(Same(before,f.Read()),"失败不消耗源或材料");
+            var prepared=service.Prepare(before,Slot);
+            That(prepared.Growth.TargetLevel==62 && Same(before,f.Read()),
+                "限定职业STK交由客户端检查，服务端可准备升级且规划不提前扣源");
         }
         using (var f=Make())
         {

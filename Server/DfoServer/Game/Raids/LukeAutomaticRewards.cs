@@ -25,7 +25,9 @@ internal sealed class LukeAutomaticRewards(ILukeRewardRecoveryStore store, Accou
                     var selectedOffer = offer with { Card = battle.AutomaticFiendwarCard(eligibility.Character, offer.Card) };
                     if (battle.HasConfirmedLukeReward(eligibility.Character, eligibility.Phase, offer.Kind)) continue;
                     // 原660已提交但ACK丢失时直接确认精确原回执，不能改用最低Card0重放而卡住非零牌。
-                    if (battle.SubmittedLukeReward(eligibility.Character, eligibility.Phase, offer.Kind) is { } submitted)
+                    // 引导的手动末牌仍可能正在原CommandGate内发布；不得在发送完成前绕过门禁推进下一阶段。
+                    if (!(battle.Kind == RaidKind.Prey && battle.PreyGuide) &&
+                        battle.SubmittedLukeReward(eligibility.Character, eligibility.Phase, offer.Kind) is { } submitted)
                     { battle.ConfirmAutomaticLukeReward(eligibility, submitted); continue; }
                     var session = online.Find(account);
                     if (session is not null)
@@ -35,6 +37,10 @@ internal sealed class LukeAutomaticRewards(ILukeRewardRecoveryStore store, Accou
                         (bool Claimed, DfoServer.Game.Inventory.Models.InventoryResult? Refresh, PreparedRaidReward? Prepared) recovered = default;
                         try
                         {
+                            // 取得门禁后原手动请求可能已完成阶段；旧Due条目不能借相同Instance领取下一阶段。
+                            if (battle.Kind == RaidKind.Prey && battle.PreyGuide &&
+                                (battle.View.Phase != eligibility.Phase ||
+                                    battle.HasConfirmedLukeReward(eligibility.Character, eligibility.Phase, offer.Kind))) continue;
                             if (session.Selected?.Id == eligibility.Character && session.RaidCombatView()?.Instance == battle.Instance)
                                 receipt = session.ClaimRaidReward(selectedOffer.Kind, selectedOffer.Card, store, items, gold, pieces, clock.GetUtcNow(), automaticLuke: true);
                             else

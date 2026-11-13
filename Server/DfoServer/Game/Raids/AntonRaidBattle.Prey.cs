@@ -20,8 +20,12 @@ internal sealed partial class AntonRaidBattle
     int PreyHeader(string tag, int index = 0) => script.Headers.Single(row => row.Tag == tag).Values[index].Number;
     ImmutableDictionary<string, int> InitializePreySymbols(int phase, ImmutableDictionary<string, int> symbols)
     {
+        if (!PreyGuide) return InitializePreyTeamSymbols(phase, symbols);
         if (phase == 0)
         {
+            // TYPE 0是普通据点，7才是空区域；引导不能把未选中的区域投成团队地图的普通据点。
+            for (int area = 1; area <= 20; area++)
+                symbols = symbols.SetItem($"[area_{area}]", 0).SetItem($"[area_{area}_dgn_type]", 7);
             // 单人布局在实例创建时冻结；两阶段沿原symbol继承，不把分支改成另一套圣地。
             symbols = symbols.SetItem("[single raid type]", preyRandom.Next(2)).SetItem("[slenikon hp]", PreyHeader("[max hp]"));
             // 本服布局策略：七个初始据点隔位分布，分支在实例内冻结；不声称是原服随机布局算法。
@@ -38,6 +42,7 @@ internal sealed partial class AntonRaidBattle
     // 普雷的ON CLEAR是正式Run事件，9999不是需要重复通关的次数。
     internal AntonRaidBattleChange? CompletePreyDungeon((RaidActor Actor, DungeonClearFact Fact)[] facts)
     {
+        if (!PreyGuide) return CompletePreyTeamDungeon(facts);
         lock (gate)
         {
             if (Kind != RaidKind.Prey || facts is not [var row] || !row.Actor.IsCurrent ||
@@ -73,6 +78,7 @@ internal sealed partial class AntonRaidBattle
 
     internal bool AllowsPreyEntry(int dungeon)
     {
+        if (!PreyGuide) return AllowsPreyTeamEntry(dungeon);
         lock (gate) return Kind == RaidKind.Prey && pendingTransition is null && !TerminalRequested(current) &&
             !LukePhaseDueLocked() && current.Symbols.GetValueOrDefault("[prepare raid]") == 1 &&
             current.Dungeons.GetValueOrDefault(dungeon, RaidDungeonState.Hide) == RaidDungeonState.Open &&
@@ -82,6 +88,7 @@ internal sealed partial class AntonRaidBattle
 
     AntonRaidBattleView EvaluatePrey(AntonRaidBattleView state, int? dungeon, string? symbol, RaidTimer? timer, int? clear = null)
     {
+        if (!PreyGuide) return EvaluatePreyTeam(state, dungeon, symbol, timer, clear);
         if (timer == new RaidTimer(9000, 0))
         {
             state = state with { Symbols = state.Symbols.SetItem("[prepare raid]", 1) };
@@ -165,6 +172,13 @@ internal sealed partial class AntonRaidBattle
         {
             if (state.Symbols[key] == value) return;
             state = state with { Symbols = state.Symbols.SetItem(key, value) };
+            for (int slot = 1; slot <= 20; slot++)
+                if (key == $"[area_{slot}]")
+                {
+                    int type = value == 0 ? 7 : script.Phases[state.Phase].Dungeons.FirstOrDefault(row => row.Id == value) is { } row ? PreyDungeonType(row) : 0;
+                    state = state with { Symbols = state.Symbols.SetItem($"[area_{slot}_dgn_type]", type) };
+                    break;
+                }
             events.Enqueue((null, key, null, null));
         }
         void SetDungeon(int id, RaidDungeonState next)
@@ -187,15 +201,17 @@ internal sealed partial class AntonRaidBattle
 
     AntonRaidBattleView AdvancePreyShip(AntonRaidBattleView state)
     {
+        int departed = state.Symbols["[slenikon from area]"];
         int from = state.Symbols["[slenikon to area]"];
         int first = state.Phase == 0 ? 301 : 317, last = state.Phase == 0 ? 316 : 320;
-        int to = from < first || from >= last ? first : from + 1;
+        int to = state.Phase == 0 ? from < first || from >= last ? first : from + 1 :
+            from == 320 ? departed is >= 317 and < 319 ? departed + 1 : 317 : 320;
         if (state.Phase == 0 && from >= first && from <= last && state.Symbols[$"[area_{from - 300}_dgn_type]"] == 5 &&
             !dungeonRuns.Values.Any(run => run.Installed && !run.Cleared && run.Active.Count != 0 &&
                 run.Dungeon == state.Symbols[$"[area_{from - 300}]"]))
         {
             int dungeon = state.Symbols[$"[area_{from - 300}]"];
-            state = DamagePreyShip(state, PreyHeader("[single defence fail]"));
+            state = DamagePreyShip(state, PreyHeader("[single defence fail]"), collision: true);
             state = RemovePreyArea(state, dungeon);
         }
         // 015BB8F0读取205后减029107D0；必须发截止秒，不能一直发5/10使剩余时间立即归零。
@@ -212,23 +228,35 @@ internal sealed partial class AntonRaidBattle
             TimerAnchors = state.TimerAnchors.SetItem(key, lukeClock.GetTimestamp()), TimerSequence = generation };
     }
 
-    static AntonRaidBattleView RemovePreyArea(AntonRaidBattleView state, int dungeon)
+    AntonRaidBattleView RemovePreyArea(AntonRaidBattleView state, int dungeon, int? area = null)
     {
         for (int slot = 1; slot <= (state.Phase == 0 ? 16 : 20); slot++)
-            if (state.Symbols[$"[area_{slot}]"] == dungeon)
-                return state with { Symbols = state.Symbols.SetItem($"[area_{slot}]", 0).SetItem($"[area_{slot}_dgn_type]", 0) };
+            if ((area is null || area == slot + 300) && state.Symbols[$"[area_{slot}]"] == dungeon)
+                return state with { Symbols = state.Symbols.SetItem($"[area_{slot}]", 0)
+                    .SetItem($"[area_{slot}_dgn_type]", 7) };
         return state;
     }
 
-    AntonRaidBattleView DamagePreyShip(AntonRaidBattleView state, int damage)
+    AntonRaidBattleView DamagePreyShip(AntonRaidBattleView state, int damage, bool collision = false)
     {
         if (state.Symbols["[slenikon invincibility]"] != 0) return state;
         int hp = Math.Max(0, state.Symbols["[slenikon hp]"] - damage);
+        int armor = hp > PreyHeader("[armor level hp boundary]") ? 0 : hp > PreyHeader("[armor level hp boundary]", 1) ? 1 : 2;
+        if (collision || armor > state.Symbols.GetValueOrDefault("[slenikon armor level]"))
+            state = state with { PreyWarningEvent = checked(state.PreyWarningEvent + 1), PreyWarningAnchor = lukeClock.GetTimestamp() };
+        // 二阶段回满体力不会修复已经破碎的铠甲，后续掉血同样不能把损坏等级倒退。
         state = state with { Symbols = state.Symbols.SetItem("[slenikon hp]", hp).SetItem("[slenikon armor level]",
-            hp > PreyHeader("[armor level hp boundary]") ? 0 : hp > PreyHeader("[armor level hp boundary]", 1) ? 1 : 2) };
+            Math.Max(state.Symbols.GetValueOrDefault("[slenikon armor level]"), armor)) };
         return hp != 0 ? state : state with { PhaseExpired = true,
             Dungeons = state.Dungeons.ToImmutableDictionary(row => row.Key, _ => RaidDungeonState.Hide),
             Timers = state.Timers.Clear(), TimerAnchors = state.TimerAnchors.Clear(), TimerGenerations = state.TimerGenerations.Clear() };
+    }
+
+    internal bool PreyWarningCurrent(AntonRaidBattleView view)
+    {
+        lock (gate) return Kind == RaidKind.Prey && view.Instance == Instance && view.Phase == current.Phase &&
+            view.PreyWarningEvent > 0 && view.PreyWarningEvent == current.PreyWarningEvent &&
+            lukeClock.GetElapsedTime(view.PreyWarningAnchor) < TimeSpan.FromSeconds(5);
     }
 
     AntonRaidBattleView SpawnPreyDefence(AntonRaidBattleView state, int tower)
@@ -248,7 +276,7 @@ internal sealed partial class AntonRaidBattle
         lock (gate)
         {
             if (Kind != RaidKind.Prey || !ReferenceEquals(current, view) || TerminalRequested(current) ||
-                timer.Kind is not (1 or 2) || !view.Timers.TryGetValue(timer, out int seconds) ||
+                timer.Kind is not (1 or 2 or 10001 or 10002) || !view.Timers.TryGetValue(timer, out int seconds) ||
                 !view.TimerAnchors.TryGetValue(timer, out long anchor)) return null;
             double remaining = seconds - lukeClock.GetElapsedTime(anchor).TotalSeconds;
             return remaining > 0 ? checked((uint)Math.Ceiling(remaining)) : null;

@@ -44,7 +44,8 @@ internal sealed partial class AntonRaidBattle
                     dungeon.Snapshot.Phase != SinglePlayerDungeonPhase.Dungeon ||
                     !battle.dungeonRuns.TryGetValue(identity.InstanceId, out var run) || !run.Installed || run.Cleared ||
                     !battle.CurrentObjective(run) || !run.Active.Contains(actor) || run.Phase != raid.Phase ||
-                    run.Squad != raid.Squad || run.Dungeon != dungeon.Entry.DungeonId ||
+                    run.Squad != raid.Squad || run.PreyPartyId != raid.PreyPartyId || run.PreySoloCharacter != raid.PreySoloCharacter ||
+                    run.Dungeon != dungeon.Entry.DungeonId ||
                     !battle.entries.TryGetValue((run.Id, actor.Character), out var binding) ||
                     !ReferenceEquals(binding.Run, run) || binding.Phase != run.Phase || binding.Dungeon != run.Dungeon ||
                     identity.QuestId != binding.Identity.QuestId || identity.TaskAttempt != binding.Identity.TaskAttempt ||

@@ -14,6 +14,7 @@ internal static class PromotionConsumerValidationTests
 {
     public static void RunCore()
     {
+        PromotionHellTicketConsumerCoreTests.RunCore();
         var equipment = Template(880001101, ItemKind.Equipment, 12);
         InventoryRewardGrantService.ValidateCreationArguments(equipment, upgrade: 31, refinement: 127);
         foreach (var invalid in new Action[]
@@ -48,13 +49,29 @@ internal static class PromotionConsumerValidationTests
 
     public static void RunResources(ItemResources resources)
     {
+        PromotionGuardianGemConsumerTests.RunResources(resources);
+        PromotionRecipeConsumerTests.RunResources(resources);
+        PromotionCreatureFeedConsumerTests.RunResources(resources);
+        PromotionSharedEffectConsumerTests.RunResources(resources);
+        PromotionHellTicketConsumerTests.RunResources(resources);
+        PromotionAvatarCompoundConsumerTests.RunResources(resources);
+        PromotionCreatureRenameConsumerTests.RunResources(resources);
+        PromotionFatigueConsumerTests.RunResources(resources);
+        PromotionExpertJobConsumerTests.RunResources(resources);
+        PromotionAvatarGiftConsumerTests.RunResources(resources);
+        PromotionCreatureEggConsumerTests.RunResources(resources);
+        PromotionLevelUpByTableConsumerTests.RunResources(resources);
+        PromotionDimensionEntryConsumerTests.RunResources(resources);
         var shipped = JsonSerializer.Deserialize<PromotionConfiguration[]>(ServerRuntime.ReadShippedPromotionConfig())
             ?? throw new InvalidDataException("shipped promotion missing");
         var enabled = ServerRuntime.LoadCashShopPromotions(resources,
-            JsonSerializer.Serialize(shipped.Select(configuration => configuration with { Enabled = true }).ToArray()));
+            JsonSerializer.Serialize(shipped.Select(configuration => configuration with { Enabled = true }).ToArray()),
+            PromotionHellTicketConsumerTests.CurrentHellTicketIds(resources));
         That(enabled.Activities.Length == shipped.Length && enabled.Activities.All(entry => entry.Availability == PromotionAvailability.Active),
             "真实唯一loader已启用原配置完整图: " + string.Join("; ", enabled.Activities.Select(entry => entry.Error ?? entry.Availability.ToString())));
+        PromotionRuneConsumerTests.RunResources(resources);
         RealEmptySelectionCoordinates(resources);
+        RealFixedDisjointParents(resources, shipped);
         // 仅fixture隔离目录使用已有archive；不重读PVF、不覆盖真实模板和目录缓存。
         var archive = (PvfArchive)typeof(ItemCatalog).GetField("pvf", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(resources.Items)!;
         const int couponId = 490703365;
@@ -76,17 +93,131 @@ internal static class PromotionConsumerValidationTests
         var shop = CashShopCatalog.Parse($"[item]\n1 {roots[0]} 1 0 0 100 0 0 0\n");
         var rules = new PromotionRules(new("consumer-fixture", "period", "v1", "default", "package"),
             10, 3, 31, roots[2], 1, 5000, [new(1, roots[0], 1)], [new(2, roots[1], 1)]);
-        PromotionConsumerValidation Validator(CashShopCatalog? selected = null, AmplifyUpgradeCatalog? selectedUpgrades = null) => new(items, boosters, avatars, selected ?? shop,
+        PromotionConsumerValidation Validator(CashShopCatalog? selected = null, AmplifyUpgradeCatalog? selectedUpgrades = null,
+            IReadOnlySet<int>? hellTickets = null) => new(items, boosters, avatars, selected ?? shop,
             resources.EpicPieces, resources.Contracts, resources.RandomOptions, resources.AttributePairs,
             resources.Creatures, resources.CollectBoxes, resources.LimitCubes, resources.Enchantments, resources.Enhancements, resources.RecoveryConsumables,
-            resources.Amplifications, selectedUpgrades ?? resources.AmplifyUpgrades);
+            resources.Amplifications, selectedUpgrades ?? resources.AmplifyUpgrades, hellTicketIds: hellTickets);
         void Reset()
         {
             definitions.Clear();
             foreach (int root in roots) definitions[root] = new([new(1, [new(leaf, 1, 1)])]);
         }
         Reset();
+        // 门禁验证同时覆盖空声明与具体收费路径，不以持有材料替代消费者。
+        {
+            definitions[roots[1]] = new([new(1, [new(unsupported, 1, 1)])]);
+            string? TicketValidation(IReadOnlySet<int>? ids) => Validator(hellTickets: ids).Validate(rules);
+            foreach (var ids in new IReadOnlySet<int>?[] { null, new HashSet<int>(), new HashSet<int> { unsupported + 1 } })
+                That(TicketValidation(ids)?.Contains(unsupported + ": material_consumer_not_connected", StringComparison.Ordinal) == true,
+                    "缺集合、空集合或未声明ID均不能连接材料");
+            var hellConnected = PromotionHellTicketConsumerCoreTests.Tickets();
+            That(TicketValidation(hellConnected) is null, "非3330材料通过具体正数可达深渊收费合同连接");
+            var noCharge = PromotionHellTicketConsumerCoreTests.Tickets(
+                PromotionHellTicketConsumerCoreTests.Ordinary() with { Mazes = [] });
+            That(TicketValidation(noCharge)?.Contains(unsupported + ": material_consumer_not_connected", StringComparison.Ordinal) == true,
+                "仅有选图声明而没有收费路径仍拒绝");
+            items.PrefillTemplates([KeyValuePair.Create(unsupported, Template(unsupported, ItemKind.Material) with { UseForbidden = true })]);
+            That(TicketValidation(hellConnected)?.Contains("hell_party_ticket_definition", StringComparison.Ordinal) == true,
+                "已连接票据仍核对禁止使用属性");
+            items.PrefillTemplates([KeyValuePair.Create(unsupported, Template(unsupported, ItemKind.Material))]);
+            Reset();
+        }
         var validator = Validator();
+        {
+            const int nestedChild = 880001201;
+            items.PrefillTemplates([KeyValuePair.Create(nestedChild,
+                Template(nestedChild, ItemKind.Consumable) with { StackableType = "[booster selection] 0" })]);
+            var nestedSelection = new BoosterDefinition([], Selection: new(1, [new(0, 0, [new(leaf, 1)])]));
+            var fixedParent = new BoosterDefinition([new(1, [new(nestedChild, 1, 1)])])
+                { SetsDisjointInstanceType = true };
+            var selectionParent = new BoosterDefinition([], Selection: new(1, [new(0, 0, [new(nestedChild, 1)])]))
+                { SetsDisjointInstanceType = true };
+
+            string? ValidateNested(BoosterDefinition parent, BoosterDefinition child)
+            {
+                Reset();
+                definitions[roots[0]] = parent;
+                definitions[nestedChild] = child;
+                return validator.Validate(rules);
+            }
+
+            foreach (var (parent, label) in new[]
+            {
+                (fixedParent, "固定普通父盒"),
+                (selectionParent, "原自选父盒")
+            })
+            {
+                string? error = ValidateNested(parent, nestedSelection);
+                That(error is null, label + "的分解声明允许完整受支持自选子盒，真实validator无误拒: " + error);
+            }
+
+            var markedParent = selectionParent with { SetsEpicExchangeInstanceType = true };
+            var markedChild = nestedSelection with { SetsDisjointInstanceType = true, SetsEpicExchangeInstanceType = true };
+            string? markedError = ValidateNested(markedParent, markedChild);
+            That(markedError is null, "双声明自选父盒与自身双声明子盒的完整消费者图可用: " + markedError);
+            foreach (var (parent, label) in new[]
+            {
+                (markedParent with { Lottery = true }, "Lottery"),
+                (markedParent with { Pools = [new(1, [new(leaf, 1000, 1)])] }, "额外奖池"),
+                (markedParent with { PackageRewards = [new(leaf, 1, 1)] }, "混合PackageRewards")
+            })
+                That(ValidateNested(parent, markedChild)?.Contains(nestedChild + ": unsupported_instance_type_reward", StringComparison.Ordinal) == true,
+                    "双声明自选父盒不混入" + label);
+            foreach (var (child, label) in new[]
+            {
+                (markedChild with { SetsEpicExchangeInstanceType = false }, "缺史诗声明"),
+                (markedChild with { SetsDisjointInstanceType = false }, "缺分解声明"),
+                (markedChild with { PendingRule = "marked-child-pending" }, "规则未实现"),
+                (markedChild with { Selection = new(1, [new(0, 0, [new(roots[0], 1)])]) }, "A到B再到A循环"),
+                (markedChild with { Selection = new(1, [new(0, 0, [new(unsupported, 1)])]) }, "非装备叶"),
+                (markedChild with { Pools = [new(1, [new(leaf, 1000, 1)])] }, "额外奖池")
+            })
+                That(ValidateNested(markedParent, child)?.Contains(nestedChild + ": unsupported_instance_type_reward", StringComparison.Ordinal) == true,
+                    "双声明父盒不借自选子盒形状放行" + label);
+
+            // 每项仅改变具名父盒边界，仍执行同一个真实校验器。
+            foreach (var (parent, label) in new[]
+            {
+                (fixedParent with { Lottery = true }, "Lottery"),
+                (fixedParent with { Pools = [new(2, [new(nestedChild, 1, 1)])] }, "多抽"),
+                (fixedParent with { Pools = [new(1, [new(nestedChild, 1, 1), new(leaf, 1, 1)])] }, "双行随机池"),
+                (fixedParent with { Pools = [new(1, [new(nestedChild, 1, 1)]) { JobTag = "[swordman]" }] }, "职业池"),
+                (fixedParent with { PackageRewards = [new(leaf, 1, 1)] }, "混合PackageRewards"),
+                (fixedParent with { SetsEpicExchangeInstanceType = true }, "史诗实例声明")
+            })
+            {
+                string? error = ValidateNested(parent, nestedSelection);
+                That(error?.Contains(nestedChild + ": unsupported_instance_type_reward", StringComparison.Ordinal) == true,
+                    label + "不借固定普通父盒规则放行自选子盒: " + error);
+            }
+
+            foreach (var (child, label) in new[]
+            {
+                (new BoosterDefinition([new(1, [new(leaf, 1, 1)])]), "只有普通池、无Selection的子盒"),
+                (nestedSelection with { PendingRule = "nested-child-pending" }, "Pending子盒"),
+                (new BoosterDefinition([]), "不可用子盒")
+            })
+            {
+                string? error = ValidateNested(fixedParent, child);
+                That(error?.Contains(nestedChild + ": unsupported_instance_type_reward", StringComparison.Ordinal) == true,
+                    label + "仍在实际父子奖励边拒绝: " + error);
+            }
+
+            string? noUsable = ValidateNested(fixedParent,
+                nestedSelection with { Selection = new(1, [new(0, 0, [])]) });
+            That(noUsable is not null && noUsable.Contains("selection_has_no_usable_category", StringComparison.Ordinal) &&
+                !noUsable.Contains("unsupported_instance_type_reward", StringComparison.Ordinal),
+                "目录Available但无可用分类的子盒必须继续展开并拒绝，不把父子边放行等同整图通过: " + noUsable);
+
+            string? deep = ValidateNested(fixedParent,
+                nestedSelection with { Selection = new(1, [new(0, 0, [new(unsupported, 1)])]) });
+            That(deep is not null && deep.Contains(unsupported + ": material_consumer_not_connected", StringComparison.Ordinal) &&
+                !deep.Contains("unsupported_instance_type_reward", StringComparison.Ordinal),
+                "允许真实父子边后仍核未支持深叶，不把子盒Selection存在等同消费者闭环: " + deep);
+            Reset();
+        }
+
         That(validator.Validate(rules) is null, "真实消费者完整遍历合法已支持图可通过，非恒错误门");
         string json = JsonSerializer.Serialize(new[] { new PromotionConfiguration(rules, true) });
         That(CashShopPromotionCatalog.Parse(json, shop, items.Get, validator.Validate).Product(1)?.Availability == PromotionAvailability.Active &&
@@ -266,6 +397,26 @@ internal static class PromotionConsumerValidationTests
             That(walletDenied?.Contains("avatar_wallet_row_definition", StringComparison.Ordinal) == true &&
                 walletDenied.Contains(walletId.ToString(), StringComparison.Ordinal),
                 "钱包边仍先检查真实模板，不用RewardKind快捷返回绕过付费服务守卫");
+        }
+    }
+
+    static void RealFixedDisjointParents(ItemResources resources, PromotionConfiguration[] shipped)
+    {
+        foreach (int parentId in new[] { 490011382, 490012852 })
+        {
+            var original = shipped.Single();
+            var configuration = original with
+            {
+                Enabled = true,
+                Rules = original.Rules with
+                {
+                    Tiers = original.Rules.Tiers.SetItem(0, original.Rules.Tiers[0] with { ItemId = parentId, Count = 1 })
+                }
+            };
+            var catalog = ServerRuntime.LoadCashShopPromotions(resources, JsonSerializer.Serialize(new[] { configuration }));
+            var entry = catalog.Activities.Single();
+            That(entry.Availability == PromotionAvailability.Active,
+                $"已支持固定分解声明父盒及全部真实自选子盒经正式活动loader可用 {parentId}: {entry.Error}");
         }
     }
 

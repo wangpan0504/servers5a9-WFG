@@ -4,7 +4,7 @@ namespace DfoServer.Network.Builders;
 
 internal static class FatiguePackets
 {
-    // 023C7600固定五个u16。offset6同时更新当前/上一剩余量；ACK4专有的SelectionAuxiliary不在此包中。
+    // 023C7600固定五个u16。offset6更新当前/上一蓄电池祝福；不是普通疲劳Remaining。
     public static byte[] Current(CharacterFatigueState state)
     {
         state.Validate();
@@ -13,7 +13,7 @@ internal static class FatiguePackets
         writer.Write(state.Used);
         writer.Write(state.Maximum);
         writer.Write(state.UsedMaximum);
-        writer.Write(state.Remaining);
+        writer.Write(state.BatteryBuff);
         writer.Write(state.ContextAuxiliary);
         return stream.ToArray();
     }

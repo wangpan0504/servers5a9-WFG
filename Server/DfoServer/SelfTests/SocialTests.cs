@@ -1,6 +1,7 @@
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Auth;
 using DfoServer.Game.Chat;
+using DfoServer.Game.Party;
 using DfoServer.Game.Session;
 using DfoServer.Game.Social;
 using DfoServer.GameWorld.Towns;
@@ -17,6 +18,7 @@ internal static class SocialTests
 {
     public static void RunCore()
     {
+        AccountFriendGroupTests.RunCore();
         int before = Count;
         var friend = new SocialRow(new(new("b", 42, "RoleB", 75, 1, 2, "TeamB", 8), DateTimeOffset.UnixEpoch, "memo", 3),
             2, 10, true);
@@ -25,6 +27,9 @@ internal static class SocialTests
             "1376行首大区2不能写角色42，角色名在前、冒险团唯一键在后");
         Bytes(SocialPackets.AccountFriends([friend with { Online = false, Channel = 0 }]).AsSpan(1, 3).ToArray(),
             [2, 0, 2], "离线行保留本服大区和频道服务器，不使用角色ID或离线哨兵覆盖大区");
+        byte[] elapsedFriend = SocialPackets.AccountFriends([friend with { Online = false, Channel = 0, OfflineElapsedSeconds = 7200 }]);
+        That(BitConverter.ToUInt32(elapsedFriend, elapsedFriend.Length - 7) == 7200,
+            "冒险团好友离线行在memo后写真实elapsed秒，不再固定为零");
         Bytes(ChatPackets.NamedMessage(new(DfoServer.Game.Chat.ChatMessageType.OneToOne, 0, "A", 2, "hi") { AdventureName = "TeamA" }),
             Convert.FromHexString("2400010000004102020000006869050000005465616D410100000041"),
             "1对1正文后先读附加名字串，再读发送者作为会话对象，不能让接收端回复自己");
@@ -61,20 +66,33 @@ internal static class SocialTests
             repo.Create(a, new("SocialA", point, point)); repo.Create(b, new("SocialB", point, point));
             var sa = new GameSession(repo, towns, a); sa.Select(0); sa.MarkReady();
             var sb = new GameSession(repo, towns, b); sb.Select(0); sb.MarkReady();
+            var presence = (ISocialPresenceStore)repo;
+            long observed = DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 10;
+            presence.ObserveSocialAccountOnline(a, observed);
+            presence.ObserveSocialAccountOnline(a, observed - 1);
+            That(repo.AccountLastSeenUnix([a.Account])[a.Account] == observed,
+                "账号好友最近在线时刻按账号持久化且拒绝时钟回拨");
             var actor = sa.CaptureSocialActor()!; var other = sb.CaptureSocialActor()!;
             var now = new DateTimeOffset(2026, 10, 23, 12, 0, 0, TimeSpan.Zero);
             using var db = new SqliteConnection("Data Source=" + path + ";Pooling=False;Foreign Keys=True"); db.Open();
-            void Execute(string sql) { using var cmd = db.CreateCommand(); cmd.CommandText = sql; cmd.ExecuteNonQuery(); }
+            void Execute(string sql, long? p0 = null)
+            {
+                using var cmd = db.CreateCommand(); cmd.CommandText = sql;
+                if (p0.HasValue) cmd.Parameters.AddWithValue("$p0", p0.Value);
+                cmd.ExecuteNonQuery();
+            }
             long Scalar(string sql) { using var cmd = db.CreateCommand(); cmd.CommandText = sql; return Convert.ToInt64(cmd.ExecuteScalar()); }
             That(repo.ChangeCharacterLink(actor, "SocialB", false, false, "", now).Accepted &&
-                repo.CharacterLinks(other.Character.Id, false).Length == 0, "普通好友只修改添加者单向关系");
+                repo.CharacterLinks(other.Character.Id, false).Length == 0 &&
+                repo.LoadCharacter(b, 0).BlacklistCount == 0, "普通好友只修改添加者单向关系，不改变被拉黑计分");
             That(repo.ChangeCharacterLink(actor, "SocialB", false, false, "", now).Accepted &&
                 repo.CharacterLinks(actor.Character.Id, false).Length == 1, "重复添加普通好友幂等");
             That(!repo.ChangeCharacterLink(actor, "SocialA", false, false, "", now).Accepted &&
                 !repo.ChangeCharacterLink(actor, "Absent", false, false, "", now).Accepted, "自己与不存在的好友拒绝");
             That(repo.ChangeCharacterLink(other, "SocialA", true, false, "备注", now).Accepted &&
-                repo.IsBlocked(other.Character.Id, actor.Character.Id) && repo.BlockingCharacters(actor.Character.Id).SetEquals([other.Character.Id]),
-                "黑名单真实保存并供消息过滤");
+                repo.IsBlocked(other.Character.Id, actor.Character.Id) && repo.BlockingCharacters(actor.Character.Id).SetEquals([other.Character.Id]) &&
+                repo.LoadCharacter(a, 0).BlacklistCount == 1,
+                "黑名单真实保存并同步推进目标角色被拉黑计分");
             That(repo.UpdateSocialMemo(other, "SocialA", "修改", true).Accepted &&
                 repo.CharacterLinks(other.Character.Id, true).Single().Memo == "修改" &&
                 !repo.UpdateSocialMemo(other, "Absent", "", true).Accepted, "备注只修改真实关系，缺失不能返回成功");
@@ -87,7 +105,8 @@ internal static class SocialTests
             That(named.Send(sa,send,[0x7f,0x7f,(byte)'X',0x7f],new byte[148]).Rejection=="blacklisted" && received is null,
                 "物品引用不能绕过具名私聊的黑名单资格");
             repo.ChangeCharacterLink(other, "SocialA", true, true, "", now);
-            That(named.Send(sa, send).Accepted && received is { Name: "SocialA", Text: "hi" }, "解除后按名字只投目标，消息保留发送者身份");
+            That(repo.LoadCharacter(a, 0).BlacklistCount == 0 &&
+                named.Send(sa, send).Accepted && received is { Name: "SocialA", Text: "hi" }, "解除后同步扣减被拉黑计分并恢复消息投递");
             sb.ReturnToRoster();
             That(named.Send(sa, send).TargetOffline, "切角中的旧角色不继续接收");
             sb.Select(0);
@@ -138,6 +157,28 @@ internal static class SocialTests
                 repo.AccountFriends(a.Account).Single() is { Memo: "发起方备注", Group: 1 },
                 "重开后接受仍保存双方独立备注和分组，留言不用于目标角色校验");
             That(new CharacterRepository(path).AccountFriends(a.Account).Length == 1, "重开恢复真实社交关系");
+            sb.ReturnToRoster();
+            Execute("UPDATE account_social_presence SET last_seen_unix=$p0 WHERE account='socialb'", now.ToUnixTimeSeconds() - 7200);
+            var socialService = new SocialService(repo, online, new FixedClock(now));
+            var offlineView = socialService.Capture(sa)!;
+            That(offlineView.Accounts.Single().OfflineElapsedSeconds == 7200,
+                "账号好友离线时按持久最近在线时刻计算elapsed秒，不把关系创建时间当离线时间");
+            SocialView? delivered = null;
+            sa.SocialNoticeArrived = view => delivered = view;
+            socialService.Refresh(a.Account);
+            That(delivered is { ChangedCharacter: null } && delivered.Characters.Single() is { Online: false, Channel: 0 },
+                "普通列表刷新只恢复离线快照，不标记任何角色上下线事件");
+            socialService.PresenceChanged(other.Character.Id, b.Account);
+            That(delivered is { } offlineNotice && offlineNotice.ChangedCharacter == other.Character.Id &&
+                offlineNotice.Characters.Single() is { Online: false, Channel: 0 },
+                "离线事件携带实际目标角色，账号好友与角色好友仍共用同一在线目录快照");
+            sb.Select(0); sb.MarkReady();
+            socialService.PresenceChanged(other.Character.Id, b.Account);
+            That(delivered is { } onlineNotice && onlineNotice.ChangedCharacter == other.Character.Id && onlineNotice.Characters.Single().Online,
+                "真实上线只标记本次角色，不把完整列表当作逐行上线通知");
+            socialService.Refresh(a.Account);
+            That(delivered is { ChangedCharacter: null } && delivered.Characters.Single().Online,
+                "上线后的主动刷新仍是静默在线快照，不沿用上一次事件目标");
             var parties = new DfoServer.Game.Party.PartyService(repo);
             var publicIdentity = sa.PublicCharacter(actor.Character.Id)!;
             ushort noPartyId = parties.PartyId(actor.Character.Id);
@@ -196,11 +237,24 @@ internal static class SocialTests
                 "委任后原队长立即失去委任、修改及踢人权限，新队长获得设置权限");
             That(parties.TransferLeader(sb, 0).Accepted && transferred.Notices.All(n => n.Guard?.Invoke() == false),
                 "新队长可委任回来，迟到的旧队长投影失效");
+            That(!parties.Leave(sa, 0).Accepted && !parties.Leave(sa, 3).Accepted,
+                "踢自身或空槽不产生移除通知");
+            var kicked = parties.Leave(sa, 1);
+            var removed = kicked.Notices.Single(n => n.Kind == PartyNoticeKind.Removed);
+            That(kicked.Accepted && ReferenceEquals(removed.Recipient.Actor.Session, sb) && removed.Recipient.Slot == 1 &&
+                removed.RemovalReason == PartyRemovalReason.Kicked && removed.Guard?.Invoke() == true &&
+                kicked.Notices.Where(n => !ReferenceEquals(n, removed)).All(n => n.RemovalReason == PartyRemovalReason.None),
+                "成功踢人只标记原目标和旧槽，不标记幸存者更新");
+            That(parties.Invite(sa, sb, 0).Accepted && parties.Respond(sb, actor.Character.Id, 0, true).Accepted &&
+                removed.Guard?.Invoke() == false, "被踢后合法重入使原移除通知失效");
             var left = parties.Leave(sb);
             That(left.Accepted && !parties.HasMultipleMembers(sa) && parties.PartyId(other.Character.Id) == ushort.MaxValue &&
+                left.Notices.All(n => n.RemovalReason == PartyRemovalReason.None) &&
                 joined.Notices.Where(n => n.Kind == DfoServer.Game.Party.PartyNoticeKind.Updated).All(n => n.Guard?.Invoke() == false),
                 "离队更新名册并使在途旧队伍快照失效");
-            parties.Detach(sa);
+            var detached = parties.DetachNotices(sa);
+            parties.Publish(detached);
+            That(detached.All(n => n.RemovalReason == PartyRemovalReason.None), "生命周期清理不标记为踢人");
             That(parties.PartyId(actor.Character.Id) == ushort.MaxValue && parties.PartyId(actor.Character.Id) != createdPartyId,
                 "退出后菜单恢复空队伍哨兵，在途旧菜单不能恢复已清除的队伍标记");
             That(sa.BeginClassExperienceSelection() is not null && sa.ReturnFromDungeonSelection(false) is not null,
@@ -216,14 +270,33 @@ internal static class SocialTests
                 "目标换角后即使旧槽位尚未清理，也不能把队长委任给新epoch");
             parties.Detach(sa);
             parties.Detach(sb);
+            // 仅合成boarding标记，驱动真实Leave→Remove的双人拆队；不代替普雷准入测试。
+            foreach (bool kick in new[] { true, false })
+            {
+                That(parties.Invite(sa, sb, 0).Accepted && parties.Respond(sb, actor.Character.Id, 0, true).Accepted,
+                    "自动拆队原因用例复用真实双人队伍");
+                var boarding = parties.Current(sa)!;
+                typeof(PartySnapshot).GetProperty(nameof(PartySnapshot.PreyBattleId))!.SetValue(boarding, Guid.NewGuid());
+                var dissolved = kick ? parties.Leave(sa, 1) : parties.Leave(sb);
+                var removals = dissolved.Notices.Where(n => n.Kind == PartyNoticeKind.Removed).ToArray();
+                That(dissolved.Accepted && removals.Length == 2 && parties.Current(sa) is null && parties.Current(sb) is null &&
+                    removals.All(n => ReferenceEquals(n.Party, boarding) && n.Guard?.Invoke() == true) &&
+                    removals.Single(n => ReferenceEquals(n.Recipient.Actor.Session, sb)).RemovalReason ==
+                        (kick ? PartyRemovalReason.Kicked : PartyRemovalReason.None) &&
+                    removals.Single(n => ReferenceEquals(n.Recipient.Actor.Session, sa)).RemovalReason == PartyRemovalReason.None,
+                    "双Removed只原被踢者携带原因，附带拆队与主动退出均不冒充踢人");
+            }
             other = sb.CaptureSocialActor()!;
             That(AccountOwners.Lease.ExecuteTogether(a, b, () => a.Execute(() => b.Execute(() => 7))) == 7,
                 "固定双角色入口允许已持两把锁的明确重入");
             Reject<InvalidOperationException>(() => a.Execute(() => AccountOwners.Lease.ExecuteTogether(a, b, () => true)),
                 "不能在单账号锁内升级为双账号锁");
+            repo.ChangeCharacterLink(other, "SocialA", true, false, "", now);
+            That(repo.LoadCharacter(a, 0).BlacklistCount == 1, "删角前被拉黑计分为1");
             repo.Delete(b, repo.LoadDeletionTarget(b, 0));
-            That(repo.CharacterLinks(actor.Character.Id, false).Length == 0 && Scalar("SELECT count(*) FROM account_social_links") == 2,
-                "删角清理两端角色关系，同时保留账号好友");
+            That(repo.CharacterLinks(actor.Character.Id, false).Length == 0 && Scalar("SELECT count(*) FROM account_social_links") == 2 &&
+                repo.LoadCharacter(a, 0).BlacklistCount == 0,
+                "删角清理两端角色关系、回退被拉黑计分，同时保留账号好友");
             That(repo.AccountFriends(a.Account) is [{ Person.Id: 0, Person.Adventure: "TeamB" }] &&
                 repo.ResolveAccountFriend(sa.CaptureSocialActor()!, "TeamB", false, true, false).Accepted && repo.AccountFriends(a.Account).Length == 0,
                 "对方删尽角色后冒险团好友仍可展示并删除");
@@ -251,9 +324,23 @@ internal static class SocialTests
                 "v87原库升级只创建空关系，不伪造好友");
             That(Scalar("SELECT count(*) FROM sqlite_schema WHERE name='player_trade_receipts'") == 0,
                 "独立社交迁移不创建交易表");
+            var previousSelection = socialService.Capture(sa)!;
+            sa.ReturnToRoster(); delivered = null; socialService.Refresh(a.Account);
+            That(!previousSelection.IsCurrent() && delivered is null, "退出选角后旧社交快照失效，不向未就绪角色刷新");
+            sa.Select(0); sa.MarkReady();
+            That(!previousSelection.IsCurrent(), "同一角色重新选角也不能恢复旧epoch的发送资格");
+            var previousOwner = socialService.Capture(sa)!;
+            using var replacement = owners.Acquire(a.Account, () => { });
+            delivered = null; socialService.Refresh(a.Account);
+            That(!previousOwner.IsCurrent() && delivered is null, "账号接管后旧owner快照和旧在线索引不能发布新通知");
         }
         finally { TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"PASS {Count - before} 社交协议、持久化、屏蔽、原子回滚及迁移断言");
+    }
+
+    sealed class FixedClock(DateTimeOffset now) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => now;
     }
 
     [DllImport("msvcrt.dll", EntryPoint = "_localtime32_s", CallingConvention = CallingConvention.Cdecl)]

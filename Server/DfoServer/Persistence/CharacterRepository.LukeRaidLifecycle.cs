@@ -1,5 +1,7 @@
 using System.Collections.Immutable;
 using System.Text.Json;
+using DfoServer.Game.Currency;
+using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Raids;
 using Microsoft.Data.Sqlite;
 
@@ -29,6 +31,7 @@ internal sealed partial class CharacterRepository : ILukeRaidLifecycleStore
         command.CommandText = "SELECT EXISTS(SELECT 1 FROM character_raid_reward_receipts WHERE instance_id=$instance AND raid_type<>$type)";
         if (Convert.ToInt32(command.ExecuteScalar()) != 0) throw new InvalidDataException("卢克终结不能覆盖其它类型实例");
         var result = ImmutableArray.CreateBuilder<RaidPhaseEligibility>(candidate.Members.Length);
+        var materials = new Dictionary<string, ImmutableSortedDictionary<int, AccountMaterialBalance>>(StringComparer.Ordinal);
         foreach (var member in candidate.Members)
         {
             var frozenRewards = candidate.RewardsFor(member.Character);
@@ -46,11 +49,14 @@ internal sealed partial class CharacterRepository : ILukeRaidLifecycleStore
                     {
                         var previous = JsonSerializer.Deserialize<RaidPhaseEligibility>(reader.GetString(6))
                             ?? throw new InvalidDataException("卢克已提交阶段回执为空");
+                        bool sameOffers = AntonRaidBattle.SameLukeOffers(previous.Offers, frozenRewards.Offers);
+                        bool reducedOffers = !sameOffers && candidate.SongLimit is not null &&
+                            RaidSongQuota.IsOfferReduction(previous.Offers, frozenRewards.Offers);
                         if (source != candidate.Source || reader.GetString(4) != candidate.Event.ToString("N") || reader.GetInt64(5) != candidate.Anchor.ToUnixTimeSeconds() ||
                             previous.Instance != candidate.Instance || previous.RaidType != candidate.RaidType || previous.Phase != candidate.Phase ||
                             previous.Event != candidate.Event || previous.Anchor != candidate.Anchor.ToUnixTimeSeconds() ||
                             previous.Character != member.Character || previous.Week != candidate.Week || previous.Source != frozenRewards.Source ||
-                            !AntonRaidBattle.SameLukeOffers(previous.Offers, frozenRewards.Offers))
+                            !(sameOffers || reducedOffers))
                             throw new InvalidDataException("卢克阶段终结事件或来源发生变化");
                         result.Add(previous); continue;
                     }
@@ -75,8 +81,23 @@ internal sealed partial class CharacterRepository : ILukeRaidLifecycleStore
                 if (Convert.ToInt32(command.ExecuteScalar()) >= candidate.Policy.WeeklyEligibilityLimit)
                 { eligible = false; reason = "phase-eligibility-limit"; }
             }
+            var offers = frozenRewards.Offers;
+            int songAmount = 0;
+            foreach (var offer in offers)
+                songAmount = checked(songAmount + RaidSongQuota.PositiveAmount(offer.Grants));
+            if (eligible && candidate.SongLimit is { } songLimit && songAmount > 0)
+            {
+                if (!materials.TryGetValue(member.Account, out var wallet))
+                {
+                    wallet = ReadAccountMaterials(db, member.Account, tx);
+                    materials.Add(member.Account, wallet);
+                }
+                var balance = wallet.TryGetValue(RaidSongQuota.ItemId, out var found) ? found : AccountMaterialBalance.Empty;
+                offers = RaidSongQuota.ClipOffersToRemaining(offers, balance, member.Character, songLimit,
+                    AccountMaterialService.RaidWeek(candidate.Anchor));
+            }
             var receipt = new RaidPhaseEligibility(candidate.Instance, candidate.RaidType, candidate.Phase, candidate.Event,
-                candidate.Anchor.ToUnixTimeSeconds(), member.Character, counts, eligible, reason, frozenRewards.Source, candidate.Week, frozenRewards.Offers);
+                candidate.Anchor.ToUnixTimeSeconds(), member.Character, counts, eligible, reason, frozenRewards.Source, candidate.Week, offers);
             result.Add(receipt);
             // 缺行不能补造；删角后Import同id仍无原instance能力。已放弃行只记拒绝结果，不重新激活。
             if (state < 0) continue;

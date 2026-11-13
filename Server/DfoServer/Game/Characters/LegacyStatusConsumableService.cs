@@ -21,8 +21,8 @@ internal sealed class LegacyStatusConsumableService(ItemCatalog items, GoldLimit
             !ItemSlotBoundService.Allows(expected.Inventory, slot, ItemKind.Consumable))
             throw new InvalidDataException("旧状态道具源实例无效");
         var definition = items.LegacyStatusConsumable(source.Core.ItemId);
-        if (definition is null || !definition.Item.AllowsUse(expected.Level, expected.Job))
-            throw new InvalidDataException("旧状态道具资源、职业或等级资格不符");
+        if (definition is null || !definition.Item.AllowsActivation(expected.Level, expected.Job))
+            throw new InvalidDataException("旧状态道具资源或等级资格不符");
         var deletion = InventoryDeleteService.Plan(expected.Inventory, slot, source.Core.Value, 1);
         if (!deletion.Accepted) throw new InvalidDataException("旧状态道具不能消费一件");
         var after = deletion.Plan!.After;

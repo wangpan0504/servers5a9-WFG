@@ -148,8 +148,16 @@ internal sealed partial class CharacterRepository
                 return AuctionListingBuyResult.Reject(AuctionBuyError.StalePlan,
                     $"挂牌 {plan.ListingId} 的拍卖优惠券状态在规划后变化：实收 {plan.SellerProceeds}/{expectedProceeds}");
 
-            // ② 挂牌置为已成交（条件更新，影响 0 行即整笔回滚并翻成静默码 0x7e）。
-            AuctionListingRepository.MarkSold(db, transaction, plan.ListingId, plan.SettledAtUnix);
+            // ② 挂牌置为已成交或扣减堆叠余量（条件更新，影响 0 行即整笔回滚并翻成静默码 0x7e）。
+            if (plan.RemainingCount > 0)
+            {
+                AuctionListingRepository.DeductListingCount(db, transaction, plan.ListingId, plan.ItemCount,
+                    plan.RemainingCount, plan.RemainingItemEntry.ToArray());
+            }
+            else
+            {
+                AuctionListingRepository.MarkSold(db, transaction, plan.ListingId, plan.SettledAtUnix);
+            }
 
             // ③ 买方扣款。
             var character = CommitInventoryInTransaction(db, transaction, owner, expected, plan.Inventory);
@@ -275,7 +283,8 @@ internal sealed partial class CharacterRepository
         using var db = database.Open();
         using var write = db.BeginWrite("CharacterRepository.CommitInventory");
         using var transaction = write.Transaction;
-        var character = CommitInventoryInTransaction(db, transaction, owner, expected, plan);
+        var loaded = Require(db, transaction, owner.Account, expected.Name, expected.Inventory);
+        var character = CommitInventoryInTransaction(db, transaction, owner, loaded, expected, plan);
         var itemRead = ReadInventoryItemRevision(db, transaction, owner.Account, character.Id);
         if (plan.PromotionCatalogRevision is { } catalogRevision)
         {
@@ -298,6 +307,9 @@ internal sealed partial class CharacterRepository
         if (plan.UnlockSkillTree && (plan.Reason != "cash_shop_buy" || plan.CharacterPrecondition is null ||
             !expected.Learning.Initialized || expected.Learning.SelectedTree != -1))
             throw new InvalidOperationException("技能方案只能由商城对未开通角色开通");
+        if (plan.CashShopRename && (plan.Reason != "cash_shop_buy" || plan.CharacterPrecondition is null ||
+            plan.CashShopPayment?.Lines.Count(line => line.Product is { CommodityId: 100902, ItemId: 2682290, Count: 1 }) != 1))
+            throw new InvalidOperationException("商城更名资格必须来自对应商品");
         if (plan.EquipmentSlotFlagsAfter is not null && plan.Reason == "gm_equipment_slot_flags")
         {
             // 开发GM开扩展装备栏：只在原标志上追加辅助装备/魔法石/耳环位，背包不变，不清除也不开放幻化位。
@@ -318,6 +330,9 @@ internal sealed partial class CharacterRepository
                 (expected.EquipmentSlotFlags & flag) != 0 || slots != (expected.EquipmentSlotFlags | flag))
                 throw new InvalidOperationException("库存开栏只能在原角色资格上增加对应幻化位");
         }
+        if (plan.CloneTitleItemIdAfter is { } cloneTitleAfter &&
+            (cloneTitleAfter != 0 || expected.CloneTitleItemId == 0 || plan.CharacterPrecondition is null))
+            throw new InvalidOperationException("库存计划只能在原角色非零克隆称号失效时清零");
         if (plan.After.AccountWallet.Revision != plan.Before.AccountWallet.Revision || plan.After.AccountCargo.Revision != plan.Before.AccountCargo.Revision ||
             plan.After.EpicPieces.Revision != plan.Before.EpicPieces.Revision)
             throw new InvalidOperationException("业务不能修改账号资产版本");
@@ -330,7 +345,8 @@ internal sealed partial class CharacterRepository
     {
         if (current.Id != expected.Id || current.Revision != expected.Revision ||
             !SameInventory(current.Inventory, plan) || plan.CharacterPrecondition?.MatchesIdentity(current) == false ||
-            plan.UnlockSkillTree && !SameLearning(current.Learning, expected.Learning))
+            plan.UnlockSkillTree && !SameLearning(current.Learning, expected.Learning) ||
+            plan.CloneTitleItemIdAfter is not null && current.CloneTitleItemId != expected.CloneTitleItemId)
             throw new InvalidOperationException("角色库存、规划资格或owner/revision已变化");
     }
 
@@ -364,14 +380,25 @@ internal sealed partial class CharacterRepository
             throw new InventoryQualificationExpiredException();
         if (!plan.Changed)
             return current;
+        if (plan.CashShopRename)
+        {
+            if (!DfoServer.Game.Characters.CharacterRenameCard.AllowsMarriage(ReadMarriage(db, transaction, current.Id)))
+                throw new InventoryQualificationExpiredException();
+            using var rename = db.CreateCommand();
+            rename.Transaction = transaction;
+            rename.CommandText = "INSERT OR IGNORE INTO character_rename_pending(character_id,account,source_uid) VALUES($id,$account,0)";
+            rename.Parameters.AddWithValue("$id", current.Id);
+            rename.Parameters.AddWithValue("$account", owner.Account);
+            if (rename.ExecuteNonQuery() != 1) throw new InventoryQualificationExpiredException();
+        }
         CommitGuildHongbaoPurchase(db, transaction, current, plan);
         WritePcRoomClaim(db, transaction, owner.Account, current.Id, plan);
         WriteAccountItemRefills(db, transaction, owner.Account, current.Id, plan.AccountRefillClaims);
         using var command = db.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = """
-            UPDATE characters SET revision=revision+1,gold=$gold,inventory_expansion=$expansion,avatar_expansion=$avatarExpansion,devil_usage=$devil,daily_booster_usage=$dailyBooster,weapon_skin_state=$weaponSkin,avatar_preset_state=$avatarPreset,npc_favor=$npcFavor,stamina_until=$stamina,equipment_slot_flags=$equipmentSlots
-            WHERE id=$id AND account=$account AND revision=$revision AND equipment_slot_flags=$equipmentSlotsBefore;
+            UPDATE characters SET revision=revision+1,gold=$gold,inventory_expansion=$expansion,avatar_expansion=$avatarExpansion,devil_usage=$devil,daily_booster_usage=$dailyBooster,weapon_skin_state=$weaponSkin,avatar_preset_state=$avatarPreset,npc_favor=$npcFavor,stamina_until=$stamina,equipment_slot_flags=$equipmentSlots,clone_title_item_id=$cloneTitle
+            WHERE id=$id AND account=$account AND revision=$revision AND equipment_slot_flags=$equipmentSlotsBefore AND clone_title_item_id=$cloneTitleBefore;
             """;
         command.Parameters.AddWithValue("$id", expected.Id);
         command.Parameters.AddWithValue("$account", owner.Account);
@@ -387,6 +414,8 @@ internal sealed partial class CharacterRepository
         command.Parameters.AddWithValue("$stamina", plan.After.StaminaUntil);
         command.Parameters.AddWithValue("$equipmentSlots", plan.EquipmentSlotFlagsAfter ?? current.EquipmentSlotFlags);
         command.Parameters.AddWithValue("$equipmentSlotsBefore", current.EquipmentSlotFlags);
+        command.Parameters.AddWithValue("$cloneTitle", plan.CloneTitleItemIdAfter ?? current.CloneTitleItemId);
+        command.Parameters.AddWithValue("$cloneTitleBefore", current.CloneTitleItemId);
         if (command.ExecuteNonQuery() != 1)
             throw new InvalidOperationException("Character revision or owner changed");
         if (plan.Before.CubeContract != plan.After.CubeContract)
@@ -399,6 +428,12 @@ internal sealed partial class CharacterRepository
             cube.Parameters.AddWithValue("$selected", plan.After.CubeContract.Selected);
             cube.Parameters.AddWithValue("$type", plan.After.CubeContract.CubeType);
             cube.ExecuteNonQuery();
+        }
+        // 共享实例触发器更新账号库存标记前，账号仓库行必须已在同一事务内存在。
+        if (plan.AccountCargoChanged)
+        {
+            command.CommandText = "INSERT INTO account_cargo(account) VALUES($account) ON CONFLICT DO NOTHING";
+            command.ExecuteNonQuery();
         }
         var inventory = WriteInventory(db, transaction, owner, expected.Id, plan, plan.After, retained, incoming);
         inventory = WriteWallet(db, transaction, owner, expected.Id, plan, inventory);
@@ -420,13 +455,17 @@ internal sealed partial class CharacterRepository
         if (!skillSwitch.Same(current.SkillSwitchInventory))
             WriteSkillSwitchInventory(db, transaction, current.Id, owner.Account, skillSwitch);
         var active = current.ActiveMainQuests;
-        if (quests is not null && !plan.Reason.StartsWith("quest_", StringComparison.Ordinal))
+        if (quests is not null && active.Length > 0 && !plan.Reason.StartsWith("quest_", StringComparison.Ordinal))
         {
             var refreshed = DfoServer.Game.Quests.QuestEventProgress.Inventory(
-                DfoServer.Game.Quests.QuestInventoryProgress.Refresh(active, inventory, quests, DateTimeOffset.UtcNow.ToUnixTimeSeconds(),DfoServer.Game.Quests.QuestEligibility.Completed(current)),
+                DfoServer.Game.Quests.QuestInventoryProgress.Refresh(active, inventory, quests, DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+                    () => DfoServer.Game.Quests.QuestEligibility.Completed(current)),
                 quests, plan);
-            WriteQuestConditions(db, transaction, current.Id, active, refreshed);
-            active = refreshed.ToArray();
+            if (!active.AsSpan().SequenceEqual(refreshed.AsSpan()))
+            {
+                WriteQuestConditions(db, transaction, current.Id, active, refreshed);
+                active = refreshed.ToArray();
+            }
         }
         if (plan.ExpBonus is { } bonus)
         {
@@ -445,6 +484,8 @@ internal sealed partial class CharacterRepository
             exp.Parameters.AddWithValue("$permille", bonus.Permille);
             exp.ExecuteNonQuery();
         }
+        if (!plan.Before.VariousBuffs.SequenceEqual(plan.After.VariousBuffs))
+            WriteVariousBuffs(db, transaction, current.Id, owner.Account, inventory.VariousBuffs);
         if (!plan.Before.ConsumableStates.SequenceEqual(plan.After.ConsumableStates))
             WriteConsumableStates(db, transaction, owner.Account, current.Id, inventory.ConsumableStates);
         if (!BossSelectionBuff.Same(plan.Before.BossSelectionBuff, plan.After.BossSelectionBuff))
@@ -470,7 +511,9 @@ internal sealed partial class CharacterRepository
         ApplyBattlePassUndefeatedSongBooster(db, transaction, owner.Account, current.Id, current.Revision, plan);
         // 未参与本次库存操作的任务等进度取事务内实读值，不能用旧expected覆盖在线快照。
         return current with { Revision = current.Revision + 1, Inventory = inventory, ActiveMainQuests = active, Learning = learning,
-            EquipmentSlotFlags = plan.EquipmentSlotFlagsAfter ?? current.EquipmentSlotFlags, SkillSwitchInventory = skillSwitch,
+            EquipmentSlotFlags = plan.EquipmentSlotFlagsAfter ?? current.EquipmentSlotFlags,
+            CloneTitleItemId = plan.CloneTitleItemIdAfter ?? current.CloneTitleItemId,
+            SkillSwitchInventory = skillSwitch,
             ExpBonusUntil = plan.ExpBonus?.Until ?? current.ExpBonusUntil,
             ExpBonusPermille = plan.ExpBonus?.Permille ?? current.ExpBonusPermille };
     }
@@ -498,7 +541,7 @@ internal sealed partial class CharacterRepository
         var right = plan.Before;
         if (ReferenceEquals(left, right))
             return true;
-        if (left.PrivilegeService != right.PrivilegeService || !left.ShieldDeck.Same(right.ShieldDeck) || !left.ServerItems.Same(right.ServerItems) || !BossSelectionBuff.Same(left.BossSelectionBuff, right.BossSelectionBuff) || !left.NpcFavor.SequenceEqual(right.NpcFavor) || !left.ItemMakingSkills.Same(right.ItemMakingSkills) || !left.Skins.Same(right.Skins) || !left.AccountSkins.Same(right.AccountSkins) || !left.ConsumableStates.SequenceEqual(right.ConsumableStates) || left.Gold != right.Gold || left.Expansion != right.Expansion || left.CubeContract != right.CubeContract || left.ReviveCoins != right.ReviveCoins ||
+        if (left.PrivilegeService != right.PrivilegeService || !left.ShieldDeck.Same(right.ShieldDeck) || !left.ServerItems.Same(right.ServerItems) || !BossSelectionBuff.Same(left.BossSelectionBuff, right.BossSelectionBuff) || !left.NpcFavor.SequenceEqual(right.NpcFavor) || !left.ItemMakingSkills.Same(right.ItemMakingSkills) || !left.Skins.Same(right.Skins) || !left.AccountSkins.Same(right.AccountSkins) || !left.VariousBuffs.SequenceEqual(right.VariousBuffs) || !left.ConsumableStates.SequenceEqual(right.ConsumableStates) || left.Gold != right.Gold || left.Expansion != right.Expansion || left.CubeContract != right.CubeContract || left.ReviveCoins != right.ReviveCoins ||
             left.WinPoints != right.WinPoints || left.GoldCarryLimit != right.GoldCarryLimit || left.AuctionGoldLimit != right.AuctionGoldLimit ||
             !left.AccountWallet.Same(right.AccountWallet) || left.StaminaUntil != right.StaminaUntil || !left.DevilUses.SequenceEqual(right.DevilUses) || !DailyBoosterUsage.Same(left.DailyBoosterUses, right.DailyBoosterUses) || left.AvatarExpansion != right.AvatarExpansion || left.CargoCapacity != right.CargoCapacity || left.AccountCargo != right.AccountCargo ||
             !ShopPurchaseCount.Same(left.ShopPurchases, right.ShopPurchases) || !left.EpicPieces.Same(right.EpicPieces) ||
@@ -558,7 +601,7 @@ internal sealed partial class CharacterRepository
         }
 
         bool reuseItems = CanReuseInventoryItems(reuseInventory, itemRead);
-        shared ??= ReadAccountInventory(db, account, transaction, includeItems: !reuseItems);
+        shared ??= ReadAccountInventory(db, account, transaction, includeItems: !reuseItems, reuseEpicPieces: reuseInventory?.EpicPieces);
         var items = reuseItems ? reuseInventory!.Items : ReadInventoryItems(db, account, characterId, transaction).AddRange(shared.Items)
             .OrderBy(item => item.Position.List).ThenBy(item => item.Position.Index).ToImmutableArray();
         var purchases = ReadShopPurchases(db, account, characterId, transaction).AddRange(shared.Purchases)
@@ -571,6 +614,7 @@ internal sealed partial class CharacterRepository
             NpcFavor = npcFavor, Skins = weaponSkins, AccountSkins = shared.Skins, AvatarPresets = avatarPresets, ItemMakingSkills = ReadItemMakingSkills(db, transaction, characterId, account),
             ShopPurchases = purchases, EpicPieces = shared.Pieces, DailyBoosterUses = dailyBoosterUses,
             ConsumableStates = ReadConsumableStates(db, transaction, characterId, account),
+            VariousBuffs = ReadVariousBuffs(db, transaction, characterId, account),
             BossSelectionBuff = ReadBossSelectionBuff(db, transaction, characterId, account),
             ShieldDeck = ReadKnightShieldDeck(db, transaction, characterId, account),
             PrivilegeService = ReadPrivilegeService(db, transaction, characterId, account),
@@ -648,6 +692,7 @@ internal sealed partial class CharacterRepository
         }
 
         var updated = after.Items.ToBuilder();
+        bool allocated = false;
         for (int i = 0; i < updated.Count; i++)
         {
             var item = updated[i];
@@ -656,8 +701,10 @@ internal sealed partial class CharacterRepository
             BindSlot(item.Position);
             string core = JsonSerializer.Serialize(item.Core);
             command.Parameters.AddWithValue("$core", core);
+            InventoryItem? previous = null;
             if (item.Uid == 0)
             {
+                allocated = true;
                 command.CommandText = "INSERT INTO character_inventory_items(character_id,account,item_core) VALUES($id,$account,$core) RETURNING item_uid";
                 item = item with { Uid = (long)command.ExecuteScalar()! };
                 if (item.Avatar is not null || item.Creature is not null)
@@ -675,10 +722,10 @@ internal sealed partial class CharacterRepository
             else
             {
                 command.Parameters.AddWithValue("$uid", item.Uid);
-                var previous = plan.BeforeIndex.FindUid(item.Uid);
+                previous = plan.BeforeIndex.FindUid(item.Uid);
                 var old = previous ?? incoming?.GetValueOrDefault(item.Uid) ??
                     throw new InvalidOperationException("待转移实例不属于当前快照或已验证邮件");
-                command.Parameters.AddWithValue("$oldOwner", previous?.Position.List == InventoryListType.AccountCargo ? DBNull.Value : characterId);
+                command.Parameters.AddWithValue("$oldOwner", previous?.Position.List is InventoryListType.AccountCargo or InventoryListType.AccountCommon ? DBNull.Value : characterId);
                 command.CommandText = "UPDATE character_inventory_items SET character_id=$id,item_core=$core,updated_at=CURRENT_TIMESTAMP WHERE character_id IS $oldOwner AND account=$account AND item_uid=$uid";
                 if (command.ExecuteNonQuery() != 1)
                     throw new InvalidOperationException("物品更新失去所有权");
@@ -698,13 +745,13 @@ internal sealed partial class CharacterRepository
                 command.Parameters.AddWithValue("$uid", item.Uid);
             string? avatar = item.Avatar is null ? null : JsonSerializer.Serialize(item.Avatar);
             string? creature = item.Creature is null ? null : JsonSerializer.Serialize(item.Creature);
-            if (avatar is not null)
+            if (avatar is not null && (previous is null || previous.Avatar != item.Avatar))
             {
                 command.Parameters.AddWithValue("$detail", avatar);
                 command.CommandText = "INSERT INTO inventory_avatar_details(item_uid,detail) VALUES($uid,$detail) ON CONFLICT(item_uid) DO UPDATE SET detail=excluded.detail";
                 command.ExecuteNonQuery();
             }
-            if (creature is not null)
+            if (creature is not null && (previous is null || previous.Creature != item.Creature))
             {
                 command.Parameters.AddWithValue("$detail", creature);
                 command.CommandText = "INSERT INTO inventory_creature_details(item_uid,detail) VALUES($uid,$detail) ON CONFLICT(item_uid) DO UPDATE SET detail=excluded.detail";
@@ -715,9 +762,21 @@ internal sealed partial class CharacterRepository
             written.Add(item.Uid, (item, HashJson(core, avatar, creature)));
         }
 
-        var result = after with { Items = updated.ToImmutable() };
-        result.Validate();
-        var committedIndex = new InventoryIndex(result);
+        InventorySnapshot result;
+        InventoryIndex committedIndex;
+        if (allocated)
+        {
+            result = after with { Items = updated.ToImmutable() };
+            result.Validate();
+            committedIndex = new InventoryIndex(result);
+        }
+        else
+        {
+            result = after;
+            if (!ReferenceEquals(after, plan.After))
+                result.Validate();
+            committedIndex = ReferenceEquals(after, plan.After) ? plan.AfterIndex : new InventoryIndex(result);
+        }
         foreach (var slot in slots)
         {
             var old = plan.BeforeIndex.Find(slot);
@@ -757,7 +816,7 @@ internal sealed partial class CharacterRepository
         void BindSlot(InventorySlot slot)
         {
             command.Parameters.Clear();
-            command.Parameters.AddWithValue("$id", slot.List == InventoryListType.AccountCargo ? DBNull.Value : characterId);
+            command.Parameters.AddWithValue("$id", slot.List is InventoryListType.AccountCargo or InventoryListType.AccountCommon ? DBNull.Value : characterId);
             command.Parameters.AddWithValue("$account", owner.Account);
             command.Parameters.AddWithValue("$list", (byte)slot.List);
             command.Parameters.AddWithValue("$slot", slot.Index);

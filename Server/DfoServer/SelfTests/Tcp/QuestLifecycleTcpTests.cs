@@ -3,6 +3,7 @@ using System.Text.Json;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Quests;
+using DfoServer.Game.Settings;
 using DfoServer.Game.Skills;
 using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Dungeons;
@@ -206,6 +207,7 @@ internal static partial class QuestLifecycleTcpTests
         if (part == QuestPart.Lifecycle)
         {
             await using var f = new TcpTestFixture(options, Path.Combine(root, "quests"), resources: resources, questCatalog: new(catalog));
+            new AccountFatigueStore(f.Options.DataDirectory).Write([f.Options.DevelopmentAccount]);
             await f.StartAsync();
             using (var peer = Open(f))
             {
@@ -460,8 +462,8 @@ internal static partial class QuestLifecycleTcpTests
                 That(State() == before, "城镇客户端猎杀报告不能生成死亡或减少次数");
                 FormalDungeonTcpTests.EntryTown(peer);
                 var map = FormalDungeonTcpTests.Enter(peer); FormalDungeonTcpTests.Load(peer, fatigue: false);
-                // 此夹具保留默认无限疲劳，首房仍必须消费完整余额通知。
-                peer.Expect(0,36,[0,0,156,0,0,0,156,0,0,0]);
+                // 此夹具显式开启本账号无限疲劳，首房完整余额通知仍保留真实初始零蓄电池。
+                peer.Expect(0,36,[0,0,156,0,0,0,0,0,0,0]);
                 before = State();
                 foreach (int length in new[] { 52,74 })
                 {
@@ -2158,6 +2160,12 @@ internal static partial class QuestLifecycleTcpTests
                 That(packet.Body.Length == 7 && packet.Body[0] == 1 && U16(packet.Body,1) is > 0 and < 30000,
                     "死亡条件原位33严格保留成功头、任务编号及完整四字节条件，不吞失败ACK");
                 observe?.Invoke(packet);
+                continue;
+            }
+            if (packet is { Kind: 1, Opcode: 1002 })
+            {
+                That(packet.Body.Length == 13 && packet.Body[0] == 1 && BinaryPrimitives.ReadUInt64LittleEndian(packet.Body.AsSpan(1)) == 1,
+                    "推荐地下城结算发送幸运星获得/上限充值应答");
                 continue;
             }
             if (packet.Kind == 0 && packet.Opcode == 1760)

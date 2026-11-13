@@ -70,7 +70,8 @@ internal sealed partial class PartyDungeonService(PartyService parties, IPartyDu
                 if (member.Actor.Session.EvildomWarStartRejection(catalog, party) is { } reason) return reason;
             if (party.Settings.KindArgument == 2 && guideStore is not null && !leader.TryBindEvildomWarGuide(guideStore))
                 return "guide-account-limit";
-            var deadline = leader.EvildomWarNow.AddSeconds(catalog.LimitTime);
+            var startedAt = leader.EvildomWarNow;
+            var deadline = startedAt.AddSeconds(catalog.LimitTime);
             byte[] attributes = [0, 1, 2, 3];
             RandomNumberGenerator.Shuffle(attributes.AsSpan());
             int ordinal = 0;
@@ -80,7 +81,7 @@ internal sealed partial class PartyDungeonService(PartyService parties, IPartyDu
                     row.Kind == 0 ? (byte)0 : (byte)3)).ToImmutableArray();
             byte mode = checked((byte)party.Settings.KindArgument);
             var hidden = EvildomWarHiddenPolicy.Select(mode, dungeons, catalog.HiddenDungeons, hiddenDraw ?? RandomNumberGenerator.GetInt32);
-            var battle = new EvildomWarBattle(mode, deadline, dungeons, hidden);
+            var battle = new EvildomWarBattle(mode, deadline, dungeons, hidden, startedAt);
             var bound = parties.BindEvildomWar(party, battle.View.BattleId);
             if (bound is null) return "party-changed";
             foreach (var member in bound.Members) member.Actor.Session.StartEvildomWar(catalog, bound, battle, warStore);
@@ -119,6 +120,14 @@ internal sealed partial class PartyDungeonService(PartyService parties, IPartyDu
     public PartyDungeonDeparture Depart(GameSession caller, byte? kickSlot = null, bool preserveSolo = false)
     {
         var party = parties.Current(caller);
+        if (party is null && kickSlot is null && caller.IsPreySoloRaid && caller.PartyDungeon is { } solo &&
+            solo.Members is [var soloMember] && ReferenceEquals(soloMember.Actor.Session, caller))
+        {
+            var soloTravel = solo.Execute(_ => caller.ReturnFromFormalDungeon());
+            if (soloTravel is null) return new(19, [], []);
+            return new(0, [], [..solo.Detach(caller),
+                new(PartyDungeonNoticeKind.Departure, soloMember, solo.Members, Travel: soloTravel)]);
+        }
         var own = party?.Members.SingleOrDefault(m => ReferenceEquals(m.Actor.Session, caller));
         if (party is null || own is null || !parties.IsCurrent(party)) return new(19, [], []);
         if (kickSlot is not null && (party.Leader != own.Slot || kickSlot == own.Slot)) return new(4, [], []);
@@ -132,6 +141,11 @@ internal sealed partial class PartyDungeonService(PartyService parties, IPartyDu
         // 提交完成后仍在命令门禁内移除名册，并释放剩余加载屏障。
         var result = preserveRaidSquad || preserveSolo && party.Members.Length == 1 ? new PartyResult(0, []) : parties.Leave(target);
         if (!result.Accepted) throw new InvalidOperationException("副本回城提交后退队状态不一致");
+        // 权限已按原队长和旧槽校验；只标注实际被踢者，不把回城或附带拆队解释为踢人。
+        if (kickSlot is not null)
+            result = result with { Notices = result.Notices.Select(notice => notice.Kind == PartyNoticeKind.Removed &&
+                ReferenceEquals(notice.Party, party) && ReferenceEquals(notice.Recipient, removed)
+                    ? notice with { RemovalReason = PartyRemovalReason.Kicked } : notice).ToArray() };
         return new(0, result.Notices, [..instance.Detach(target),
             new(PartyDungeonNoticeKind.Departure, removed, instance.Members, Travel: travel)]);
     }
@@ -166,11 +180,14 @@ internal sealed partial class PartyDungeonService(PartyService parties, IPartyDu
         DungeonCatalog catalog, DungeonRoomCatalog rooms, DungeonMonsterDropCatalog? drops, ItemCatalog? items,
         EpicPieceCatalog? pieces, Func<DungeonEntryPlan, Func<DungeonPlannedMonster, DungeonDropGenerationPlan>>? prepareDrops,
         uint questId = 0, bool hellParty = false, bool hellLegend = false, CrackDimensionRewardServices? crackRewards = null, bool beastMode = false,
-        Action<string, byte>? onRejected = null, bool allowDimensionHidden = true, FiendwarEntryPreparation? fiendwarPrepared = null)
+        Action<string, byte>? onRejected = null, bool allowDimensionHidden = true, FiendwarEntryPreparation? fiendwarPrepared = null,
+        PartySnapshot? preySolo = null)
     {
-        var party = fiendwarPrepared?.Party ?? parties.Current(leader);
+        // 单人普雷只借本次场景快照复用正式Run与事务，不向普通队伍目录登记。
+        var party = preySolo ?? fiendwarPrepared?.Party ?? parties.Current(leader);
         bool soloHeroEntry = party?.Members.Length == 1 && dungeon is 5363 or 400000105;
-        if (party is null || party.Members.Length < 2 && !soloHeroEntry && leader.PartyDungeon is null &&
+        if (party is null || preySolo is not null && (fiendwarPrepared is not null || !leader.MatchesPreySoloSelection(preySolo)) ||
+            party.Members.Length < 2 && !soloHeroEntry && leader.PartyDungeon is null &&
             leader.ReadEvildomWar() is null && !leader.HasFormalRaidSelection ||
             !party.Members.Any(m => m.Slot == party.Leader && ReferenceEquals(m.Actor.Session, leader)) ||
             party.Members.Any(m => m.Actor.Session.Phase != SessionPhase.MapSelect &&
@@ -210,7 +227,8 @@ internal sealed partial class PartyDungeonService(PartyService parties, IPartyDu
             }
             return AccountOwners.Lease.ExecuteGroup(party.Members.Select(m => (m.Actor.Owner, m.Actor.Character.Id)).ToArray(), () =>
             {
-                if (!parties.IsCurrent(party) || fiendwarPrepared is { Active: false }) return [];
+                if ((preySolo is null ? !parties.IsCurrent(party) : !leader.MatchesPreySoloSelection(preySolo)) ||
+                    fiendwarPrepared is { Active: false }) return [];
                 if (dungeon == EvildomWarChallengeEntryPolicy.DungeonId)
                 {
                     if (!EvildomWarChallengeEntryPolicy.AllowsPartyCount(prepared.Count) ||
@@ -237,8 +255,18 @@ internal sealed partial class PartyDungeonService(PartyService parties, IPartyDu
                 return war is null ? entered : [..entered, ..EvildomWarNotices(party.Members, war)];
             });
         }
+        catch (DungeonEventAdmissionRejectedException)
+        {
+            onRejected?.Invoke("epic-road-event-closed", party.Members.Single(member => ReferenceEquals(member.Actor.Session, leader)).Slot);
+            return [];
+        }
         catch (DfoServer.Game.Guild.GuildDungeonAdmissionRejectedException)
         {
+            return [];
+        }
+        catch (SingleDungeonAdmissionRejectedException error)
+        {
+            onRejected?.Invoke(error.Message, party.Members.Single(member => ReferenceEquals(member.Actor.Session, leader)).Slot);
             return [];
         }
         catch (Exception error) { entryFailure = error; throw; }

@@ -18,6 +18,8 @@ internal sealed class LukeRaidRejoinReservation(RaidActor original, AntonRaidBat
     internal int? FiendwarArea { get; init; }
     internal byte PartySlot { get; } = partySlot;
     internal int Phase { get; } = phase;
+    internal TimeSpan Window { get; } = battle.LukeRejoinWindow;
+    internal byte PreyPosition { get; init; }
     internal RaidActor? Bound { get; set; }
 }
 internal sealed record LukeRaidDisconnectCandidate(Guid Instance, uint Key, byte RaidSlot, byte Squad,
@@ -34,9 +36,9 @@ internal sealed class LukeRaidRejoin(RaidRegistry registry, PartyService parties
         var actor = session.ReadLukeDisconnectActorHint();
         var raid = actor is null ? null : registry.Find(actor);
         if (actor is null || raid is null) { reason = "no-active-luke"; return null; }
-        if (raid.Type == 2)
+        if (raid.Type == 2 || raid is { Type: 3, Guide: false })
         {
-            // 漩涡没有固定普通分队；捕获只读取本人会话及有锁聚合，不能因另一线路短暂持owner而丢重返资格。
+            // 漩涡与普通普雷不恢复旧临时Party；本人身份和原聚合已足够，不因队友owner忙而丢重返资格。
             var captured = actor.Owner.Execute(() => CaptureLocked(actor, raid));
             reason = captured is null ? "ineligible" : "captured";
             return captured;
@@ -56,8 +58,8 @@ internal sealed class LukeRaidRejoin(RaidRegistry registry, PartyService parties
     AntonRaidDisconnectFact? CaptureLocked(RaidActor actor, RaidParty expected)
     {
         if (!registry.UsesRejoinCandidates(candidates) || !candidates.LukeCandidatesEnabled || !actor.IsCurrent ||
-            !registry.IsCurrent(expected) || expected is not { Type: 1 or 2, Started: { } started } ||
-            actor.Session.CurrentRaidBattle(actor) is not { Kind: RaidKind.Luke or RaidKind.Fiendwar } battle ||
+            !registry.IsCurrent(expected) || expected is not { Type: 1 or 2 or 3, Started: { } started } ||
+            actor.Session.CurrentRaidBattle(actor) is not { SupportsLukeRejoin: true } battle ||
             expected.Type != (byte)battle.Kind || started.InstanceId != battle.Instance ||
             !battle.CanCaptureLukeRejoin(actor)) return null;
         var member = expected.Members.Single(m => m.Actor == actor);
@@ -68,7 +70,8 @@ internal sealed class LukeRaidRejoin(RaidRegistry registry, PartyService parties
         var fact = new AntonRaidDisconnectFact(actor.Owner.Account, actor.Character, actor.Epoch, actor.Owner,
             expected.Key, battle.Instance, actor.Channel, member.Slot, member.Squad, null, false)
             { Luke = new(actor, battle, party, own?.Slot ?? 0, battle.View.Phase)
-                { FiendwarArea = battle.Kind == RaidKind.Fiendwar ? battle.FiendwarPosition(actor.Character) : null },
+                { FiendwarArea = battle.Kind == RaidKind.Fiendwar ? battle.FiendwarPosition(actor.Character) : null,
+                    PreyPosition = member.PreyPosition },
                 LukeDeadlineAnchor = candidates.LukeAnchor };
         if (!candidates.Record(fact)) return null;
         battle.ReserveLukeDisconnect(actor);
@@ -79,7 +82,7 @@ internal sealed class LukeRaidRejoin(RaidRegistry registry, PartyService parties
         var expected = registry.Find(fact.Key, fact.Channel);
         if (expected is null) { reason = "instance-unavailable"; return false; }
         bool recorded;
-        if (expected.Type == 2 || expected.Members.IsEmpty) recorded = RecordDisconnected(fact);
+        if (expected.Type == 2 || expected is { Type: 3, Guide: false } || expected.Members.IsEmpty) recorded = RecordDisconnected(fact);
         else if (!Accounts.AccountOwners.Lease.TryExecuteLukeDisconnect(expected.Members.Select(m => (m.Actor.Owner, m.Actor.Character)).ToArray(),
             () => RecordDisconnected(fact), out recorded)) { reason = "owner-busy-or-stale"; return false; }
         reason = recorded ? "recorded" : "ineligible";
@@ -89,7 +92,7 @@ internal sealed class LukeRaidRejoin(RaidRegistry registry, PartyService parties
     {
         if (fact.OldOwner.IsCurrent || fact.Luke is not { } reservation || !registry.UsesRejoinCandidates(candidates) ||
             !ReferenceEquals(candidates.Peek(fact.Character), fact) || !reservation.Battle.CanRestoreLukeRejoin(reservation) ||
-            registry.Find(fact.Key, fact.Channel) is not { Type: 1 or 2, Started: { } started } raid ||
+            registry.Find(fact.Key, fact.Channel) is not { Type: 1 or 2 or 3, Started: { } started } raid ||
             raid.Type != (byte)reservation.Battle.Kind || started.InstanceId != fact.Instance)
             return false;
         return registry.RecordLukeDisconnected(raid, fact, candidates);
@@ -106,13 +109,14 @@ internal sealed class LukeRaidRejoin(RaidRegistry registry, PartyService parties
             fact.Channel != actor.Channel || !actor.IsCurrent || fact.OldOwner.IsCurrent || ReferenceEquals(actor.Owner, fact.OldOwner))
             return new(false, "identity-mismatch");
         var raid = registry.Find(key, actor.Channel);
-        if (raid is not { Type: 1 or 2, Started: { } started } || raid.Type != (byte)reservation.Battle.Kind || started.InstanceId != fact.Instance)
+        if (raid is not { Type: 1 or 2 or 3, Started: { } started } || raid.Type != (byte)reservation.Battle.Kind || started.InstanceId != fact.Instance)
             return new(false, "instance-unavailable");
+        bool preyTeam = raid is { Type: 3, Guide: false } && !reservation.Battle.PreyGuide;
         if (reservation.Bound is { } bound)
             return bound == actor && ReferenceEquals(actor.Session.CurrentRaidBattle(actor), reservation.Battle) && registry.Find(actor) is { } current &&
-                (raid.Type == 2 || parties.Current(actor.Session) is not null)
+                (raid.Type == 2 || preyTeam || parties.Current(actor.Session) is not null)
                 ? new(true, "already-bound", current, parties.Current(actor.Session), reservation.Battle.View) : new(false, "reservation-consumed");
-        var ordinary = raid.Type == 2 ? null : parties.Snapshot().SingleOrDefault(p => p.Settings == RaidPreparationPlan.NativePartySettings(fact.Squad) &&
+        var ordinary = raid.Type == 2 || preyTeam ? null : parties.Snapshot().SingleOrDefault(p => p.Settings == RaidPreparationPlan.NativePartySettings(fact.Squad) &&
             p.Members.Any(m => raid.Members.Any(r => r.Squad == fact.Squad && ReferenceEquals(r.Actor.Session, m.Actor.Session))));
         var actors = raid.Members.Select(m => m.Actor).Append(actor).ToArray();
         var gates = actors.Select(m => m.Session.CommandGate).Concat(ordinary is null ? [] : new[] { ordinary.Commands })
@@ -150,6 +154,17 @@ internal sealed class LukeRaidRejoin(RaidRegistry registry, PartyService parties
                         if (!installed && !actor.Session.ChangeFiendwarRejoin(reservation.Original, actor, reservation.Battle, undo: true))
                             throw new InvalidOperationException("漩涡重返安装失败后原持久资格未能归还");
                     }
+                }
+                if (preyTeam)
+                {
+                    // 普雷分队只保留全团标记；重返后由左右待机区重新组队，不恢复旧临时Party。
+                    if (parties.Current(actor.Session) is not null) return new(false, "binding-conflict");
+                    var restoredPrey = registry.RestoreLukeMember(raid, fact, actor, () => reservation.Battle.RestoreLukeMember(reservation, actor,
+                        () => actor.Session.InstallLukeRejoin(actor, reservation.Battle)));
+                    if (restoredPrey is null) return new(false, "binding-conflict");
+                    if (!candidates.MarkLukeCandidateBound(fact)) throw new InvalidOperationException("普雷重返成功后候选已失效");
+                    reservation.Bound = actor;
+                    return new(true, "bound-without-wire", restoredPrey, null, reservation.Battle.View);
                 }
                 RaidParty? restored = null;
                 var restoredParty = parties.RestoreLukeRaidMember(ordinary, reservation.OriginalParty, actor, reservation.PartySlot, fact.Squad, _ =>

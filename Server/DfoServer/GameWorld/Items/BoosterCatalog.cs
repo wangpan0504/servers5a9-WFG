@@ -14,6 +14,7 @@ internal sealed record BoosterReward(int ItemId, long Weight, int Count)
     public int? AvatarPeriodDays { get; init; }
     public byte? AvatarAbility { get; init; }
 }
+internal sealed record BoosterPackageSelection(ImmutableArray<BoosterReward> Rewards);
 internal sealed record BoosterUsePlacesDefinition(bool Village = false, bool SeriaRoom = false, string? PendingRule = null)
 {
     public bool Dungeon { get; init; }
@@ -50,18 +51,21 @@ internal sealed record BoosterPool(int Draws, ImmutableArray<BoosterReward> Rewa
 }
 internal sealed record BoosterDefinition(ImmutableArray<BoosterPool> Pools, string? PendingRule = null,
     BoosterSelectionDefinition? Selection = null, ImmutableArray<BoosterReward> PackageRewards = default, bool Lottery = false,
-    bool NpcPocketPot = false)
+    bool NpcPocketPot = false, ImmutableArray<BoosterPackageSelection> PackageSelections = default)
 {
     public ImmutableArray<byte> FirstGrowTypes { get; init; } = [];
     public bool AllowsFirstGrowType(byte growType) => FirstGrowTypes.IsEmpty || FirstGrowTypes.Contains((byte)(growType & 15));
     public bool UnsealsRandomOptions { get; init; }
     public int? CustomAbilityGrade { get; init; }
     public bool SetsDisjointInstanceType { get; init; }
+    public bool HasFixedOrdinaryRewards => !Lottery && PackageRewards.IsDefaultOrEmpty &&
+        !Pools.IsEmpty && Pools.All(pool => pool is
+            { Draws: 1, JobTag: null, Rewards: [{ Weight: > 0, Count: > 0 }] });
     public bool ForbidsDestructionSouls { get; init; }
     public bool SetsEpicExchangeInstanceType { get; init; }
     // 休亚商店在售的选组礼盒：PVF 没写交换声明，但产物同样是在休亚处兑换来的。
     public bool FromExchangeShop { get; init; }
-    // 产物装备一律带交换资格位；随机奖池与固定礼包不在支持范围内。
+    // 显式声明记录禁交换礼盒来源；休亚商店来源另行授予交换资格。
     public bool GrantsEpicExchangeOrigin => SetsEpicExchangeInstanceType || (FromExchangeShop && Selection is not null);
     public byte? DailyRetainedLimit { get; init; }
     public byte? DailyConsumedLimit { get; init; }
@@ -122,6 +126,7 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
 
     internal static BoosterDefinition Parse(string text)
     {
+        if (!TryNormalizeStackableType(ref text)) return new([], "礼包堆叠类型声明无效");
         if (!BoosterFirstGrowTypes.TryParse(text, out var branches)) return new([], "礼包首转资格声明无效");
         string tags = Regex.Replace(text, "`[^`]*`", match => new string(' ', match.Length));
         var declarations = Regex.Matches(tags, @"\[\s*/?\s*random\s+option\s+unseal[^\]\r\n]*\]?", RegexOptions.IgnoreCase);
@@ -149,6 +154,34 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
                 NumberStyles.Integer, CultureInfo.InvariantCulture, out int abilityGrade) ? abilityGrade : null,
             CoolTime = coolTime, CoolGroup = coolGroup, CooltimeMaintenance = maintenance
         };
+    }
+
+    static bool TryNormalizeStackableType(ref string text)
+    {
+        string tags = Regex.Replace(text, "`[^`]*`", match => new string(' ', match.Length));
+        var fields = Regex.Matches(tags, @"\[\s*/?\s*stackable\s+type[^\]\r\n]*\]?", RegexOptions.IgnoreCase);
+        if (fields.Count < 2) return true;
+        if (text.Count(value => value == '`') % 2 != 0) return false;
+        var normalized = text.ToCharArray();
+        foreach (Match field in fields)
+        {
+            int start = field.Index + field.Length;
+            int end = tags.IndexOf('[', start);
+            if (end < 0) end = text.Length;
+            if (!field.Value.Equals("[stackable type]", StringComparison.OrdinalIgnoreCase) ||
+                !IsRootDeclaration(tags, field.Index)) return false;
+            var declaration = Regex.Match(text[start..end], @"^\s*`\[[^\]`\r\n]+\]`((?:\s+[+-]?\d+){1,4})\s*$");
+            string[] parameters = declaration.Groups[1].Value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+            if (!declaration.Success || parameters.Length is not (1 or 2 or 4) ||
+                parameters.Any(value => !int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out _)))
+                return false;
+            if (field == fields[^1]) continue;
+            // 与原生及统一物品目录一致：最后完整类型覆盖前值，其余资格和奖励声明原样保留。
+            for (int at = field.Index; at < end; at++)
+                if (normalized[at] is not ('\r' or '\n')) normalized[at] = ' ';
+        }
+        text = new string(normalized);
+        return true;
     }
 
     static bool TryParseCooldown(string text, string tags, out int coolTime, out int? coolGroup, out byte? maintenance)
@@ -195,13 +228,21 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
     {
         if (ParseUsePlaces(text).PendingRule is { } placeError) return new([], placeError);
         string type = Regex.Match(PvfScript.Section(text, "stackable type"), @"`\[([^\]]+)\]`").Groups[1].Value;
-        if (type is not ("usable cera package" or "booster" or "cera booster" or "booster random" or "booster selection" or
-            "upgradable legacy" or "legacy"))
+        if (type is not ("cera package" or "usable cera package" or "booster" or "cera booster" or "booster random" or "booster selection" or
+            "upgradable legacy" or "legacy" or "monster tarot card"))
             return new([], "其他开箱入口");
         // 固定商城礼包同样不能跳过资格、账本或实例属性字段。
         // 保留原文偏移，空声明仍须检查原文中的字符串值，不能被字符串掩码吞掉。
         string tags = Regex.Replace(text, "`[^`]*`", match => new string(' ', match.Length));
         bool finiteLegacy = Regex.IsMatch(PvfScript.Section(text, "stackable type").Trim(), @"^`\[legacy\]`\s+1$");
+        bool tarot = type == "monster tarot card";
+        if (tarot)
+        {
+            var declaration = Regex.Match(PvfScript.Section(text, "stackable type").Trim(), @"^`\[monster tarot card\]`\s+(\d+)$");
+            if (!declaration.Success || !int.TryParse(declaration.Groups[1].Value, NumberStyles.None,
+                    CultureInfo.InvariantCulture, out _))
+                return new([], "塔罗牌子类型声明无效");
+        }
         // 普通实物罐只复用有限奖池；动作型旧物品不能借此跳过独立玩法。
         if (finiteLegacy && Regex.IsMatch(tags, @"\[\s*/?\s*action\s+type[^\]\r\n]*\]?", RegexOptions.IgnoreCase))
             return new([], "普通袖珍罐动作声明未支持");
@@ -214,8 +255,8 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
             var declaration = goldCosts[0];
             int end = declaration.Index + declaration.Length;
             int next = tags.IndexOf('[', end);
-            // 付费金币奖励的净增量回包尚未闭合；费用只接入类型1的有限实物池。
-            if ((!finiteLegacy && !Regex.IsMatch(PvfScript.Section(text, "stackable type").Trim(), @"^`\[upgradable legacy\]`\s+1$")) ||
+            // 付费金币奖励的净增量回包尚未闭合；费用只接入有限实物池及塔罗牌。
+            if ((!finiteLegacy && !tarot && !Regex.IsMatch(PvfScript.Section(text, "stackable type").Trim(), @"^`\[upgradable legacy\]`\s+1$")) ||
                 goldCosts.Count != 1 || text.Count(value => value == '`') % 2 != 0 ||
                 !declaration.Value.Equals("[lottery use cost]", StringComparison.OrdinalIgnoreCase) ||
                 !IsRootDeclaration(tags, declaration.Index) ||
@@ -269,7 +310,7 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
         bool setsEpicExchangeInstanceType = epicDeclarations.Count != 0;
         if (setsEpicExchangeInstanceType)
         {
-            if (type != "booster selection" || epicDeclarations.Count != 1 || text.Count(value => value == '`') % 2 != 0)
+            if (type is not ("booster" or "booster selection") || epicDeclarations.Count != 1 || text.Count(value => value == '`') % 2 != 0)
                 return new([], "set epic exchange instance type");
             var declaration = epicDeclarations[0];
             int end = declaration.Index + declaration.Length;
@@ -339,13 +380,13 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
                 return new([], pending!);
             return new([], null) { RuneBox = (family, tier), Lottery = true };
         }
-        if (type == "upgradable legacy" || finiteLegacy)
+        if (type == "upgradable legacy" || finiteLegacy || tarot)
         {
             // 此类型经独立的CMD27入口一次抽取一行；不能交给CMD160忽略其回包合同。
             string lotteryType = PvfScript.Section(text, "stackable type").Trim();
-            if (!finiteLegacy && !Regex.IsMatch(lotteryType, @"^`\[upgradable legacy\]`\s+[01]$"))
+            if (!finiteLegacy && !tarot && !Regex.IsMatch(lotteryType, @"^`\[upgradable legacy\]`\s+[01]$"))
                 return new([], "袖珍罐子类型待确认");
-            bool allowsGold = lotteryType.EndsWith('0');
+            bool allowsGold = !tarot && lotteryType.EndsWith('0');
             var data = Regex.Matches(text, @"\[int data\](.*?)\[/int data\]", RegexOptions.Singleline);
             if (data.Count != 1 || Regex.Matches(tags, @"\[int data\]").Count != 1 ||
                 Regex.Matches(tags, @"\[/int data\]").Count != 1)
@@ -370,7 +411,9 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
                         ForbidsDestructionSouls = setsDisjointInstanceType }
                 : new([], "袖珍罐总权重为零");
         }
-        if (type == "usable cera package")
+        // 老商城固定礼包使用 [cera package]，较新的同类资源使用 [usable cera package]；两者都由
+        // CMD518 按同一 [package data] 清单消费，不能因类型名称不同而把已购买礼包标成不可用。
+        if (type is "cera package" or "usable cera package")
         {
             var packageBlocks = Regex.Matches(text, @"\[package data\](.*?)\[/package data\]", RegexOptions.Singleline);
             if (packageBlocks.Count != 1)
@@ -385,7 +428,27 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
                     return new([], "礼包内容物品或数量无效");
                 else
                     rewards.Add(new(id, 1, count));
-            return new([], null, null, rewards.ToImmutable());
+            var selectionBlocks = Regex.Matches(text, @"\[package data selection\](.*?)\[/package data selection\]",
+                RegexOptions.Singleline | RegexOptions.IgnoreCase);
+            if (selectionBlocks.Count != Regex.Matches(text, @"\[package data selection\]", RegexOptions.IgnoreCase).Count ||
+                selectionBlocks.Count != Regex.Matches(text, @"\[/package data selection\]", RegexOptions.IgnoreCase).Count)
+                return new([], "礼包选择段缺失或重复");
+            var selections = ImmutableArray.CreateBuilder<BoosterPackageSelection>(selectionBlocks.Count);
+            foreach (Match block in selectionBlocks)
+            {
+                string[] selectionTokens = block.Groups[1].Value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+                if (selectionTokens.Length == 0 || selectionTokens.Length % 2 != 0)
+                    return new([], "礼包选择内容缺失或行宽无效");
+                var choices = ImmutableArray.CreateBuilder<BoosterReward>(selectionTokens.Length / 2);
+                for (int i = 0; i < selectionTokens.Length; i += 2)
+                    if (!int.TryParse(selectionTokens[i], out int id) || id <= 0 ||
+                        !int.TryParse(selectionTokens[i + 1], out int count) || count <= 0)
+                        return new([], "礼包选择物品或数量无效");
+                    else
+                        choices.Add(new(id, 1, count));
+                selections.Add(new(choices.ToImmutable()));
+            }
+            return new([], null, null, rewards.ToImmutable(), PackageSelections: selections.ToImmutable());
         }
         if (type == "booster selection")
             return BoosterSelectionDefinition.Parse(text) with
@@ -473,7 +536,8 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
             !Regex.IsMatch(tail, @"^(?:\s*\[hide booster info\](?:\s*\[/hide booster info\])?)+\s*$")
             ? new([], "未识别的奖池尾段") : new(pools.ToImmutable())
                 { DailyRetainedLimit = retainsDailySource ? dailyLimit : null,
-                    DailyConsumedLimit = retainsDailySource ? null : dailyLimit, SetsDisjointInstanceType = setsDisjointInstanceType };
+                    DailyConsumedLimit = retainsDailySource ? null : dailyLimit, SetsDisjointInstanceType = setsDisjointInstanceType,
+                    SetsEpicExchangeInstanceType = setsEpicExchangeInstanceType };
     }
 
     // [avatar] / [special avatar] 行宽为五列：物品、权重、数量、期限天数、属性选项。

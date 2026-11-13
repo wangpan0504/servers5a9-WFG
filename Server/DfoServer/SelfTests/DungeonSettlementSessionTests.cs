@@ -1,5 +1,6 @@
 using static DfoServer.Testing.TestCheck;
 using System.Text.Json;
+using System.Collections.Immutable;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Adventure;
 using DfoServer.Game.Auth;
@@ -40,6 +41,8 @@ internal static class DungeonSettlementSessionTests
         var definition = dungeons.Get(3);
         var maps = definition.Mazes.Single(maze => maze.ConnectsQuest(3145)).MapSpecification!;
         var expectedReward = clear.Calculate(definition, 0, 99);
+        ZeroExperience();
+        DungeonSettlementTests.RunSortedStackCards(pvf, itemResources);
         CommittedSettlement();
         ReturnWithoutSettlement();
         RaidStatisticsIsolation();
@@ -47,6 +50,7 @@ internal static class DungeonSettlementSessionTests
         RetryCollectionRules();
         FreeCards(false);
         FreeCards(true);
+        DisabledClearCards();
         LostCardResult();
         LostFreeResult();
         DoubleCardRewards();
@@ -60,7 +64,134 @@ internal static class DungeonSettlementSessionTests
         CappedSettlement();
         MaxedProficiencySettlement();
         AdventureSettlement();
+        EquipmentRarityCards();
+        GmEpicCards();
         Console.WriteLine($"PASS {TestCheck.Count - before} 通关Session经验、冻结报告、空翻牌及返回断言（非实机）");
+
+        void ZeroExperience()
+        {
+            var isolated = DungeonCatalog.Load(pvf);
+            var definitions = (System.Collections.Concurrent.ConcurrentDictionary<int, Lazy<DungeonDefinition>>)
+                typeof(DungeonCatalog).GetField("definitions", System.Reflection.BindingFlags.Instance |
+                    System.Reflection.BindingFlags.NonPublic)!.GetValue(isolated)!;
+            definitions[3] = new(() => definition with
+                { RawSections = [.. definition.RawSections, new("experience increasing point", [new PvfToken(0, 0)])] });
+            using var f = new Fixture("ZeroSession", towns, characters, learning, quests);
+            f.SelectEntry();
+            Check(f.Session.EnterFormalDungeon(3, 3145, 0, isolated, rooms) is { Entry.ExperienceWeight: 0 },
+                "正式Session入场冻结显式零经验权重");
+            ClearRun(f);
+            var previous = f.Read();
+            var result = f.Session.SettleFormalDungeon(f.Created.Id, 99, 99, [91, 92], isolated, clear, growth);
+            Check(result.Outcome == DungeonRunOutcome.Accepted && result.Reward?.TotalExperience == 0 &&
+                f.Settlements == 1 && f.Read().Learning.Experience == previous.Learning.Experience,
+                "Session零经验结算通过成长预检、Run及文件库三处门禁，保存唯一凭证");
+            var replay = f.Session.SettleFormalDungeon(f.Created.Id, 99, 99, [91, 92], isolated, clear, growth);
+            Check(replay.Outcome == DungeonRunOutcome.Duplicate && f.Settlements == 1,
+                "Session零经验结算重放不再增加凭证或经验");
+        }
+
+        void DisabledClearCards()
+        {
+            // 只在独立目录副本替换一份不可变定义，不改共享资源或增加生产测试入口。
+            var isolated = DungeonCatalog.Load(pvf);
+            var definitions = (System.Collections.Concurrent.ConcurrentDictionary<int, Lazy<DungeonDefinition>>)
+                typeof(DungeonCatalog).GetField("definitions", System.Reflection.BindingFlags.Instance |
+                    System.Reflection.BindingFlags.NonPublic)!.GetValue(isolated)!;
+            definitions[3] = new(() => definition with
+                { RawSections = [.. definition.RawSections, new("disable clear reward", [])] });
+            using var f = new Fixture("NoClearCards", towns, characters, learning, quests);
+            f.Session.SetCardMembership(f.Created.Name, CardMembershipKind.BlackDiamond,
+                DateTimeOffset.UtcNow.AddDays(1).ToUnixTimeSeconds());
+            f.SelectEntry();
+            Check(f.Session.EnterFormalDungeon(3, 3145, 0, isolated, rooms) is { Entry.DisableClearReward: true },
+                "普通正式入场冻结禁通关奖励声明，不依赖特殊模式分类");
+            ClearRun(f);
+            int draws = 0;
+            var policy = PremiumPolicy(_ => { draws++; return 0; });
+            var result = f.Session.SettleFormalDungeon(f.Created.Id, 99, 99, [71, 72], isolated, clear, growth, policy);
+            Check(result.Outcome == DungeonRunOutcome.Accepted && result.Card is null && result.Options is null &&
+                result.BlackDiamond is null && draws == 0 && f.Count("character_dungeon_card_rewards") == 0 &&
+                f.Count("character_dungeon_card_options") == 0,
+                "禁通关奖励的普通Run不抽免费付费或会员牌，也不保存虚假翻牌资格");
+            Check(f.Session.SelectFormalDungeonFreeCard(0, 0) is null &&
+                f.Session.ReturnFromFormalDungeon() is not null && f.Session.Phase == SessionPhase.Town,
+                "无翻牌资格仍可沿正式结算回城，不强制领取空普通牌");
+        }
+
+        void EquipmentRarityCards()
+        {
+            using var f = new Fixture("RarityCards", towns, characters, learning, quests, items: itemResources.Items);
+            var title = new InventoryItem(0, new(InventoryListType.Equipment, 13),
+                InventoryRewardGrantService.Create(itemResources.Items.Get(400330027)) with { ExpireTime = 0 });
+            f.EditInventory(inventory => inventory with
+                { Items = inventory.Items.Where(item => item.Position != title.Position).Append(title).ToImmutableArray() });
+            f.SelectEntry();
+            Check(f.Session.EnterFormalDungeon(3, 3145, 0, dungeons, rooms,
+                drops: global::DfoServer.Testing.SelfTestCatalogs.MonsterDrops(pvf), items: itemResources.Items) is not null,
+                "个人掉率资源沿真实Session入场准备，不依赖无关玩法的可选目录参数");
+            ClearRun(f);
+            int level = definition.BasisLevel!.Value;
+            var names = new Dictionary<int, string> { [1] = "[gold card cost table]", [2] = "[basis of rarity dicision]", [3] = "[item drop ref table]" };
+            var prices = DungeonCardPriceCatalog.Parse(new PvfToken[]
+            {
+                new(3, 1), new(0, level), new(0, 100), new(3, 2),
+                new(0, 200000), new(0, 400000), new(0, 600000), new(0, 800000), new(0, 900000), new(0, 990000), new(0, 1000000),
+                new(3, 3), new(0, level), new(0, level - 1), new(0, 1)
+            }, key => names[key]);
+            var candidates = DungeonItemDropCatalog.Create(Enumerable.Range(0, 7).Select(rarity =>
+                new ItemTemplate(9000 + rarity, ItemKind.Equipment, 12, 1, 10, 1, 0, rarity, 1, "[free]", ushort.MaxValue, 0, "CardFixture")
+                    { CreationRate = 1 }));
+            int draws = 0;
+            var policy = new DungeonCardRewardPolicy(global::DfoServer.Testing.SelfTestCatalogs.DropRules(pvf), candidates,
+                itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces,
+                random: bound => { draws++; return bound == 1000000 ? 350000 : 0; }, prices: prices);
+            var first = f.Session.SettleFormalDungeon(f.Created.Id, 99, 99, [7, 8, 9], dungeons, clear, growth, policy);
+            Check(first.Card?.Item?.ItemId == 9003 && first.Options?.Paid.Item?.ItemId == 9003,
+                "Session将本人称号神器200%传给普通免费/付费牌，不能只在纯策略测试生效");
+            int frozenDraws = draws;
+            var again = f.Session.SettleFormalDungeon(f.Created.Id, 99, 99, [7, 8, 9], dungeons, clear, growth, policy);
+            Check(again.Card == first.Card && again.Options == first.Options && draws == frozenDraws,
+                "结算重放读取已冻结的装备牌，不重新读取加成或重抽");
+        }
+
+        void GmEpicCards()
+        {
+            int level = definition.BasisLevel!.Value;
+            var names = new Dictionary<int, string> { [1] = "[gold card cost table]", [2] = "[basis of rarity dicision]", [3] = "[item drop ref table]" };
+            var prices = DungeonCardPriceCatalog.Parse(new PvfToken[]
+            {
+                new(3, 1), new(0, level), new(0, 100), new(3, 2),
+                new(0, 200000), new(0, 400000), new(0, 600000), new(0, 800000), new(0, 900000), new(0, 990000), new(0, 1000000),
+                new(3, 3), new(0, level), new(0, level - 1), new(0, 1)
+            }, key => names[key]);
+            var candidates = DungeonItemDropCatalog.Create(Enumerable.Range(0, 7).Select(rarity =>
+                new ItemTemplate(9000 + rarity, ItemKind.Equipment, 12, 1, 10, 1, 0, rarity, 1, "[free]", ushort.MaxValue, 0, "CardFixture")
+                    { CreationRate = 1 }));
+            foreach (decimal initial in new[] { 0m, 2m })
+            {
+                var control = new DungeonDropControlSettings();
+                control.Replace([new(DungeonDropScope.All, [], new(Equipment: initial))], true);
+                using var f = new Fixture("GmEpicCards" + initial, towns, characters, learning, quests, dropControl: control);
+                f.SelectEntry();
+                Check(f.Session.EnterFormalDungeon(3, 3145, 0, dungeons, rooms) is { Entry.DropControlCaptured: true } entry &&
+                    entry.Entry.DropMultipliers?.Equipment == initial, "真实Session入场冻结GM倍率，包括显式零倍率");
+                control.Replace([new(DungeonDropScope.All, [], new(Equipment: initial == 0 ? 100 : 0))], true);
+                ClearRun(f);
+                int draws = 0;
+                var policy = new DungeonCardRewardPolicy(global::DfoServer.Testing.SelfTestCatalogs.DropRules(pvf), candidates,
+                    itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces,
+                    random: bound => { draws++; return bound == 1000000 ? 850000 : 0; }, prices: prices);
+                var first = f.Session.SettleFormalDungeon(f.Created.Id, 99, 99, [7, 8, 9], dungeons, clear, growth, policy);
+                Check(first.Card?.Item is { } free && first.Options?.Paid.Item is { } paid &&
+                    (free.ItemId == 9004) == (initial == 2) && (paid.ItemId == 9004) == (initial == 2),
+                    "免费和付费翻牌均使用入场GM倍率，不读取结算前热改");
+                int frozen = draws;
+                var replay = f.Session.SettleFormalDungeon(f.Created.Id, 99, 99, [7, 8, 9], dungeons, clear, growth, policy);
+                Check(replay.Card == first.Card && replay.Options == first.Options && draws == frozen,
+                    "GM热改后结算重放仍复用完整冻结装备且不重抽");
+            }
+        }
 
         void RaidStatisticsIsolation()
         {
@@ -803,8 +934,8 @@ internal static class DungeonSettlementSessionTests
             Unavailable("选图");
             Enter(f);
             Unavailable("加载");
-            ClearRun(f,whileDungeon: () => Unavailable("战斗"));
-            Unavailable("清图未提交结算");
+            ClearRun(f,whileDungeon: () => Unavailable("战斗",repairBlocked:false));
+            Unavailable("清图未提交结算",repairBlocked:false);
             f.Sql("CREATE TRIGGER delilah_clear_fail BEFORE UPDATE OF experience ON characters BEGIN SELECT RAISE(ABORT,'pending settlement'); END");
             Reject<SqliteException>(() => Settle(f,[31,32,33]),"待提交结算测试注入真实SQL回滚");
             Unavailable("结算回滚后仍待提交");
@@ -876,11 +1007,13 @@ internal static class DungeonSettlementSessionTests
             Reject<InvalidOperationException>(() => f.Session.DisjointEquipment(new(Bag(13),-1,0),disjoint,out _),"被接管的原owner不能分解");
             Check(Same(durable,f.Read(replacement)),"接管及重开库保留已提交资产，不允许旧会话追加或覆盖");
 
-            void Unavailable(string phase)
+            void Unavailable(string phase,bool repairBlocked=true)
             {
                 var saved = f.Read();
-                Check(!f.Session.RepairEquipment(new(Bag(3),-1,0,false),repair).Accepted &&
-                    !f.Session.DisjointEquipment(new(Bag(10),-1,0),disjoint,out var rejectedReceipt).Accepted && rejectedReceipt is null &&
+                // 战斗/清图本身不阻止商店修理；未就绪和未决提交仍须拒绝，正向由RepairTcpTests覆盖。
+                if(repairBlocked)
+                    Check(!f.Session.RepairEquipment(new(Bag(3),-1,0,false),repair).Accepted,phase+"拒绝未就绪商店修理");
+                Check(!f.Session.DisjointEquipment(new(Bag(10),-1,0),disjoint,out var rejectedReceipt).Accepted && rejectedReceipt is null &&
                     Same(saved,f.Read()),phase+"拒绝德利拉物品服务并保留资产");
             }
             static InventorySlot Bag(short slot) => new(InventoryListType.Main,slot);
@@ -956,7 +1089,7 @@ internal static class DungeonSettlementSessionTests
 
         public Fixture(string name, TownCatalog towns, CharacterCatalog characters, SkillLearningCatalog learning,
             DfoServer.GameWorld.Quests.QuestCatalog quests, bool loseCardResult = false,bool losePaidResult = false, bool loseFreeResult = false,
-            AdventureCatalog? adventure = null, CharacterGrowthCatalog? growth = null)
+            AdventureCatalog? adventure = null, CharacterGrowthCatalog? growth = null, ItemCatalog? items = null, DungeonDropControlSettings? dropControl = null)
         {
             database = Path.Combine(root, "game.db");
             // 只有显式传入冒险团与成长资源时才启用经验账本，其余夹具保持原有无账号进度的边界。
@@ -965,7 +1098,7 @@ internal static class DungeonSettlementSessionTests
             new AuthenticationService(new AuthenticationRepository(database)).Create("clear-session", "fixture-password");
             owner = owners.Acquire("clear-session", () => { });
             Session = new(loseCardResult || losePaidResult || loseFreeResult ? new FormalDungeonPublicationTests.LostResultRepository(repository,loseGrowth:false,
-                loseSettlement:loseCardResult,losePaid:losePaidResult,loseFree:loseFreeResult) : repository, towns, owner);
+                loseSettlement:loseCardResult,losePaid:losePaidResult,loseFree:loseFreeResult) : repository, towns, owner, items: items, dropControl: dropControl);
             Created = repository.Create(owner,CharacterCreation.Prepare(name,characters.Get(0),towns.Room,towns.InitialReturn,learning.Get)
                 with { ActiveMainQuests = [new(0,3145,1)] });
         }

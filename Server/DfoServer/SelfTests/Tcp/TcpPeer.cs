@@ -13,6 +13,7 @@ internal sealed record WirePacket(byte Kind, ushort Opcode, byte[] Body, bool Pr
 // 独立实现测试帧与 CRC，不能调用服务端的 Frame、Parser、Builder 来自证。
 internal sealed partial class TcpPeer : IDisposable
 {
+    internal byte[] CashShopRestrictions { get; private set; } = [];
     public byte[]? DimensionEntranceState { get; private set; }
     public uint? AncientGateEnergy { get; private set; }
     internal void ReadAncientGate(WirePacket packet)
@@ -35,6 +36,7 @@ internal sealed partial class TcpPeer : IDisposable
     };
     readonly NetworkStream stream;
     readonly TcpTestFixture? fixture;
+    readonly string? loginAccount;
     ushort sequence;
     ushort clientSequence;
     internal ushort NextClientSequence => clientSequence;
@@ -45,6 +47,7 @@ internal sealed partial class TcpPeer : IDisposable
     long UnixTime => (fixture?.UtcNow ?? DateTimeOffset.UtcNow).ToUnixTimeSeconds();
     public byte[] Roster { get; private set; } = [];
     public byte[] LoginEndpoint { get; private set; } = [];
+    public WirePacket[] InitialAccountMaterialLists { get; private set; } = [];
     public byte[] StrongwayHistory { get; private set; } = [];
     public byte[] StrongwayAccountRewards { get; private set; } = [];
     public byte[] StrongwayNpcDisplay { get; private set; } = [];
@@ -103,18 +106,22 @@ internal sealed partial class TcpPeer : IDisposable
     public byte[] SeriaLuckInfo { get; private set; } = [];
     public byte[] RaidWeeklyClearInfo { get; private set; } = [];
     public byte[] LukeChannelCardsInfo { get; private set; } = [];
-    // EVENT_INFO 在2037后先追加开放团本事件，再追加默认可见的诺兰；显式off用例单独移除2532。
-    public ushort[] ExpectedOpenEvents { get; set; } = [ServerEventService.NolanVisibilityId, ServerEventService.MileageShopId];
+    // 默认四团本全天开放：卢克、漩涡、普雷、安徒恩按目录顺序，再追加诺兰及积分商城；专项可显式覆盖。
+    public ushort[] ExpectedOpenEvents { get; set; } = [282, 2449, 414, 181, ServerEventService.NolanVisibilityId, ServerEventService.MileageShopId];
     public ushort[] ExpectedActiveEvents { get; set; } = [2395];
+    public IReadOnlyDictionary<ushort, IReadOnlyList<uint>> ExpectedEventValues { get; set; } =
+        new Dictionary<ushort, IReadOnlyList<uint>>();
     public uint? ExpectedBattlePassEnd { get; set; }
     public byte[] EventInfoPayload { get; private set; } = [];
     // 专项回调另核精确累计与状态；通用路径同样完整消费已知目录/扩展/状态尾段。
     internal Action<byte[]>? ValidateNativePromotionEvents { get; set; }
+    internal Action<TcpPeer>? BeforeMileageInitialization { get; set; }
     public byte[] MileageLimits { get; private set; } = [];
     public byte[] CubeContractInfo { get; private set; } = [];
     public WirePacket[] ClientSettings { get; private set; } = [];
     public byte[] ChatEmoticonInfo { get; private set; } = [];
     public byte[] RecentEmoticonInfo { get; private set; } = [];
+    public byte[] NpcBookmarks { get; private set; } = [];
 
     internal void ReadChatEmoticons(WirePacket packet)
     {
@@ -152,10 +159,13 @@ internal sealed partial class TcpPeer : IDisposable
     }
 
     public TcpPeer(int port, string? localAddress = null, byte channelNumber = 10, string serverAddress = "127.0.0.1",
-        TcpTestFixture? fixture = null)
+        TcpTestFixture? fixture = null, string? account = null)
     {
         this.fixture = fixture;
+        loginAccount = account?.Trim().ToLowerInvariant();
         this.channelNumber = channelNumber;
+        if (fixture?.IsolatedMockBattleSuppressed == true)
+            ExpectedOpenEvents = [.. ExpectedOpenEvents.Where(id => id != ServerEventService.NolanVisibilityId)];
         try
         {
             if (localAddress is not null)
@@ -175,7 +185,7 @@ internal sealed partial class TcpPeer : IDisposable
     public static TcpPeer Open(TcpTestFixture fixture, string account = "10000", string? digest = null, int? gamePort = null, byte channelNumber = 10,
         string serverAddress = "127.0.0.1")
     {
-        var peer = new TcpPeer(gamePort ?? fixture.Options.GamePort, channelNumber: channelNumber, serverAddress: serverAddress, fixture: fixture);
+        var peer = new TcpPeer(gamePort ?? fixture.Options.GamePort, channelNumber: channelNumber, serverAddress: serverAddress, fixture: fixture, account: account);
         peer.lastBarrierCompleted = peer.UnixTime;
         try
         {
@@ -231,7 +241,13 @@ internal sealed partial class TcpPeer : IDisposable
     public WirePacket Read()
     {
         if (pushedBack is { } packet) { pushedBack = null; return packet; }
-        return ReadCore(channelNumber);
+        var current = ReadCore(channelNumber);
+        if (fixture?.DefaultSecretShopSuppressed == true && current is { Kind: 0, Opcode: 279 })
+        {
+            TestCheck.Bytes(current.Body, [232, 3, 0, 0], "无关业务显式零出现目录仍收到完整279无商人1000通知");
+            current = ReadCore(channelNumber);
+        }
+        return current;
     }
     // 服务端在ACK、房间通知与补发buff之后才发36，读到房间通知时它尚未上路；
     // 是否发送取决于真实疲劳规则，无包时必须尽快返回，不能把可选通知拖成5秒socket超时。
@@ -244,8 +260,10 @@ internal sealed partial class TcpPeer : IDisposable
         if (packet is { Kind: 0, Opcode: 36 })
         {
             TestCheck.That(packet.Body.Length == 10, "正式疲劳通知保留五个u16的10字节合同");
-            TestCheck.That(U16(packet.Body, 0) + U16(packet.Body, 6) == U16(packet.Body, 2),
-                "正式疲劳通知已用与剩余之和等于上限");
+            var battery = fixture!.Query("SELECT COALESCE((SELECT buff FROM character_fatigue_battery WHERE character_id=$p0),0)", Id);
+            TestCheck.That(U16(packet.Body, 0) <= U16(packet.Body, 2) &&
+                U16(packet.Body, 6) == Convert.ToInt64(battery.Single()[0]),
+                "疲劳已用不超过上限，第四WORD独立匹配已提交电量");
             return;
         }
         pushedBack = packet;
@@ -338,11 +356,21 @@ internal sealed partial class TcpPeer : IDisposable
             packet = Read();
         }
         bool griefAnnounced = false;
+        bool particularAnnounced = false;
         // 选图附带的状态通知逐项校验后记录，550须按两祭坛及悲叹当前楼层逐项匹配真实账本；保留原27及正文断言。
         while (kind == 0 && opcode == 27 && packet.Kind == 0 &&
                (packet.Opcode == 1536 && packet.Body.Length == 5 || packet.Opcode == 1303 && packet.Body.Length == 2 ||
-                packet.Opcode is 550 or 1608 or 815 or 772))
+                packet.Opcode is 550 or 1608 or 815 or 772 or 832))
         {
+            if (packet.Opcode == 832)
+            {
+                TestCheck.That(!particularAnnounced && fixture?.ExpectsParticularHellSelection(Id) == true,
+                    "仅包含316的当前世界地图选图允许一组832/833，不吞无关或重复通知");
+                particularAnnounced = true;
+                ReadParticularHellCounts(packet);
+                packet = Read();
+                continue;
+            }
             if (packet.Opcode == 1536)
             {
                 AssaultDailyInfo = packet.Body;
@@ -560,7 +588,9 @@ internal sealed partial class TcpPeer : IDisposable
             Enumerable.Range(0, 8).Any(slot => U32(DevilService0, 9 + slot * 9) > 0) == (PremiumServices[58] > 0),
             "魔王八项期限独立投影，58概览与至少一项有效服务一致，黄金牌次数不超过10");
     }
-    public void Barrier(Action<WirePacket>? validateNotification = null)
+    public void Barrier(Action<WirePacket>? validateNotification = null,
+        [System.Runtime.CompilerServices.CallerLineNumber] int callerLine = 0,
+        [System.Runtime.CompilerServices.CallerFilePath] string callerFile = "")
     {
         SendBarrier();
         var packet = Read();
@@ -582,7 +612,8 @@ internal sealed partial class TcpPeer : IDisposable
             ReadDungeonEnterCounts(packet);
             packet = Read();
         }
-        TestCheck.That(packet.Kind == 1 && packet.Opcode == 1347, "屏障仅允许已校验虚弱与两祭坛次数通知，不跳过其他包");
+        TestCheck.That(packet.Kind == 1 && packet.Opcode == 1347,
+            $"屏障仅允许已校验虚弱与两祭坛次数通知，不跳过其他包；实际kind={packet.Kind} opcode={packet.Opcode} bytes={packet.Body.Length}，调用={Path.GetFileName(callerFile)}:{callerLine}");
         TestCheck.Bytes(packet.Body, [1], "body (1,1347)");
         lastBarrierCompleted = UnixTime;
     }
@@ -763,7 +794,7 @@ internal sealed partial class TcpPeer : IDisposable
         switch (packet.Opcode)
         {
             case 36:
-                var fatigue = fixture!.Query("SELECT used,maximum,used_maximum,remaining,context_auxiliary FROM character_fatigue WHERE character_id=$p0", Id).Single();
+                var fatigue = fixture!.Query("SELECT f.used,f.maximum,f.used_maximum,COALESCE(b.buff,0),f.context_auxiliary FROM character_fatigue f LEFT JOIN character_fatigue_battery b ON b.character_id=f.character_id WHERE f.character_id=$p0", Id).Single();
                 TestCheck.Bytes(packet.Body, Build(w => { foreach (var field in fatigue) w.Write(checked((ushort)Convert.ToInt64(field))); }), "在线疲劳通知与已提交余额一致");
                 break;
             case 99:
@@ -775,6 +806,13 @@ internal sealed partial class TcpPeer : IDisposable
                 TestCheck.That(packet.Body.Length == 6 && U32(packet.Body) > 0 &&
                     (EnterCounts.Any(row => U32(row) == U32(packet.Body)) || DungeonEnterCounts.ContainsKey((int)U32(packet.Body))),
                     "在线副本次数属于初始化的当前角色副本且包含完整字段");
+                break;
+            case 832:
+                TestCheck.That(packet.Body.Length == 264 && U32(packet.Body) == 3 &&
+                    packet.Body.AsSpan(4).IndexOfAnyExcept((byte)0) == -1, "日切魔界832恢复真实总额度并清旧表");
+                break;
+            case 833:
+                CheckParticularHellUsage(packet.Body);
                 break;
             case 1536:
                 TestCheck.That(packet.Body.Length == 5 && packet.Body[2] <= 6 && packet.Body[3] == 0 && packet.Body[4] == 0,
@@ -979,17 +1017,21 @@ internal sealed partial class TcpPeer : IDisposable
                 TestCheck.That(NpcFavor[favorOffset] < 4 && channels.Add(NpcFavor[favorOffset]), "NPC颜色通道不越界、不重复");
         }
         TestCheck.That(favorOffset == NpcFavor.Length, "好感度按完整绝对快照恢复，无尾随字节");
+        CashShopRestrictions = Expect(0, 863).Body;
+        TestCheck.That(CashShopRestrictions.Length >= 4 &&
+            CashShopRestrictions.Length == 4 + 12L * U32(CashShopRestrictions, 0),
+            "商城限购恢复完整计数及每行三个32位字段，空快照也清除旧角色缓存");
         Expect(0, 720, []);
         WeeklyDungeonConfig = Expect(0, 721).Body;
         TestCheck.That(WeeklyDungeonConfig.Length == 5, "每周地下城721固定回放5个槽位");
         AccountFriendGroups = Expect(0, 1702).Body;
         CharacterFriends = Expect(0, 273).Body;
-        uint friends = U32(CharacterFriends, 4);
-        for (uint i = 0; i < friends; i++) Expect(0, 274);
+        TestCheck.That(U32(CharacterFriends, 0) == 0, "登录以273静默恢复好友列表，不能用274伪造上下线事件");
         AccountFriends = Expect(0, 1376).Body;
         AccountFriendRequests = Expect(0, 1377).Body;
         if (OwnGuildGrade != 100)
         {
+            Expect(0, 70);
             ReadGuildNpcs();
             ReadGuildDungeon();
         }
@@ -1083,7 +1125,9 @@ internal sealed partial class TcpPeer : IDisposable
         (SkinOwnership[] Owned, int Selected)? partyFrames = null,
         (SkinOwnership[] Owned, int[] Selected)? emoticons = null, SkinStorageState? accountSkins = null, byte[]? ekernCycle = null,
         byte? recoveredPvpGrade = null, byte recoveredPowerTitle = 0, SkinStorageKey[]? recentSkins = null, int[]? knightShieldDeck = null,
-        (int BuffId, int Remaining)? bossBuff = null, byte[]? strongwayHistory = null, byte[]? strongwayAccountRewards = null)
+        (int BuffId, int Remaining)? bossBuff = null, byte[]? strongwayHistory = null, byte[]? strongwayAccountRewards = null,
+        int? hellLegendUntil = null, (int BuffId, int Value)[]? variousBuffs = null, byte[]? luckyProfessions = null,
+        bool luckyFatigueAcceleration = false)
     {
         // 三类决斗入口直接绑定非房间地区10/0；仍逐包断言1379不应出现，不跳过未知包。
         if (PvpEntry) room = false;
@@ -1093,6 +1137,7 @@ internal sealed partial class TcpPeer : IDisposable
         if (!resumeTown && !requestedRoster && !directSwitch)
             Send(8, [255, 255, 2]);
         long selectionStarted = UnixTime;
+        var accountMaterialInitialization = CaptureAccountMaterialInitialization(slot);
         Send(4, Build(w => w.Write(slot)));
         var expected = prepared ? PreparedEntry : Entry;
         if (resumeTown)
@@ -1141,6 +1186,9 @@ internal sealed partial class TcpPeer : IDisposable
             characterOptions = Build(writer => { writer.Write(512u); writer.Write(options); });
         }
         Expect(0, 390, characterOptions);
+        // 空名单也须先于Actor清除客户端上次连接残留；非空预期由专项显式独立编码。
+        Expect(0, 1057, luckyProfessions ?? new byte[4]);
+        if (luckyFatigueAcceleration) Expect(0, 490, [0, 0, 1]);
         var middle = new List<WirePacket>();
         RestoredConsumableStates.Clear();
         SkillInfo = [];
@@ -1196,7 +1244,7 @@ internal sealed partial class TcpPeer : IDisposable
                 packet = Read();
             }
             TestCheck.That(packet.Kind == expected[index].Kind && packet.Opcode == expected[index].Opcode,
-                $"entry packet order at {index}");
+                $"entry packet order at {index}; expected={expected[index].Kind}/{expected[index].Opcode}, actual={packet.Kind}/{packet.Opcode}/{packet.Body.Length}");
             if (packet is { Kind: 0, Opcode: 356 })
             {
                 // Actor头部为5B+116B状态+u16角色号+u32名字字节数，名字后才是职业。
@@ -1228,6 +1276,12 @@ internal sealed partial class TcpPeer : IDisposable
                 if (bossBuff is { } boss)
                     Expect(0, 487, Build(writer =>
                     { writer.Write((byte)1); writer.Write(boss.BuffId); writer.Write(boss.Remaining); writer.Write(0); writer.Write(0); }));
+                if (hellLegendUntil is { } until)
+                    Expect(0, 487, Build(writer =>
+                    { writer.Write((byte)1); writer.Write(1271); writer.Write(until); writer.Write(0); writer.Write(0); }));
+                foreach (var buff in variousBuffs ?? [])
+                    Expect(0, 487, Build(writer =>
+                    { writer.Write((byte)1); writer.Write(buff.BuffId); writer.Write(buff.Value); writer.Write(0); writer.Write(0); }));
                 if (ekernCycle is not null) Expect(0,656,ekernCycle);
                 foreach (int dungeonId in new[] { 11006, 11007 })
                 {
@@ -1255,7 +1309,6 @@ internal sealed partial class TcpPeer : IDisposable
                     TestCheck.That(grade == expectedGrade, "127 职位与公会成员表一致（无会籍=100，会长=1，2-5 原值，其余=4）");
                 }
                 ExpectDazzlementBindings(characterId: U16(prefix[0].Body, 9));
-                if (grade != 100) Expect(0, 70);
             }
             middle.Add(packet);
         }
@@ -1267,11 +1320,15 @@ internal sealed partial class TcpPeer : IDisposable
         var pets = Expect(0, 13);
         var medals = Expect(0, 13);
         var talismans = Expect(0, 13);
+        var accountCommon = Expect(0, 13);
         TestCheck.That(avatars.Body[0] == 1 && U16(avatars.Body, 1) == avatarExpansion && pets.Body[0] == 7, "special container initialization and avatar capacity");
         TestCheck.That(medals.Body[0] == 38, "medal container initialization");
         TestCheck.That(talismans.Body[0] == 46 && talismans.Body.Length == 3 + U16(talismans.Body, 1) * 123,
             "护石符文容器按普通123B物品行初始化");
-        SpecialContainers = [creatures, avatars, pets, medals, talismans];
+        TestCheck.That(accountCommon.Body.Length >= 3 && accountCommon.Body[0] == 45 &&
+            U16(accountCommon.Body, 1) <= 50 && accountCommon.Body.Length == 3 + U16(accountCommon.Body, 1) * 123,
+            "账号公共45在护石后严格初始化，空容器也发送3B头，最多50个完整123B实例");
+        SpecialContainers = [creatures, avatars, pets, medals, talismans, accountCommon];
         var tail = new List<WirePacket>();
         var mails = new List<byte[]>();
         ClientSettings = [];
@@ -1294,7 +1351,7 @@ internal sealed partial class TcpPeer : IDisposable
                 StrongwayAccountRewards = Expect(0, 1753, strongwayAccountRewards ?? new byte[24]).Body;
                 TestCheck.That(StrongwayAccountRewards.Length == 24, "强者之路选角恢复六个u32账号奖励字段");
             }
-            if (notice == ((byte)0, (ushort)427)) ReadAccountMaterialInitialization();
+            if (notice == ((byte)0, (ushort)427)) ReadAccountMaterialInitialization(accountMaterialInitialization);
             if (notice == ((byte)0, (ushort)124)) ReadSeriaInitialization();
             // 普通入城在124前恢复；换频道等最终24绑定后恢复。
             if (!resumeTown && notice == ((byte)0, (ushort)124)) ReadSceneInitialization();
@@ -1356,6 +1413,11 @@ internal sealed partial class TcpPeer : IDisposable
                 if (packet is { Kind: 0, Opcode: 772 })
                 {
                     ReadAncientGate(packet);
+                    packet = Read();
+                }
+                if (enterCounts.Count == 16)
+                {
+                    ReadParticularHellCounts(packet);
                     packet = Read();
                 }
                 TestCheck.That(enterCounts.Count is 0 or 16 && enterCounts.All(body => U32(body, 0) is not (11006 or 11007)) && enterCounts.Select(body => U32(body, 0)).Distinct().Count() == enterCounts.Count,
@@ -1466,6 +1528,7 @@ internal sealed partial class TcpPeer : IDisposable
 
         void ReadSeriaInitialization()
         {
+            InitialAccountMaterialLists = [];
             var events = Expect(0, 108);
             TestCheck.That(events.Protected, "入城的赛丽亚事件配置使用保护压缩帧");
             // 已有不渝之咏余额时，108 后会补 list44/45，商店才能读到持有量；全零不插包。
@@ -1476,19 +1539,22 @@ internal sealed partial class TcpPeer : IDisposable
                 {
                     TestCheck.That(material.Body.Length >= 3 && material.Body.Length == 3 + U16(material.Body, 1) * 123,
                         "选角攻坚材料投影按 list44/45 的完整行到达");
+                    InitialAccountMaterialLists = [.. InitialAccountMaterialLists, material];
                     continue;
                 }
                 pushedBack = material;
                 break;
             }
+            BeforeMileageInitialization?.Invoke(this);
             if (ExpectedOpenEvents.Contains(ServerEventService.MileageShopId))
                 MileageLimits = Expect(0, 706).Body;
             // 312不属于108目录；按隔离库的原始开关/时段独立计算，不能用收到的action自证。
             var npcFixture = fixture ?? throw new InvalidOperationException("活动NPC初始化缺少隔离夹具");
             var npcSchedule = npcFixture.Query("SELECT starts_at,ends_at,override_active FROM server_events WHERE event_id=312");
-            bool npcActive = npcSchedule is [var npcRow] && (npcRow[2] is not DBNull
+            bool npcActive = npcSchedule is not [var npcRow] || (npcRow[2] is not DBNull
                 ? Convert.ToInt64(npcRow[2]) != 0
-                : npcRow[0] is not DBNull && npcRow[1] is not DBNull &&
+                : npcRow[0] is DBNull && npcRow[1] is DBNull ||
+                    npcRow[0] is not DBNull && npcRow[1] is not DBNull &&
                     Convert.ToInt64(npcRow[0]) <= UnixTime && UnixTime < Convert.ToInt64(npcRow[1]));
             var npc = Expect(0, 639);
             TestCheck.That(!npc.Protected, "639使用原生普通帧并位于108及可选706之后、36之前");
@@ -1511,19 +1577,19 @@ internal sealed partial class TcpPeer : IDisposable
                 EventInfoPayload = bounded[..length];
                 if (ValidateNativePromotionEvents is { } validate)
                     validate(EventInfoPayload);
-                else if (U16(EventInfoPayload, 0) != 3 + ExpectedOpenEvents.Length)
+                else if (U16(EventInfoPayload, 0) != 4 + ExpectedOpenEvents.Length)
                     CashShopTcpTests.AssertPromotionNativeEvents(EventInfoPayload, null, null, ExpectedOpenEvents,
-                        activeEvents: ExpectedActiveEvents, battlePassEnd: ExpectedBattlePassEnd);
+                        activeEvents: ExpectedActiveEvents, battlePassEnd: ExpectedBattlePassEnd, eventValues: ExpectedEventValues);
                 else
                 {
-                    int expectedLength = 98 + 15 * ExpectedOpenEvents.Length + 50 * ExpectedActiveEvents.Length;
+                    int expectedLength = 113 + 15 * ExpectedOpenEvents.Length + 50 * ExpectedActiveEvents.Length;
                     TestCheck.That(length == expectedLength + (ExpectedBattlePassEnd.HasValue ? 50 : 0),
                         ExpectedBattlePassEnd.HasValue && length == expectedLength
                             ? "EVENT2520_VALUE_ROW_MISSING" : "无促销页事件正文长度完整");
                     TestCheck.Bytes(EventInfoPayload, Build(writer =>
                     {
-                        writer.Write((ushort)(3 + ExpectedOpenEvents.Length));
-                        foreach (ushort id in (ushort[])[2037, 2378, 2395, .. ExpectedOpenEvents])
+                        writer.Write((ushort)(4 + ExpectedOpenEvents.Length));
+                        foreach (ushort id in (ushort[])[2037, 2378, 2395, .. ExpectedOpenEvents.TakeWhile(id => id is 282 or 2449 or 414 or 181), 333, .. ExpectedOpenEvents.SkipWhile(id => id is 282 or 2449 or 414 or 181)])
                         {
                             writer.Write(id);
                             writer.Write(1u);
@@ -1538,7 +1604,8 @@ internal sealed partial class TcpPeer : IDisposable
                         foreach (ushort id in ExpectedActiveEvents)
                         {
                             writer.Write(id);
-                            for (int index = 0; index < 12; index++) writer.Write(0u);
+                            for (int index = 0; index < 12; index++)
+                                writer.Write(ExpectedEventValues.TryGetValue(id, out var values) ? values[index] : 0u);
                         }
                         if (ExpectedBattlePassEnd is uint end)
                         {
@@ -1549,6 +1616,8 @@ internal sealed partial class TcpPeer : IDisposable
                     }), "独立核对赛丽亚2037、红包2378、乔纳森2395、开放团本及完整尾部，不能跳过门禁或覆盖原事件");
                 }
             }
+            if (LoginEndpoint.Length > 3 && LoginEndpoint[3] == 40)
+                Expect(0, 1444, [0,0,0,0,0,0,0,0,2,4,2,4]);
             var gauge = Expect(0, 412);
             SeriaLuckInfo = gauge.Body;
             TestCheck.That(!gauge.Protected && gauge.Body.Length == 2 && gauge.Body[0] == gauge.Body[1] &&
@@ -1609,6 +1678,10 @@ internal sealed partial class TcpPeer : IDisposable
                 foreach (ushort id in ids) { writer.Write(id); writer.Write(guideCount); }
             })).Body).ToArray();
             var expectedChatEmoticons = fixture?.ExpectedChatEmoticons(Id);
+            var bookmarks = Expect(0, 1737).Body;
+            NpcBookmarks = bookmarks;
+            TestCheck.That(bookmarks.Length >= 4 && bookmarks.Length == 4 + U32(bookmarks, 0) * 4L,
+                "人物辞典收藏恢复完整32位计数与编号列表");
             if (expectedChatEmoticons is not null)
             {
                 RecentEmoticonInfo = Expect(0, 1384, fixture!.ExpectedRecentEmoticons(Id)).Body;
@@ -1620,6 +1693,8 @@ internal sealed partial class TcpPeer : IDisposable
                 int next = expectedSettings.FindIndex(option => option.Opcode != 173);
                 expectedSettings.Insert(next >= 0 ? next : expectedSettings.Count, (390, characterOptions));
             }
+            if (!expectedSettings.Any(option => option.Opcode == 454))
+                expectedSettings.Add((454, [Convert.ToByte(guideCharacter[0]) == 10 ? (byte)1 : (byte)0, 4, 0, 0, 0, 78, 79, 78, 69]));
             ClientSettings = expectedSettings.Select(option => Expect(0, option.Opcode, option.Body)).ToArray();
             if (appearanceFlags.HasValue)
                 Expect(0, 357, Build(w =>

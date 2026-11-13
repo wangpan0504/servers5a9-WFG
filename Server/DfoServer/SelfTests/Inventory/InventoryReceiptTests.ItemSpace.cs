@@ -2,6 +2,9 @@ using System.Net;
 using System.Text.Json;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Inventory.Services;
+using DfoServer.Game.Inventory.Models;
+using DfoServer.GameWorld.Items;
+using System.Buffers.Binary;
 using DfoServer.Game.Session;
 using DfoServer.Infrastructure;
 using DfoServer.Network;
@@ -18,6 +21,12 @@ internal static partial class InventoryReceiptTests
     static async Task VerifyItemSpaceAsync(GameSession session,
         InventoryProjection projection, ItemResources items, CharacterRepository repository, AccountOwners.Lease owner, string path)
     {
+        // 非空45实例和双锁通过正式提交安装，870恢复必须只读重放这些已提交事实。
+        var seeded = session.MutateInventory(character => new(true, 0, new(character.Inventory,
+            character.Inventory with { Items = character.Inventory.Items.Add(new(0, new(InventoryListType.AccountCommon, 49),
+                new(490013716, ItemKind.Material, 7) { Extension97 = 1234, SortLockFlag = 1, EquipmentLockId = 2 })) }, "sync_common_fixture")));
+        TestCheck.That(seeded.Accepted && seeded.Receipt!.Character.Inventory.Find(new(InventoryListType.AccountCommon, 49)) is { Uid: > 0 },
+            "870夹具持有已提交UID的45边界槽与完整核心");
         var commands = new GameCommandRegistry();
         new InventoryHandler(new InventoryService(items.Items, items.GoldLimits, items.EpicPieces), projection).Register(commands);
         commands.Seal();
@@ -44,10 +53,18 @@ internal static partial class InventoryReceiptTests
                     TestCheck.That(await commands.DispatchAsync(current, new(1, 870, [selector])) == CommandResult.Handled,
                         "真实870注册处理所有单字节请求，不把尚未核证的选择字节猜成资产或容量");
                     TestCheck.That(sent.Select(row => (row.Kind, row.Opcode)).SequenceEqual(new (byte, ushort)[]
-                        { (0, 105), (0, 13), (0, 13), (0, 13), (0, 13), (0, 1449), (1, 870) }) &&
-                        sent.Where(row => row.Opcode == 13).Select(row => row.Body[0]).SequenceEqual(new byte[] { 0, 1, 7, 3 }) &&
+                        { (0, 105), (0, 13), (0, 13), (0, 13), (0, 13), (0, 13), (0, 1449), (1, 713), (0, 251), (1, 870) }) &&
+                        sent.Where(row => row.Opcode == 13).Select(row => row.Body[0]).SequenceEqual(new byte[] { 0, 1, 7, 3, 45 }) &&
                         sent[^1].Body.SequenceEqual(new byte[] { 1 }),
-                        "先完整四容器/宠物详情/克隆来源，后原生一字节成功解除等待");
+                        "先完整五容器/宠物详情/克隆来源/双锁，后原生一字节成功解除等待");
+                    var common = sent.Single(row => row.Opcode == 13 && row.Body[0] == 45).Body;
+                    TestCheck.That(common.Length == 126 && BinaryPrimitives.ReadUInt16LittleEndian(common.AsSpan(1)) == 1 &&
+                        BinaryPrimitives.ReadInt16LittleEndian(common.AsSpan(3)) == 49 &&
+                        BinaryPrimitives.ReadInt32LittleEndian(common.AsSpan(5)) == 490013716 &&
+                        BinaryPrimitives.ReadInt32LittleEndian(common.AsSpan(9)) == 7 &&
+                        sent.Single(row => row.Kind == 1 && row.Opcode == 713).Body.SequenceEqual(new byte[] { 1, 45, 49, 0 }) &&
+                        sent.Single(row => row.Kind == 0 && row.Opcode == 251).Body.SequenceEqual(new byte[] { 1, 0, 45, 49, 0, 1 }),
+                        "870重放45完整123B边界实例和双锁，不混入Main、余额或变成短行");
                 }
             }
             finally { sql.CommandText = "DROP TRIGGER sync_must_not_write"; sql.ExecuteNonQuery(); }

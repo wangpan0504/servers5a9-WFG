@@ -82,6 +82,11 @@ internal sealed class DungeonSelectionHandler(TownProjection projection, ServerL
             return CommandResult.Handled;
         }
         var entry = DungeonRequests.ParseEntry(request.Body);
+        if (context.MonsterMockBattle is { } mockBattle && mockBattle.ContainsDungeon(entry.DungeonIndex))
+        {
+            await mockBattle.OpenSelectionAsync(entry.DungeonIndex);
+            return CommandResult.Handled;
+        }
         if (!context.Session.CheckState(UserStateRequirement.WorldReady)) return CommandResult.Unhandled;
         if (context.Activity?.BlocksTownActions == true)
             return CommandResult.Unhandled;
@@ -119,17 +124,19 @@ internal sealed class DungeonSelectionHandler(TownProjection projection, ServerL
             (context.Session.StartedRaid is not null || entry.DungeonIndex <= int.MaxValue && raidService.Contains((int)entry.DungeonIndex)))
         {
             var party = context.Session.CurrentParty?.Invoke();
+            var scene = party ?? raidService.CapturePreySoloScene(context.Session);
             string? reason = "anton-entry-party-dispatch-gate-mismatch";
             DfoServer.Game.Dungeons.PartyDungeonNotice[] selected = [];
-            if (party is not null && context.DispatchGates?.Holds(context, party.Commands) == true)
+            if (scene is not null && context.DispatchGates?.Holds(context, party?.Commands ?? context.CommandGate) == true)
             {
-                using var peers = await PartyDungeonProjection.AcquirePeersAsync(context, party.Members);
+                using var peers = await PartyDungeonProjection.AcquirePeersAsync(context, scene.Members);
                 if (entry.DungeonIndex <= int.MaxValue)
-                    selected = raidService.Select(context.Session, (int)entry.DungeonIndex, party, out reason,
+                    selected = raidService.Select(context.Session, (int)entry.DungeonIndex, scene, out reason,
                         replayLoading: context.Session.Phase == SessionPhase.Loading);
             }
-            log.Write("dungeon_entry", new { Connection = context.Id, Accepted = selected.Length != 0, Party = true,
-                RaidType = 0, Replay = selected.Any(notice => notice.Kind == DfoServer.Game.Dungeons.PartyDungeonNoticeKind.LoadingReplay),
+            log.Write("dungeon_entry", new { Connection = context.Id, Accepted = selected.Length != 0, Party = party is not null,
+                RaidType = context.Session.ChannelEntry?.Type == 50 ? 3 : 0,
+                Replay = selected.Any(notice => notice.Kind == DfoServer.Game.Dungeons.PartyDungeonNoticeKind.LoadingReplay),
                 Dungeon = entry.DungeonIndex, Members = selected.Length, RejectReason = reason, MissingMaps = raidService.MissingMaps });
             if (selected.Length == 0)
                 await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionUnavailable(), "anton_selection_rejected");
@@ -189,6 +196,24 @@ internal sealed class DungeonSelectionHandler(TownProjection projection, ServerL
         if ((context.Session.HasMultiplePartyMembers?.Invoke() == true || soloHeroParty) &&
             context.Session.Phase is SessionPhase.Town or SessionPhase.MapSelect)
         {
+            if (entry.DungeonIndex == 5000 && context.Session.Phase == SessionPhase.Town)
+            {
+                var before = context.Owner.Execute(() => (context.Session.Selected, context.Session.Ready,
+                    context.Session.SelectionEpoch, Party: context.Session.CurrentParty?.Invoke()));
+                if (before.Party is { Members.Length: > 1 } trainingParty)
+                {
+                    // 当前训练Run只支持单人；不能先用27将全队推进空选图，再在排队16中拒绝。
+                    log.Write("dungeon_entry", new { Connection = context.Id, Accepted = false, Party = true,
+                        Dungeon = entry.DungeonIndex, Members = trainingParty.Members.Length, Reason = "training-party-entry-unavailable" });
+                    // 失败不是已提交成功消息；Post保留取帧守卫，不沿共享成功发布的FIFO收据排队。
+                    context.Sender.Post(1, (ushort)CmdPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionUnavailable(), "training_party_entry_rejected",
+                        () => context.Owner.Execute(() => before.Ready && context.Session.Ready &&
+                            context.Session.Phase == SessionPhase.Town && context.Session.SelectionEpoch == before.SelectionEpoch &&
+                            ReferenceEquals(context.Session.Selected, before.Selected) &&
+                            ReferenceEquals(context.Session.CurrentParty?.Invoke(), trainingParty)));
+                    return CommandResult.Handled;
+                }
+            }
             if (partyDungeons is null) return CommandResult.Unhandled;
             if (entry.DungeonIndex != 0)
             {
@@ -334,6 +359,18 @@ internal sealed class DungeonSelectionHandler(TownProjection projection, ServerL
             return CommandResult.Handled;
         }
         if (!context.Session.ConfirmNewDungeonSelection(receipt)) return CommandResult.Handled;
+        if (DfoServer.Game.Characters.BeastChannel.IsEntry(context.Session.ChannelEntry))
+        {
+            if (!await projection.DetachForDungeonSelectionAsync(context, receipt)) return CommandResult.Handled;
+            bool BeastGuard() => context.Session.CanPublishDungeonSelection(receipt);
+            await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionOpened(), "revised_beast_selection_opened", BeastGuard);
+            await context.Notify(NotiPacketType.USER_STATE, DungeonPackets.DungeonPlayerState(receipt.Character.Id), "revised_beast_selection_state", BeastGuard);
+            await projection.RefreshRevisedBeastCountsAsync(context, BeastGuard);
+            await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON,
+                DungeonPackets.RevisedBeastSelectNotice([DfoServer.Game.Dungeons.RevisedBeastSelection.DailyDungeon(context.Session.DungeonBusinessNow)]),
+                "revised_beast_selection_notice", BeastGuard);
+            return CommandResult.Handled;
+        }
         await EkernCycleProjection.RefreshAsync(context, () => context.Session.CanPublishDungeonSelection(receipt));
         int legendTarget = dungeons is null ? 0 : context.Session.PrepareLegendDungeonSelection(dungeons);
         if (!await projection.DetachForDungeonSelectionAsync(context, receipt))
@@ -355,6 +392,7 @@ internal sealed class DungeonSelectionHandler(TownProjection projection, ServerL
         if (dungeon == 0 || receipt.Tutorial && receipt.OpensClientSelector ||
             (dungeon is 5359 or 5363) && replayBefore.Phase == SessionPhase.Town)
         {
+            await RiftDailyProjection.RefreshParticularHellAsync(context, CanSend, onlyForSelection: true);
             await RiftDailyProjection.RefreshAsync(context, CanSend);
             await GriefTowerProjection.SelectionAsync(context,dungeons,legendTarget,"dungeon_select_notice",CanSend);
         }

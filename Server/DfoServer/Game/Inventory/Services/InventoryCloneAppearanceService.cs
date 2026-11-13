@@ -11,7 +11,31 @@ internal static class InventoryCloneAppearanceService
     internal static AvatarDetail Clear(AvatarDetail avatar) => avatar with
         { ClearAvatarId = 0, ClearAvatarSourceUid = 0, Color1 = 0, Color2 = 0 };
 
-    public static InventoryResult PlanCleanup(Character character, ItemCatalog catalog)
+    public static bool ShouldClearCloneTitle(uint cloneTitleItemId, InventorySnapshot inventory, ItemCatalog catalog) =>
+        cloneTitleItemId != 0 &&
+        (cloneTitleItemId > int.MaxValue ||
+         catalog.TryGet((int)cloneTitleItemId, out var source) && source.CannotBeCloneTitle ||
+         inventory.Find(new(InventoryListType.Equipment, 13)) is { } worn &&
+         catalog.TryGet(worn.Core.ItemId, out var wornTemplate) && wornTemplate.CannotBeHiddenByCloneTitle);
+
+    public static uint? CloneTitleAfter(Character character, InventorySnapshot after, ItemCatalog catalog) =>
+        ShouldClearCloneTitle(character.CloneTitleItemId, after, catalog) ? 0u : null;
+
+    // 这里只接受完整库存；名册的Equipment-only快照仍沿上面的模板/穿戴限制检查。
+    public static InventoryResult WithOrphanCloneTitleCleanup(Character character, InventoryResult result, long utcSeconds)
+    {
+        if (!result.Accepted || result.Plan is not { } plan || character.CloneTitleItemId == 0 ||
+            plan.CloneTitleItemIdAfter == 0 || plan.After.Items.Any(item =>
+                item.Core.ItemId == character.CloneTitleItemId && item.Core.Kind == ItemKind.Equipment &&
+                !item.Core.IsRental && !item.IsExpired(utcSeconds) &&
+                (item.Position.List is >= InventoryListType.TitleGeneral and <= InventoryListType.TitleEvent ||
+                 item.Position.List == InventoryListType.Main || item.Position is { List: InventoryListType.Equipment, Index: 13 })))
+            return result;
+        return result with { Plan = plan.WithAfter(plan.After, precondition: plan.CharacterPrecondition ?? new(character),
+            cloneTitleItemIdAfter: 0) };
+    }
+
+    public static InventoryResult PlanCleanup(Character character, ItemCatalog catalog, long? utcSeconds = null)
     {
         var before = character.Inventory;
         var index = new InventoryIndex(before);
@@ -30,7 +54,11 @@ internal static class InventoryCloneAppearanceService
         }).ToImmutableArray();
         var after = changed ? before with { Items = items } : before;
         // 同步当前橱窗，避免客户端仍显示清理前的穿戴快照。
-        return AvatarPresetService.SyncActive(new(true, 0,
-            new(before, after, "clone_avatar_source_cleanup", new(character))));
+        var result = AvatarPresetService.SyncActive(new(true, 0,
+            new(before, after, "clone_avatar_source_cleanup", new(character))
+            {
+                CloneTitleItemIdAfter = CloneTitleAfter(character, after, catalog)
+            }));
+        return WithOrphanCloneTitleCleanup(character, result, utcSeconds ?? DateTimeOffset.UtcNow.ToUnixTimeSeconds());
     }
 }

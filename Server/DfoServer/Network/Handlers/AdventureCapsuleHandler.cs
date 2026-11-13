@@ -39,7 +39,7 @@ internal sealed class AdventureCapsuleHandler(AdventureCapsuleService service, C
             await levels.RefreshAsync(context, character, previous.Level, "adventure_capsule_level", Guard,
                 previousLearning: previous.Learning);
             await context.Notify(NotiPacketType.ADVENTURE_INFO, AdventurePackets.Information(character.Id, snapshot, service.Catalog,
-                snapshot.Representatives(service.Catalog)), "adventure_capsule_information", Guard);
+                snapshot.Representatives(service.Catalog), context.Channel.ServerIndex), "adventure_capsule_information", Guard);
             await context.Notify(NotiPacketType.ADVENTURE_LV_EXP, AdventurePackets.Refresh(character.Id, snapshot.State, service.Catalog),
                 "adventure_capsule_actor", Guard);
         }

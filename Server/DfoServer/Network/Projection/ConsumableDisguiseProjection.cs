@@ -22,7 +22,7 @@ internal sealed class ConsumableDisguiseProjection(GameConnectionContext context
         bool Guard() => !context.Stop.IsCancellationRequested && context.Session.CanPublishConsumableDisguise(change);
         await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(context.Session.ReadSkillCharacter(change.Character),
             context.Session.ReadPvpGrade(change.Character), context.Channel, clock.GetUtcNow().ToUnixTimeSeconds(),
-            context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom), "consumable_disguise_actor", Guard);
+            context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom, returningAdventurerType: context.Session.ReturningAdventurerType, marriage: context.MarriageAppearance), "consumable_disguise_actor", Guard);
         context.Owner.Execute(() =>
         {
             if (Guard()) town.Refresh(context);

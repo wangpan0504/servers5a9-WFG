@@ -6,6 +6,7 @@ namespace DfoServer.Game.Session;
 internal sealed partial class GameSession
 {
     long quotaDisplayRevision;
+    internal long QuotaDisplayRevision => owner.Execute(() => quotaDisplayRevision);
 
     public DungeonEntryResetResult ResetDungeonEntries() => owner.Execute(() =>
     {
@@ -21,6 +22,15 @@ internal sealed partial class GameSession
         EnsureQuotaResetAllowed();
         long next = checked(quotaDisplayRevision + 1);
         var result = repository.ResetRewardLimits(owner);
+        quotaDisplayRevision = next;
+        return result;
+    });
+
+    public DungeonQuotaResetResult ResetDungeonLimits() => owner.Execute(() =>
+    {
+        EnsureQuotaResetAllowed();
+        long next = checked(quotaDisplayRevision + 1);
+        var result = repository.ResetDungeonLimits(owner);
         quotaDisplayRevision = next;
         return result;
     });

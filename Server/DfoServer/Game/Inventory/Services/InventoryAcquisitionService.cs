@@ -20,12 +20,13 @@ internal static class InventoryAcquisitionService
             }
             catch (OverflowException) { return InventoryResult.Reject(19); }
         }
-        // 扩容工具每张对应一次合法提升；不能提升时拒绝整笔，不退成实体或静默吞掉多张。
-        if (count != 1 || !template.AllowsUse(character.Level, character.Job) ||
+        // 扩容工具每张对应一次合法处理；个人金库已达或超过目标时消费来源并保持当前更高容量，不退成实体或静默吞掉多张。
+        if (count != 1 || !template.AllowsActivation(character.Level, character.Job) ||
             !InventoryMoveService.RequiredSkillSatisfied(character, template)) return InventoryResult.Reject(19);
         InventorySnapshot upgraded;
-        if (CargoCatalog.SupportsPersonalCapacity(template.PersonalCargoUpgradeTarget) && template.PersonalCargoUpgradeTarget > before.CargoCapacity)
-            upgraded = before with { CargoCapacity = template.PersonalCargoUpgradeTarget };
+        if (CargoCatalog.SupportsPersonalCapacity(template.PersonalCargoUpgradeTarget) &&
+            (template.PersonalCargoUpgradeTarget > before.CargoCapacity || CargoCatalog.SupportsPersonalCapacity(before.CargoCapacity)))
+            upgraded = before with { CargoCapacity = Math.Max(before.CargoCapacity, template.PersonalCargoUpgradeTarget) };
         else if (template.AcquisitionAccountCargo is { } account && account.PreviousCapacity == before.AccountCargo.Capacity &&
             account.Tier.Capacity > before.AccountCargo.Capacity)
             upgraded = before with { AccountCargo = before.AccountCargo with { Capacity = account.Tier.Capacity } };

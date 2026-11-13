@@ -251,20 +251,29 @@ internal sealed partial class CharacterRepository : IGuildEconomyStore
         using (var reader = membership.ExecuteReader())
             if (reader.Read())
             {
-                guildId = checked((uint)reader.GetInt64(0)); characterName = reader.GetString(1); publicFunds = reader.GetInt32(2);
+                guildId = checked((uint)reader.GetInt64(0)); characterName = reader.GetString(1);
+                long storedFunds = reader.GetInt64(2);
+                if (storedFunds is < 0 or > int.MaxValue) throw new InvalidDataException("公会公共积分无效");
+                publicFunds = (int)storedFunds;
             }
+        int credited = 0;
         if (guildId != 0)
         {
-            if ((long)publicFunds + amount > int.MaxValue) throw new InvalidDataException("公会公共积分超限");
-            command.CommandText = "UPDATE guilds SET public_funds=public_funds+$amount WHERE guild_id=$guild";
-            command.Parameters.AddWithValue("$amount", amount); command.Parameters.AddWithValue("$guild", guildId);
-            if (command.ExecuteNonQuery() != 1) throw new InvalidDataException("公会积分归属已变化");
-            AppendGuildMileageHistory(db, tx, guildId, characterId, characterName, 3, 0, amount, now);
-            TouchManagement(db, tx, guildId);
+            // 自动通关按剩余容量入账，不能让附加账户满额阻断原通关；礼袋仍整笔拒绝且不扣物品。
+            credited = Math.Min(amount, int.MaxValue - publicFunds);
+            if (credited > 0)
+            {
+                command.CommandText = "UPDATE guilds SET public_funds=public_funds+$amount WHERE guild_id=$guild";
+                command.Parameters.AddWithValue("$amount", credited); command.Parameters.AddWithValue("$guild", guildId);
+                if (command.ExecuteNonQuery() != 1) throw new InvalidDataException("公会积分归属已变化");
+                AppendGuildMileageHistory(db, tx, guildId, characterId, characterName, 3, 0, credited, now);
+                TouchManagement(db, tx, guildId);
+            }
         }
+        // 满额也冻结零到账事实，之后腾出空间不能重放旧副本补领。
         command.Parameters.Clear(); command.CommandText = "INSERT INTO guild_economy_events(event_id,character_id,guild_id,amount) VALUES($event,$id,$guild,$amount)";
         command.Parameters.AddWithValue("$event", eventId); command.Parameters.AddWithValue("$id", characterId);
-        command.Parameters.AddWithValue("$guild", guildId); command.Parameters.AddWithValue("$amount", guildId == 0 ? 0 : amount);
+        command.Parameters.AddWithValue("$guild", guildId); command.Parameters.AddWithValue("$amount", credited);
         command.ExecuteNonQuery(); return guildId;
     }
 

@@ -30,10 +30,30 @@ internal static partial class TournamentSettlementTests
         var policy = new DungeonCardRewardPolicy(SelfTestCatalogs.DropRules(pvf), items.DungeonDropItems,
             items.Items, items.GoldLimits, items.EpicPieces, _ => 0);
         var blue = dungeons.Get(121);
-        That(blue.TournamentRewards is { GoldRate: 16 } rules && rules.Experience[4] == 500000 &&
-            rules.Items.All(row => row.ItemId == 3323), "真实青龙大会读取独立经验及曲玉奖励池");
-        That(dungeons.Get(120).TournamentRewards!.Items.All(row => row.ItemId == 3329),
-            "真实黄龙大会使用自身曲玉，不借用青龙或普通装备池");
+        That(blue.TournamentRewards is { GoldRate: 16, RoundFatigue: 2 } rules && rules.Experience[4] == 500000 &&
+            rules.TotalFatigueForRounds(4) == 8 && rules.Items.All(row => row.ItemId == 3323), "真实青龙大会读取独立经验、每轮2疲劳及曲玉奖励池");
+        That(dungeons.Get(120).TournamentRewards is { RoundFatigue: 2 } yellowRules &&
+            yellowRules.Items.All(row => row.ItemId == 3329),
+            "真实黄龙大会使用自身曲玉与每轮2疲劳，不借用青龙或普通装备池");
+        var black = dungeons.Get(122);
+        var incounts = DfoServer.GameWorld.Dungeons.DungeonIncountCatalog.Load(pvf);
+        That(black.TournamentRewards is { GoldRate: 16, RoundFatigue: 0 } blackRules &&
+            blackRules.Experience.SequenceEqual([0u, 50000u, 100000u, 200000u, 400000u]) &&
+            blackRules.Items.All(row => row.ItemId == 4831) && black.EnterWithoutFatigue &&
+            incounts.Find(122) is { Limit: 9, WeeklyLimit: -1 },
+            "真实黑龙大会122读取0轮次疲劳、四轮分档经验、4831曲玉及每日9次入场上限");
+        That(dungeons.Get(123).TournamentRewards is { RoundFatigue: 0 } &&
+            dungeons.Get(124).TournamentRewards is { RoundFatigue: 0 },
+            "真黄龙123与真青龙124均声明0轮次疲劳");
+        var round0 = policy.PrepareTournament(blue, 2, _ => 0, clearedRounds: 0);
+        var round1Gold = policy.PrepareTournament(blue, 2, _ => 0, clearedRounds: 1);
+        var round1Empty = policy.PrepareTournament(blue, 2, bound => bound - 1, clearedRounds: 1);
+        That(round0.Normal.All(row => row.Gold == 0 && row.Item is null) &&
+            round0.Champion.All(row => row.Gold == 0 && row.Item is null) &&
+            round1Gold.Normal.All(row => row.Gold > 0 && row.Item is null) &&
+            round1Gold.Champion.All(row => row.Gold == 0 && row.Item is null) &&
+            round1Empty.Normal.All(row => row.Gold == 0 && row.Item is null),
+            "大会失败轮次0..3按对应轮数权重生成普通牌，冠军牌保持空牌");
         foreach (int boundary in new[] { 0, 59, 60, 94, 95, 99 })
         {
             int calls = 0;

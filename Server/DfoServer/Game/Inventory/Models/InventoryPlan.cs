@@ -29,7 +29,9 @@ internal sealed class InventoryPlan
     // 同一次扣药事务写入的限时经验加成。Until 为 Unix 秒，Permille 1000 表示在原经验上加 100%。
     public (long Until, int Permille)? ExpBonus { get; set; }
     public byte? EquipmentSlotFlagsAfter { get; init; }
+    public uint? CloneTitleItemIdAfter { get; init; }
     public bool UnlockSkillTree { get; init; }
+    public bool CashShopRename { get; init; }
     public DfoServer.Game.Guild.GuildHongbaoPurchase? GuildHongbaoPurchase { get; init; }
     public InventoryEventPrecondition? RequiredEvent { get; init; }
     public long? PromotionCatalogRevision { get; init; }
@@ -50,6 +52,8 @@ internal sealed class InventoryPlan
     public BoosterSongAcquisition? BoosterSongAcquisition { get; init; }
     public CashShopPaymentFact? CashShopPayment { get; init; }
     public DfoServer.Game.PcRoom.PcRoomDailyClaim? PcRoomClaim { get; set; }
+    public string? OverflowMailSender { get; init; }
+    public string? OverflowMailText { get; init; }
     readonly Lazy<InventoryIndex> beforeIndex;
     readonly Lazy<InventoryIndex> afterIndex;
     readonly Lazy<ImmutableArray<CurrencyKind>> currencies;
@@ -76,7 +80,10 @@ internal sealed class InventoryPlan
     }
     // 业务在规划完成后补写同事务状态（如装扮预设实时保存）：复制全部字段，惰性索引按新快照重算。
     public InventoryPlan WithAfter(InventorySnapshot after, InventoryCharacterPrecondition? precondition = null,
-        ImmutableArray<ItemUseIntent>? usedItems = null, long? promotionCatalogRevision = null) => new(Before, after, Reason, precondition ?? CharacterPrecondition, OverflowItems)
+        ImmutableArray<ItemUseIntent>? usedItems = null, long? promotionCatalogRevision = null,
+        InventoryEventPrecondition? requiredEvent = null, IReadOnlyList<InventoryItem>? overflowItems = null,
+        string? overflowMailSender = null, string? overflowMailText = null, uint? cloneTitleItemIdAfter = null) => new(Before, after, Reason,
+        precondition ?? CharacterPrecondition, overflowItems ?? OverflowItems)
     {
         PreserveMaterials = PreserveMaterials,
         UsedItems = usedItems ?? UsedItems,
@@ -84,9 +91,11 @@ internal sealed class InventoryPlan
         DailyItemMails = DailyItemMails,
         ResetItemIds = ResetItemIds,
         EquipmentSlotFlagsAfter = EquipmentSlotFlagsAfter,
+        CloneTitleItemIdAfter = cloneTitleItemIdAfter ?? CloneTitleItemIdAfter,
         UnlockSkillTree = UnlockSkillTree,
+        CashShopRename = CashShopRename,
         GuildHongbaoPurchase = GuildHongbaoPurchase,
-        RequiredEvent = RequiredEvent,
+        RequiredEvent = requiredEvent ?? RequiredEvent,
         PromotionCatalogRevision = promotionCatalogRevision ?? PromotionCatalogRevision,
         AccountMaterialRaidWeek = AccountMaterialRaidWeek,
         AccountMaterialRaidDefinitions = AccountMaterialRaidDefinitions,
@@ -105,7 +114,9 @@ internal sealed class InventoryPlan
         BoosterSongAcquisition = BoosterSongAcquisition,
         CashShopPayment = CashShopPayment,
         PcRoomClaim = PcRoomClaim,
-        ExpBonus = ExpBonus
+        ExpBonus = ExpBonus,
+        OverflowMailSender = overflowMailSender ?? OverflowMailSender,
+        OverflowMailText = overflowMailText ?? OverflowMailText
     };
     public InventoryIndex BeforeIndex => beforeIndex.Value;
     public InventoryIndex AfterIndex => afterIndex.Value;
@@ -113,7 +124,7 @@ internal sealed class InventoryPlan
     public ImmutableArray<CurrencyKind> ChangedCurrencies => currencies.Value;
     public ImmutableArray<int> ChangedEpicPieces => pieces.Value;
     public bool AccountMaterialsChanged => !Before.AccountWallet.SameMaterials(After.AccountWallet);
-    public bool Changed => Before.PrivilegeService != After.PrivilegeService || !Before.ShieldDeck.Same(After.ShieldDeck) || !Before.ServerItems.Same(After.ServerItems) || !AccountRefillClaims.IsEmpty || !BossSelectionBuff.Same(Before.BossSelectionBuff, After.BossSelectionBuff) || !Before.NpcFavor.SequenceEqual(After.NpcFavor) || UnlockSkillTree || !Before.ItemMakingSkills.Same(After.ItemMakingSkills) || !Before.Skins.Same(After.Skins) || !Before.AvatarPresets.Same(After.AvatarPresets) || !Before.ConsumableStates.SequenceEqual(After.ConsumableStates) || EquipmentSlotFlagsAfter is not null || Before.StaminaUntil != After.StaminaUntil || !Before.DevilUses.SequenceEqual(After.DevilUses) || Before.AvatarExpansion != After.AvatarExpansion || Before.AccountWallet.CharacterSlotCapacity != After.AccountWallet.CharacterSlotCapacity || OverflowItems.Length != 0 || ChangedSlots.Length != 0 || ChangedCurrencies.Length != 0 || Before.CubeContract != After.CubeContract || Before.AccountWallet.SeriaLuck != After.AccountWallet.SeriaLuck || !Before.AccountWallet.PremiumContracts.SequenceEqual(After.AccountWallet.PremiumContracts) || Before.Expansion != After.Expansion ||
+    public bool Changed => Before.PrivilegeService != After.PrivilegeService || !Before.ShieldDeck.Same(After.ShieldDeck) || !Before.ServerItems.Same(After.ServerItems) || !AccountRefillClaims.IsEmpty || !BossSelectionBuff.Same(Before.BossSelectionBuff, After.BossSelectionBuff) || !Before.NpcFavor.SequenceEqual(After.NpcFavor) || UnlockSkillTree || !Before.ItemMakingSkills.Same(After.ItemMakingSkills) || !Before.Skins.Same(After.Skins) || !Before.AvatarPresets.Same(After.AvatarPresets) || !Before.VariousBuffs.SequenceEqual(After.VariousBuffs) || !Before.ConsumableStates.SequenceEqual(After.ConsumableStates) || EquipmentSlotFlagsAfter is not null || CloneTitleItemIdAfter is not null || Before.StaminaUntil != After.StaminaUntil || !Before.DevilUses.SequenceEqual(After.DevilUses) || Before.AvatarExpansion != After.AvatarExpansion || Before.AccountWallet.CharacterSlotCapacity != After.AccountWallet.CharacterSlotCapacity || OverflowItems.Length != 0 || ChangedSlots.Length != 0 || ChangedCurrencies.Length != 0 || Before.CubeContract != After.CubeContract || Before.AccountWallet.SeriaLuck != After.AccountWallet.SeriaLuck || !Before.AccountWallet.PremiumContracts.SequenceEqual(After.AccountWallet.PremiumContracts) || Before.Expansion != After.Expansion ||
         AccountMaterialsChanged || !Before.AccountWallet.MileageShop.Same(After.AccountWallet.MileageShop) ||
         Before.GoldCarryLimit != After.GoldCarryLimit || Before.AuctionGoldLimit != After.AuctionGoldLimit ||
         Before.CargoCapacity != After.CargoCapacity || Before.AccountCargo.Capacity != After.AccountCargo.Capacity ||
@@ -121,7 +132,7 @@ internal sealed class InventoryPlan
         !Before.EpicPieces.Same(After.EpicPieces) || !DailyBoosterUsage.Same(Before.DailyBoosterUses, After.DailyBoosterUses) ||
         !Before.AccountSkins.Same(After.AccountSkins);
     public bool AccountCargoChanged => Before.AccountCargo.Capacity != After.AccountCargo.Capacity ||
-        Before.AccountCargo.Gold != After.AccountCargo.Gold || ChangedSlots.Any(slot => slot.List == InventoryListType.AccountCargo);
+        Before.AccountCargo.Gold != After.AccountCargo.Gold || ChangedSlots.Any(slot => slot.List is InventoryListType.AccountCargo or InventoryListType.AccountCommon);
     public bool AccountSkinsChanged => !Before.AccountSkins.Same(After.AccountSkins);
 }
 

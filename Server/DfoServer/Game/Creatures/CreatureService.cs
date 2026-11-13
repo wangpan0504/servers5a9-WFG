@@ -187,6 +187,50 @@ internal sealed class CreatureService(CreatureCatalog catalog, TimeProvider? tim
         return source with { Core = source.Core with { ItemId = target.ItemId, SealFlag = 0 }, Creature = detail };
     }
 
+    public InventoryResult UseEvolutionItem(Character character, InventorySlot sourceSlot, long now)
+    {
+        var creature = Equipped(character, now);
+        var source = character.Inventory.Find(sourceSlot);
+        if (creature?.Creature is not { } detail || source is null || source.Uid <= 0 ||
+            source.Core.Count < 1 || source.Core.EquipmentLockId != 0 || source.IsExpired(now) ||
+            sourceSlot.List is not (InventoryListType.Main or InventoryListType.Pet) ||
+            !ItemSlotBoundService.Allows(character.Inventory, source.Position, source.Core.Kind) ||
+            Catalog.Get(creature.Core.ItemId) is not { } definition)
+            return InventoryResult.Reject(123);
+
+        int targetSpecies = definition.SelectiveGrowth is { } growth &&
+            (source.Core.ItemId == growth.ItemA || source.Core.ItemId == growth.ItemB || source.Core.ItemId == growth.ExperienceItem)
+            ? (source.Core.ItemId == growth.ItemA ? growth.SpeciesA :
+                source.Core.ItemId == growth.ItemB ? growth.SpeciesB : growth.ExperienceSpecies)
+            : definition.EvolutionSpecies;
+        if (targetSpecies <= 0 || Catalog.Evolution(definition, targetSpecies) is not { } target ||
+            definition.EvolutionLevel > 0 && detail.Level < definition.EvolutionLevel)
+            return InventoryResult.Reject(123);
+
+        var consumed = InventoryDeleteService.Plan(character.Inventory, source.Position, source.Core.ItemId, 1);
+        if (!consumed.Accepted || consumed.Plan is null)
+            return InventoryResult.Reject(123);
+        var evolved = Transform(creature, target);
+        var after = consumed.Plan.After with { Items = consumed.Plan.After.Items.Replace(creature, evolved) };
+        return new(true, 0, new(character.Inventory, after, "creature_evolution_item", Deadline(character, creature, source)));
+    }
+
+    public InventoryResult FillPoint(Character character, int points, long now)
+    {
+        if (points <= 0 || Equipped(character, now)?.Creature is not { } detail)
+            return InventoryResult.Reject(123);
+        long units = (long)Math.Clamp(points, 1, 100) * 36000L;
+        return ShiftSatiety(character, units, detail.Satiety == 0, now);
+    }
+
+    public InventoryResult UseExpBook(Character character, InventorySlot sourceSlot, long now)
+    {
+        var source = character.Inventory.Find(sourceSlot);
+        if (source is null || Catalog.ExperienceItem(source.Core.ItemId) is null)
+            return InventoryResult.Reject(123);
+        return Feed(character, new(sourceSlot, 0, source.Core.ItemId, 0), now);
+    }
+
     static InventoryResult Replace(Character character, InventoryItem before, InventoryItem after, string reason) =>
         new(true, 0, new(character.Inventory, character.Inventory with { Items = character.Inventory.Items.Replace(before, after) }, reason,
             new(character, before.ExpireTime == 0 ? null : before.ExpireTime)));

@@ -182,6 +182,22 @@ CREATE TABLE account_dungeon_incount(
   used INTEGER NOT NULL CHECK(used BETWEEN 0 AND 1000000),
   PRIMARY KEY(account,dungeon)
 );
+CREATE TABLE account_dungeon_incount_extra(
+  account TEXT NOT NULL,dungeon INTEGER NOT NULL CHECK(dungeon>0),
+  period INTEGER NOT NULL,extra INTEGER NOT NULL CHECK(extra BETWEEN 0 AND 1000000),
+  PRIMARY KEY(account,dungeon),FOREIGN KEY(account) REFERENCES accounts(account_id));
+CREATE TABLE character_dungeon_reward_extra(
+  character_id INTEGER NOT NULL,account TEXT NOT NULL,kind INTEGER NOT NULL CHECK(kind IN(0,1)),
+  target INTEGER NOT NULL CHECK(target>0),day INTEGER NOT NULL,
+  daily_extra INTEGER NOT NULL CHECK(daily_extra BETWEEN 0 AND 1000000),week INTEGER NOT NULL,
+  weekly_extra INTEGER NOT NULL CHECK(weekly_extra BETWEEN 0 AND 1000000),
+  PRIMARY KEY(character_id,kind,target),
+  FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE);
+CREATE TABLE account_single_dungeon_bindings(
+  account TEXT NOT NULL,group_id INTEGER NOT NULL CHECK(group_id IN(1,3)),
+  period INTEGER NOT NULL,character_id INTEGER NOT NULL CHECK(character_id BETWEEN 1 AND 65535),
+  PRIMARY KEY(account,group_id,character_id),
+  FOREIGN KEY(account) REFERENCES accounts(account_id));
 CREATE TABLE character_exp_bonus(
   character_id INTEGER PRIMARY KEY,
   account TEXT NOT NULL,
@@ -807,11 +823,11 @@ CREATE TABLE inventory_creature_details(
 CREATE TABLE "character_inventory_slots"(
     character_id INTEGER,
     account TEXT NOT NULL,
-    list_type INTEGER NOT NULL CHECK(list_type IN (0,1,2,3,7,12,38,46)),
+    list_type INTEGER NOT NULL CHECK(list_type IN (0,1,2,3,7,12,38,45,46)),
     owner_character_id INTEGER GENERATED ALWAYS AS (COALESCE(character_id,0)) STORED,
     slot_index INTEGER NOT NULL CHECK(slot_index BETWEEN 0 AND 351 OR (list_type=1 AND slot_index BETWEEN 352 AND 419)),
     item_uid INTEGER NOT NULL UNIQUE,
-    CHECK((list_type=12 AND character_id IS NULL AND slot_index<240) OR (list_type<>12 AND character_id IS NOT NULL AND (list_type<>2 OR slot_index<264))),
+    CHECK((list_type=12 AND character_id IS NULL AND slot_index<240) OR (list_type=45 AND character_id IS NULL AND slot_index<50) OR (list_type NOT IN(12,45) AND character_id IS NOT NULL AND (list_type<>2 OR slot_index<264))),
     CHECK(list_type<>1 OR slot_index<420),
     CHECK(list_type<>7 OR slot_index<240),
     CHECK(list_type<>38 OR slot_index<98),
@@ -820,6 +836,7 @@ CREATE TABLE "character_inventory_slots"(
 );
 
 CREATE UNIQUE INDEX account_cargo_slot ON character_inventory_slots(account,slot_index) WHERE list_type=12;
+CREATE UNIQUE INDEX account_common45_slot ON character_inventory_slots(account,slot_index) WHERE list_type=45;
 
 -- 邮箱 v4：附件沿用完整物品实例与详情，只变更持久所有者和所在位置。
 CREATE TABLE mailbox_messages(
@@ -947,6 +964,12 @@ CREATE TABLE character_fatigue_reset_days(
   service_day INTEGER NOT NULL CHECK(typeof(service_day)='integer' AND service_day BETWEEN 1 AND 3652058)
 );
 
+CREATE TABLE character_fatigue_battery(
+  character_id INTEGER PRIMARY KEY REFERENCES character_fatigue(character_id) ON DELETE CASCADE,
+  charging INTEGER NOT NULL CHECK(typeof(charging)='integer' AND charging BETWEEN 0 AND 32767),
+  buff INTEGER NOT NULL CHECK(typeof(buff)='integer' AND buff BETWEEN 0 AND 65535)
+);
+
 CREATE TABLE character_dungeon_fatigue_receipts(
   character_id INTEGER NOT NULL,account TEXT NOT NULL,instance_id TEXT NOT NULL CHECK(length(instance_id)=32),
   task_attempt INTEGER NOT NULL CHECK(task_attempt>0),map_id INTEGER NOT NULL CHECK(map_id>0),
@@ -1023,6 +1046,11 @@ CREATE TABLE character_dungeon_card_rewards(
   FOREIGN KEY(character_id,account) REFERENCES characters(id,account),
   FOREIGN KEY(character_id,instance_id) REFERENCES character_dungeon_settlement_receipts(character_id,instance_id),
   FOREIGN KEY(mail_id) REFERENCES mailbox_messages(mail_id));
+
+CREATE TABLE character_clear_reward_resets(
+  character_id INTEGER NOT NULL,instance_id TEXT NOT NULL,
+  PRIMARY KEY(character_id,instance_id),
+  FOREIGN KEY(character_id,instance_id) REFERENCES character_dungeon_card_rewards(character_id,instance_id) ON DELETE CASCADE);
 
 CREATE TABLE server_events(
   event_id INTEGER NOT NULL PRIMARY KEY CHECK(event_id BETWEEN 1 AND 65535),
@@ -1244,6 +1272,10 @@ CREATE TABLE adventure_ledger_meta(
   key TEXT NOT NULL PRIMARY KEY,value TEXT NOT NULL
 );
 
+CREATE TABLE character_hotkey_settings(
+  character_id INTEGER NOT NULL,account TEXT NOT NULL,profile INTEGER NOT NULL CHECK(profile IN (0,1)),
+  hotkeys BLOB NOT NULL CHECK(typeof(hotkeys)='blob' AND length(hotkeys) BETWEEN 1 AND 1399),
+  PRIMARY KEY(character_id,profile),FOREIGN KEY(character_id,account) REFERENCES characters(id,account));
 CREATE TABLE account_hotkey_settings(
   account TEXT NOT NULL REFERENCES accounts(account_id),profile INTEGER NOT NULL CHECK(profile IN (0,1)),
   hotkeys BLOB NOT NULL CHECK(typeof(hotkeys)='blob' AND length(hotkeys) BETWEEN 1 AND 1399),
@@ -1395,6 +1427,11 @@ CREATE TABLE character_social_links(
           memo TEXT NOT NULL DEFAULT '',group_id INTEGER NOT NULL DEFAULT 0 CHECK(group_id BETWEEN 0 AND 4),
           PRIMARY KEY(source_account,target_account),CHECK(source_account<>target_account)
         ) STRICT;
+
+CREATE TABLE account_social_presence(
+  account TEXT PRIMARY KEY REFERENCES accounts(account_id) ON DELETE CASCADE,
+  last_seen_unix INTEGER NOT NULL CHECK(last_seen_unix>=0)
+) STRICT;
 
 CREATE TABLE character_epic_production(
     character_id INTEGER PRIMARY KEY REFERENCES characters(id) ON DELETE CASCADE,
@@ -2114,7 +2151,7 @@ CREATE TABLE character_beast_stage_rewards(
         );
 
 CREATE TABLE IF NOT EXISTS character_rename_pending(
-  character_id INTEGER NOT NULL,account TEXT NOT NULL,source_uid INTEGER NOT NULL CHECK(source_uid>0),
+  character_id INTEGER NOT NULL,account TEXT NOT NULL,source_uid INTEGER NOT NULL CHECK(source_uid>=0),
   PRIMARY KEY(character_id),FOREIGN KEY(character_id,account) REFERENCES characters(id,account));
 
 CREATE TABLE IF NOT EXISTS character_name_history(
@@ -2610,3 +2647,94 @@ CREATE TABLE account_weekly_attendance(
   state TEXT NOT NULL CHECK(json_valid(state) AND json_type(state)='object'),
   PRIMARY KEY(account,season_start)
 ) STRICT;
+
+CREATE TABLE account_monster_mock_battle(
+  account TEXT PRIMARY KEY,
+  revision INTEGER NOT NULL CHECK(revision>0),
+  display_name TEXT NOT NULL,
+  lineup_stars INTEGER NOT NULL CHECK(lineup_stars BETWEEN 0 AND 25),
+  state TEXT NOT NULL CHECK(json_valid(state) AND json_type(state)='object')
+) STRICT;
+CREATE INDEX account_mock_battle_matching ON account_monster_mock_battle(lineup_stars,account);
+CREATE INDEX account_mock_battle_name ON account_monster_mock_battle(display_name);
+CREATE TABLE account_monster_mock_battle_runs(
+  run_id TEXT PRIMARY KEY CHECK(length(run_id)=32),
+  account TEXT NOT NULL,
+  character_id INTEGER NOT NULL CHECK(character_id BETWEEN 1 AND 65535),
+  world_id INTEGER NOT NULL CHECK(world_id>=0),
+  opened_at INTEGER NOT NULL CHECK(opened_at>=0),
+  paid_revision INTEGER NOT NULL CHECK(paid_revision>0),
+  state INTEGER NOT NULL CHECK(state BETWEEN 0 AND 2)
+) STRICT;
+CREATE UNIQUE INDEX account_mock_battle_active ON account_monster_mock_battle_runs(account) WHERE state=0;
+
+
+        CREATE TABLE character_revised_beast_rewards(
+            character_id INTEGER NOT NULL,account TEXT NOT NULL,
+            instance_id TEXT NOT NULL CHECK(length(instance_id)=32),
+            task_attempt INTEGER NOT NULL CHECK(task_attempt>0),epoch INTEGER NOT NULL CHECK(epoch>0),
+            dungeon_id INTEGER NOT NULL CHECK(dungeon_id BETWEEN 5335 AND 5339),
+            difficulty INTEGER NOT NULL CHECK(difficulty BETWEEN 0 AND 2),
+            success INTEGER NOT NULL CHECK(success IN (0,1)),
+            day_key INTEGER NOT NULL,week_key INTEGER NOT NULL,
+            awarded INTEGER NOT NULL CHECK(awarded IN (0,1)),
+            before_revision INTEGER NOT NULL,revision INTEGER NOT NULL,
+            plan_snapshot TEXT NOT NULL CHECK(json_valid(plan_snapshot)),
+            PRIMARY KEY(character_id,instance_id),
+            FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
+        );
+
+
+        CREATE TABLE character_revised_beast_stage_rewards(
+            character_id INTEGER NOT NULL,account TEXT NOT NULL,
+            instance_id TEXT NOT NULL CHECK(length(instance_id)=32),
+            task_attempt INTEGER NOT NULL CHECK(task_attempt>0),epoch INTEGER NOT NULL CHECK(epoch>0),
+            dungeon_id INTEGER NOT NULL CHECK(dungeon_id BETWEEN 5335 AND 5339),
+            difficulty INTEGER NOT NULL CHECK(difficulty BETWEEN 0 AND 2),
+            success INTEGER NOT NULL CHECK(success IN (0,1)),
+            day_key INTEGER NOT NULL,week_key INTEGER NOT NULL,
+            awarded INTEGER NOT NULL CHECK(awarded IN (0,1)),
+            before_revision INTEGER NOT NULL,revision INTEGER NOT NULL,
+            plan_snapshot TEXT NOT NULL CHECK(json_valid(plan_snapshot)),
+            PRIMARY KEY(character_id,instance_id),
+            FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
+        );
+
+CREATE TABLE character_various_buffs(
+    character_id INTEGER PRIMARY KEY,
+    account TEXT NOT NULL,
+    buffs TEXT NOT NULL CHECK(json_valid(buffs)),
+    FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
+) STRICT;
+CREATE TABLE account_returning_mission_progress(
+    account TEXT NOT NULL,
+    period_until INTEGER NOT NULL CHECK(period_until BETWEEN 1 AND 4294967295),
+    mission_id INTEGER NOT NULL CHECK(mission_id BETWEEN 1 AND 100),
+    progress INTEGER NOT NULL CHECK(progress BETWEEN 0 AND 4294967295),
+    PRIMARY KEY(account,period_until,mission_id)
+) STRICT;
+CREATE TABLE account_social_groups(
+  account TEXT NOT NULL REFERENCES accounts(account_id),
+  slot INTEGER NOT NULL CHECK(slot BETWEEN 0 AND 3),
+  icon INTEGER NOT NULL CHECK(icon BETWEEN 0 AND 7),
+  name TEXT NOT NULL CHECK(length(name) BETWEEN 1 AND 10),
+  PRIMARY KEY(account,slot),UNIQUE(account,name)
+) STRICT;
+CREATE TABLE account_returning_reward_claims(
+    account TEXT NOT NULL,
+    period_until INTEGER NOT NULL CHECK(period_until BETWEEN 1 AND 4294967295),
+    action INTEGER NOT NULL CHECK(action IN (1,3,4)),
+    argument INTEGER NOT NULL CHECK(argument BETWEEN 0 AND 100),
+    day INTEGER NOT NULL,
+    recipient_id INTEGER NOT NULL,
+    item_id INTEGER NOT NULL CHECK(item_id>0),
+    item_count INTEGER NOT NULL CHECK(item_count>0),
+    claimed_at INTEGER NOT NULL,
+    PRIMARY KEY(account,period_until,action,argument,day)
+) STRICT;
+CREATE TABLE IF NOT EXISTS character_npc_bookmarks(
+            character_id INTEGER PRIMARY KEY,
+            account TEXT NOT NULL,
+            entries BLOB NOT NULL CHECK(typeof(entries)='blob' AND length(entries)<=4096 AND length(entries)%4=0),
+            FOREIGN KEY(character_id,account) REFERENCES characters(id,account)
+        );

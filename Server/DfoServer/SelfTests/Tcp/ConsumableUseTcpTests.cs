@@ -85,7 +85,7 @@ internal static partial class ConsumableUseTcpTests
         {
             peer.Select(2);
             Use(peer, 65, 0, 490705256); Accepted(peer, 65, 0, 490705256);
-            ExpectBossBuff(peer, 300, 5); peer.Barrier();
+            ExpectBuff(peer, 300, 5); peer.Barrier();
             That(fixture.Query("SELECT json_extract(state_json,'$.Remaining') FROM character_boss_selection_buff WHERE character_id=$p0", peer.Id) is [[5L]],
                 "截图药水通过真实CMD44分派和完整ACK生效，五次效果已提交");
             Use(peer, 65, 1, 490705256); Refused(peer, 1, 490705256); peer.Barrier();
@@ -94,7 +94,7 @@ internal static partial class ConsumableUseTcpTests
             clock.Advance(TimeSpan.FromMinutes(1));
             Use(peer, 66, 0, 490012682); Accepted(peer, 66, 0, 490012682);
             peer.Expect(0, 488, Build(writer => { writer.Write((byte)1); writer.Write(300); }));
-            ExpectBossBuff(peer, 1275, 5); peer.Barrier();
+            ExpectBuff(peer, 1275, 5); peer.Barrier();
         }
         using (var peer = Open(fixture))
         {
@@ -111,7 +111,7 @@ internal static partial class ConsumableUseTcpTests
             {
                 peer.Select((ushort)slot, inventoryNotices: fallbackPotionIds.Contains(id) || mappedPotionIds.Contains(id) ? [(1, 713)] : null); peer.Barrier();
                 var beforeUse = fallbackPotionIds.Contains(id) || mappedPotionIds.Contains(id) ? Read(peer.Id) : null;
-                Use(peer, 65, 0, id); Accepted(peer, 65, 0, id); ExpectBossBuff(peer, buff, count); peer.Barrier();
+                Use(peer, 65, 0, id); Accepted(peer, 65, 0, id); ExpectBuff(peer, buff, count); peer.Barrier();
                 That(fixture.Query("SELECT json_extract(state_json,'$.Remaining'),json_extract(state_json,'$.Definition.BuffId') FROM character_boss_selection_buff WHERE character_id=$p0", peer.Id)
                     is [[var remaining, var kind]] && Equals(remaining, (long)count) && Equals(kind, (long)buff),
                     "原三款、六款兼容与十款原映射来源均经真实44消费，保存各自资源效果 " + id);
@@ -253,13 +253,26 @@ internal static partial class ConsumableUseTcpTests
                 w.Write((byte)0); w.Write((short)71); w.Write(1114); w.Write(1);
                 w.Write((byte)2); w.Write((short)0); w.Write(0); w.Write(0); w.Write(-1); w.Write((ushort)0);
             });
-            peer.Send(19, depositOwlCargo); peer.Expect(1, 19, [0, 1, 0, 0, 2]); peer.Barrier();
+            byte[] sortPersonalCargo = Convert.FromHexString("06000000100218142000");
+            byte[] sortAccountCargo = Build(w => { w.Write(8); w.Write(new byte[] { 8, 20, 16, 12, 24, 0, 32, 0 }); });
+            peer.Send(19, depositOwlCargo); peer.Expect(1, 19, [0, 1, 0, 0, 2]);
+            peer.Send(20, sortPersonalCargo); peer.Expect(1, 20, [0, 4, 0, 0, 0, 8, 2, 16, 1]); peer.Barrier();
             Use(peer, 71, 0, 10); Refused(peer, 0, 10); peer.Barrier();
-            peer.Send(19, depositOwlCargo); peer.Expect(1, 19, [0, 1, 0, 0, 2]); peer.Barrier();
+            peer.Send(19, depositOwlCargo); peer.Expect(1, 19, [0, 1, 0, 0, 2]);
+            peer.Send(20, sortPersonalCargo); peer.Expect(1, 20, [0, 4, 0, 0, 0, 8, 2, 16, 1]); peer.Barrier();
             Use(peer, 70, 0, 10); Accepted(peer, 70, 0, 10); peer.Barrier();
             That(Count(70) == 0, "一次性猫头鹰耗尽后本副本资格仍可使用");
-            CargoTcpTests.Transfer(peer, 0, 71, 1114, 1, 2, 0, 0, 1);
+            CargoTcpTests.Transfer(peer, 0, 71, 1114, 1, 2, 3, 0, 1);
             That(peer.Expect(0, 14).Body[0] == 0 && peer.Expect(0, 14).Body[0] == 2, "猫头鹰放入沿原CMD19差量");
+            peer.Send(20, sortPersonalCargo);
+            peer.Expect(1, 20, [1, 4, 0, 0, 0, 8, 2, 16, 0]);
+            var sortedPersonalCargo = peer.Expect(0, 13).Body;
+            That(sortedPersonalCargo[0] == 2 && U16(sortedPersonalCargo, 1) == 8 && U16(sortedPersonalCargo, 3) == 1 &&
+                U16(sortedPersonalCargo, 5) == 0 && U32(sortedPersonalCargo, 7) == 1114,
+                "副本使用猫头鹰后个人仓库整理成功并回放完整列表移至0槽");
+            peer.Barrier(packet => That(packet.Opcode is not (14 or 1681), "副本个人仓库整理沿全量路径，不发14/1681差量"));
+            peer.Send(20, sortAccountCargo);
+            peer.Expect(1, 20, [0, 4, 0, 0, 0, 8, 12, 16, 1]); peer.Barrier();
             CargoTcpTests.Transfer(peer, 2, 0, 1114, 1, 0, 71, 1114, 1);
             That(peer.Expect(0, 14).Body[0] == 0 && peer.Expect(0, 14).Body[0] == 2 && Count(71) == 2,
                 "猫头鹰取出提交后恢复两件且同步源目标");
@@ -289,6 +302,87 @@ internal static partial class ConsumableUseTcpTests
                 "CMD9恢复清除持久虚弱并实扣当前等级价格，不用免费契约兜底扣费");
         }
 
+        using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
+        {
+            var role = repository.LoadCharacter(owner, 0);
+            var after = role.Inventory with { Items = [.. role.Inventory.Items.Where(item =>
+                item.Position.List != InventoryListType.Main || item.Position.Index is not (65 or 66)),
+                new(0, new(InventoryListType.Main, 65), InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(490005358), 3)),
+                new(0, new(InventoryListType.Main, 66), InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(490005359), 3))] };
+            repository.CommitInventory(owner, role, new(role.Inventory, after, "lantern_potion_fixture"));
+        }
+        long lanternUntil;
+        using (var peer = Open(fixture))
+        {
+            peer.Select(); activeId = peer.Id;
+            Use(peer, 65, 0, 490005358); Accepted(peer, 65, 0, 490005358);
+            long largeUntil = clock.GetUtcNow().ToUnixTimeMilliseconds() + 600000;
+            ExpectBuff(peer, 1239, checked((int)(largeUntil / 1000))); peer.Barrier();
+            That(Count(65) == 2 && fixture.Query("SELECT count(*) FROM character_consumable_states WHERE character_id=$p0 AND item_id=490005358", activeId)
+                is [[2L]], "小灯笼大瓶CMD44真实扣一件并原子保存效果与冷却");
+            string before = Assets(); Use(peer, 66, 1, 490005359); Refused(peer, 1, 490005359); peer.Barrier();
+            That(Assets() == before && Count(66) == 3, "大小瓶共用251冷却，拒绝不扣源、不改效果及审计");
+            clock.Advance(TimeSpan.FromMilliseconds(600001));
+            byte[] expiredLarge = Build(writer => { writer.Write((byte)1); writer.Write(1239); });
+            int expiryNotices = 0;
+            peer.Barrier(packet =>
+            {
+                That(packet is { Kind: 0, Opcode: 488 } && ++expiryNotices == 1,
+                    "小灯笼到期独立移除一次，不把无关通知当作下一次使用回包");
+                Bytes(packet.Body, expiredLarge, "小灯笼到期488只移除原1239");
+            });
+            if (expiryNotices == 0) peer.Expect(0, 488, expiredLarge);
+            Use(peer, 66, 2, 490005359); Accepted(peer, 66, 2, 490005359);
+            ExpectBuff(peer, 1240, checked((int)(clock.GetUtcNow().ToUnixTimeSeconds() + 600))); peer.Barrier();
+            lanternUntil = (long)fixture.Query("SELECT until_ms FROM character_consumable_states WHERE character_id=$p0 AND item_id=490005359 AND kind=0", activeId)[0][0];
+            That(Count(66) == 2 && lanternUntil == clock.GetUtcNow().ToUnixTimeMilliseconds() + 600000 &&
+                fixture.Query("SELECT count(*) FROM character_consumable_states WHERE character_id=$p0 AND item_id=490005358", activeId) is [[0L]],
+                "冷却到期后小瓶使用成功，清理旧大瓶状态并建立自身十分钟截止");
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(variousBuffs: [(1240, checked((int)(lanternUntil / 1000)))]); activeId = peer.Id; peer.Barrier();
+            That(Count(66) == 2 && fixture.Query("SELECT until_ms FROM character_consumable_states WHERE character_id=$p0 AND item_id=490005359 AND kind=0", activeId)
+                is [[var savedUntil]] && Equals(savedUntil, lanternUntil) && peer.RestoredConsumableStates.Any(row => row.Opcode == 174),
+                "新连接通过原172/174恢复小灯笼状态，并以487恢复原截止图标，不补药或续期");
+        }
+
+        using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
+        {
+            var role = repository.LoadCharacter(owner,0);
+            var after = role.Inventory with { Items = [.. role.Inventory.Items.Where(item =>
+                item.Position.List != InventoryListType.Main || item.Position.Index is not (65 or 66)),
+                new(0,new(InventoryListType.Main,65),InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(10304461),3)),
+                new(0,new(InventoryListType.Main,66),InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(10305166),3))] };
+            repository.CommitInventory(owner,role,new(role.Inventory,after,"match_epic_fixture"));
+        }
+        static void AssertGroupRemoval(byte[] body)
+        {
+            That(body.Length == 1 + 4 * body[0], "488按原u8数量和i32身份列表完整发布");
+            var ids = Enumerable.Range(0, body[0]).Select(i => System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(body.AsSpan(1 + 4 * i))).ToArray();
+            That(ids.Contains(280) && ids.Contains(284) && ids.Contains(1271) && !ids.Contains(1136),
+                "同组潜在旧资格一次清除，不触及独立的固定史诗药组");
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(variousBuffs: [(1240, checked((int)(lanternUntil / 1000)))]);activeId=peer.Id;
+            Use(peer,65,0,10304461);Accepted(peer,65,0,10304461);
+            AssertGroupRemoval(peer.Expect(0,488).Body);
+            peer.Expect(0,487,Build(w=> {w.Write((byte)1);w.Write(280);w.Write(1);w.Write(0);w.Write(0);}));peer.Barrier();
+            That(Count(65)==2,"真实280源消费一次，487首动态整数为剩余副本次数1");
+            Use(peer,66,1,10305166);Accepted(peer,66,1,10305166);
+            AssertGroupRemoval(peer.Expect(0,488).Body);
+            peer.Expect(0,487,Build(w=> {w.Write((byte)1);w.Write(284);w.Write(1);w.Write(0);w.Write(0);}));peer.Barrier();
+            That(Count(66)==2 && fixture.Query("SELECT count(*) FROM character_consumable_states WHERE character_id=$p0 AND item_id IN (10304461,10305166)",activeId)
+                is [[0L]],"同组284以原488再487替换280，未声明保存的次数状态不冒充数据库计时药");
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(variousBuffs: [(1240, checked((int)(lanternUntil / 1000)))]);activeId=peer.Id;peer.Barrier();
+            That(Count(65)==2 && Count(66)==2 && fixture.Query("SELECT count(*) FROM character_consumable_states WHERE character_id=$p0 AND item_id IN (10304461,10305166)",activeId)
+                is [[0L]],"新连接保留已扣源但不恢复无is-save声明的280/284资格");
+        }
+
         // 屏障只保证网络回应已送达，不保证后台日志已落盘；正常停服完成日志收尾后核对入口。
         await fixture.StopAsync();
         var placeReplies = fixture.Events().Where(row => row.GetProperty("Kind").GetString() == "send" &&
@@ -316,8 +410,8 @@ internal static partial class ConsumableUseTcpTests
             is [var row] ? System.Text.Json.JsonSerializer.Deserialize<ItemCore>((string)row[0])!.Count : 0;
     }
 
-    static void ExpectBossBuff(TcpPeer peer, int buff, int remaining) => peer.Expect(0, 487, Build(writer =>
-        { writer.Write((byte)1); writer.Write(buff); writer.Write(remaining); writer.Write(0); writer.Write(0); }));
+    static void ExpectBuff(TcpPeer peer, int buff, int value) => peer.Expect(0, 487, Build(writer =>
+        { writer.Write((byte)1); writer.Write(buff); writer.Write(value); writer.Write(0); writer.Write(0); }));
 
     static void Use(TcpPeer peer, ushort slot, uint check, int id, int argument = 0) => peer.Send(44, Build(w =>
         { w.Write(slot); w.Write((byte)0); w.Write(check); w.Write(id); w.Write(argument); }));

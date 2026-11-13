@@ -19,6 +19,7 @@ internal sealed record DungeonPlannedMonster(
     public bool IsBlocking { get; init; } = true;
     public int Team { get; init; } = Source?.Team is >= 0 ? Source.Team.Value : 100;
     public bool IsFriendly { get; init; }
+    public DfoServer.Game.MonsterMockBattle.MockBattleSpawn? MockBattleSpawn { get; init; }
     public bool IsDummyMapBoss { get; init; }
     public bool IsSpecialChild => Source?.SpecialChild is not null;
     public bool IsScriptedRetirement => Source?.ScriptedRetirement == true;
@@ -38,6 +39,30 @@ internal sealed record DungeonPlannedSpecialObject(ushort ObjectKey, DungeonRoom
 // 冻结房间对象身份和阵营资格；不建立战斗、死亡、清房或奖励状态。
 internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyList<DungeonPlannedMonster> Monsters)
 {
+    internal static DungeonMonsterPlan FromMockBattleRoom(DungeonRoomDefinition room, ushort characterId,
+        ushort firstObjectKey, DfoServer.Game.MonsterMockBattle.MockBattleAdmission admission,
+        DfoServer.GameWorld.MonsterMockBattle.MonsterMockBattleCatalog catalog)
+    {
+        // 活动的双方卡片由独立通知创建；不把地图中额外注入的支援兵纳入卡组。
+        var source = room with { AiCharacters = [] };
+        var ordinary = FromRoom(source, characterId, firstObjectKey, 95, playerTeam: 0);
+        var monsters = ordinary.Monsters.Select(row => row with { IsFriendly = false, IsBlocking = true, Team = 1 }).ToList();
+        uint next = ordinary.NextObjectKey;
+        if (monsters.Count == 0) next = firstObjectKey;
+        void Add(DfoServer.Game.MonsterMockBattle.MockBattleCard card, uint team)
+        {
+            if (next == characterId) next++;
+            if (next > ushort.MaxValue) throw new DungeonObjectKeyOverflowException("怪物模拟战召唤对象key超界");
+            var definition = catalog.Cards[card.CardId];
+            var spawn = new DfoServer.Game.MonsterMockBattle.MockBattleSpawn(card, definition.MonsterId, next, team);
+            monsters.Add(new(1000 + monsters.Count, checked((ushort)next++), definition.MonsterId, 95, null)
+            { Team = checked((int)team), IsFriendly = team == 0, IsBlocking = team != 0, MockBattleSpawn = spawn, SourceMap = room.Map });
+        }
+        foreach (var card in admission.Lineup) Add(card, 0);
+        if (admission.Opponent is { } opponent)
+            foreach (var card in opponent.State.Snapshot.Cards.Where(row => !row.IsEmpty && row.Position >= 0)) Add(card, 1);
+        return ordinary with { Monsters = monsters.AsReadOnly() };
+    }
     public DungeonAltarPlan? Altar { get; init; }
     public IReadOnlyDictionary<ushort, byte> HellBattleLevelOverrides { get; init; } = System.Collections.Frozen.FrozenDictionary<ushort, byte>.Empty;
     public byte BattleLevelFor(DungeonHellWaveMonster wave) => HellBattleLevelOverrides.GetValueOrDefault(wave.ObjectKey, wave.Level);
@@ -200,7 +225,7 @@ internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyL
 
     internal static DungeonMonsterPlan FromRoom(DungeonRoomDefinition room, ushort characterId, ushort firstObjectKey, int? basisLevel = null,
         bool includeSpecial = true, int? playerTeam = null, IReadOnlyList<int>? companionRows = null,
-        IReadOnlyList<SupportCompanionProfile>? companionProfiles = null)
+        IReadOnlyList<SupportCompanionProfile>? companionProfiles = null, bool suppressCompanions = false)
     {
         if (room.AltarWaves is not null)
             throw new NotSupportedException("unsupported: 祭坛波次需要专用调度，不能作为普通怪物房间生成");
@@ -217,7 +242,8 @@ internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyL
             var source = room.Monsters[index];
             var raw = source.RawValues;
             if (raw.Count != 8 || raw[0] != source.MonsterId || source.MonsterId < 0
-                || source.PlacementKind != "[fixed]" || source.RankKind is not ("[normal]" or "[named]" or "[champion]" or "[super champion]" or "[boss]") ||
+                || source.PlacementKind != "[fixed]" || source.RankKind is not (null or "[normal]" or "[named]" or "[champion]" or "[super champion]" or "[boss]") ||
+                source.RankKind is null && (source.NpcParameter.HasValue || source.Modifiers.Count != 0 || source.RankParameterCount.HasValue) ||
                 source.RankKind == "[named]" && (source.NpcParameter.HasValue || source.Modifiers.Count != 0 || source.RankParameterCount.HasValue) ||
                 !(source.NpcParameter.HasValue
                     ? source.Modifiers is ["[NPC]"] || source.Modifiers is ["[NPC]", "[dummy]"]
@@ -245,6 +271,7 @@ internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyL
             if (nextKey > ushort.MaxValue)
                 throw new DungeonObjectKeyOverflowException("房间怪物对象 key 超出 ushort 容量");
             // Full03 0425C88D先置模板+24=0；0425D27B的未匹配rank成功尾部保留0。
+            // 缺rank闭合末行同样保留原生初值0；资源字段仍为null，不补normal或未消费后缀。
             // 仅兼容真实450001的裸[named]，保留原标记；不放开任意未知品级或附加效果。
             // 资源品级经模板+24进入客户端记录+14：普通0、精英1/2、Boss3。
             // 绝对等级保留完整整数，相对等级使用已核验基准；原始行始终保留。
@@ -281,8 +308,9 @@ internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyL
             // 来源明确的旧5409不再放行，等资源差量原位迁到9986；未知5409保持原生演员合同。
             // 丢弃时不占用对象key，其余行号保持原索引。
             // 未放行的行不参与资源校验：部署侧地图补丁写坏的行不能影响开关关闭时的正常入场。
-            bool companion = DungeonCompanion.IsCompanionRow(room, index);
-            if (companion && !(companionsAllowed && companionRows!.Contains(source.Id))) continue;
+            bool companion = DungeonCompanion.IsCompanionRow(room, index) ||
+                suppressCompanions && DungeonCompanion.IsLegacyCompanionRow(source);
+            if (companion && (suppressCompanions || !(companionsAllowed && companionRows!.Contains(source.Id)))) continue;
             // 同种专用模板只发原序中的首行；保留SourceOrdinal，不拼出额外演员或占用被丢弃行的key。
             if (companion && !sentCompanions.Add(source.Id)) continue;
             if (source.RawValues.Count != 6 || source.RawValues[0] != source.Id || source.Id <= 0 ||
@@ -291,11 +319,11 @@ internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyL
                 throw new NotSupportedException($"unsupported: 地图 {room.Map.Id} 的APC资源行 {index} 尚未支持");
             if (companion && (source.Faction != "[character]" || source.RankKind != "[normal]"))
                 throw new NotSupportedException($"unsupported: 地图 {room.Map.Id} 的支援兵资源行 {index} 不是友方普通演员");
-            if (nextKey == characterId) nextKey++;
-            if (nextKey > ushort.MaxValue) throw new DungeonObjectKeyOverflowException("房间APC对象key超出ushort容量");
             // 原生 02A0B720 使用通知中的模板编号创建演员，MAP原序号仅取坐标和阵营。
             // 档次/套装只替换已放行的基础支援兵，模板已经资源目录核验，不能借此生成额外MAP行。
             var profile = companion ? companionProfiles?.SingleOrDefault(candidate => candidate.BaseId == source.Id) : null;
+            if (nextKey == characterId) nextKey++;
+            if (nextKey > ushort.MaxValue) throw new DungeonObjectKeyOverflowException("房间APC对象key超出ushort容量");
             // Full03 03FA9810确认类型5..8走APC构造器；APC索引属于独立MAP数组。
             // AiCharacter保留原MAP来源，实际通知编号/等级取冻结模板，复验不能用新数组替换原来源身份。
             result.Add(new(index,(ushort)nextKey++,profile?.TemplateId ?? source.Id,profile?.Level ?? source.Level,null)

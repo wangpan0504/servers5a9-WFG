@@ -91,7 +91,45 @@ internal static partial class DungeonPassiveDropTests
         Reject<InvalidDataException>(() => DungeonPackets.StartMap(f.Entry, f.Plan, 7, passiveItems: [ground, ground]),
             "重复入房地面key拒绝");
         ObjectRules();
+        EquipmentControl();
         Console.WriteLine($"PASS {Count - before} 特殊物品解析、抽样、父关联、21B通知和原地面生命周期断言");
+    }
+
+    static void EquipmentControl()
+    {
+        var f = Fixture(99, 0);
+        var parent = f.Plan.SpecialObjects[1];
+        var room = f.Plan with { SpecialObjects = [parent with { Source = parent.Source with
+        { Children = [new(0, "[item]", new[] { 0, 1, 0, -1, -1 }, null)] } }] };
+        var epic = Template(2001) with { Kind = ItemKind.Equipment, Rarity = 4, StackLimit = 1, Durability = 41 };
+        var material = Template(3001) with { Kind = ItemKind.Material };
+        var definition = new DungeonDefinition(3, "dungeon/passive-control.dgn", 1, 1, [f.Entry.Maze],
+            [Group(0, -1, 2, epic.Id, 1000, material.Id, 2000)]);
+        var settings = new DungeonDropControlSettings();
+        var policy = new DungeonPassiveDropPolicy(_ => definition, id => id == epic.Id ? epic : material, dropControl: settings);
+        var baseline = policy.Prepare(f.Entry, room, _ => 0, Now).Single().Contents;
+        settings.Replace([new(DungeonDropScope.All, [], new(Equipment: 2, Special: 100))], true);
+        var frozen = policy.PrepareEntry(f.Entry);
+        That(frozen(room, bound => bound == 10001 ? 1999 : bound == 3000 ? 2999 : 0, Now).Single().Contents
+            is [{ Item.ItemId: 2001 }], "指定物件史诗新增概率边界可命中，只用Equipment而不叠Special");
+        That(frozen(room, bound => bound == 10001 ? 2000 : 0, Now).Single().Contents is [{ Item.ItemId: 3001 }] &&
+            frozen(room, bound => bound == 10001 ? 4000 : 0, Now).Single().Contents.IsEmpty,
+            "指定池史诗翻倍，原材料绝对概率及互斥空结果保持");
+        settings.Replace([new(DungeonDropScope.All, [], new(Equipment: 0))], true);
+        That(frozen(room, _ => 0, Now).Single().Contents.SequenceEqual(baseline) &&
+            policy.PrepareEntry(f.Entry)(room, _ => 0, Now).Single().Contents is [{ Item.ItemId: 3001 }],
+            "配置热改不追改已准备房间，下一次入场关闭物件史诗而保留材料");
+        var inherited = DungeonDropControlSnapshot.Apply(new("inherited", []), new(Equipment: 2));
+        That(policy.PrepareEntry(f.Entry, inherited)(room, _ => 0, Now).Single().Contents is [{ Item.ItemId: 2001 }],
+            "正式入场物件沿用怪物同次冻结规则，不二次读取已热改配置");
+        settings.Replace([new(DungeonDropScope.All, [4], new(Equipment: 0))], true);
+        That(policy.Prepare(f.Entry, room, _ => 0, Now).Single().Contents.SequenceEqual(baseline),
+            "物件遵循指定副本集合，范围外不关闭史诗");
+        var oversized = definition with { RawSections = [Group(0, -1, 3, material.Id, 10001, epic.Id, 1000, 4001, 1000)] };
+        settings.Replace([new(DungeonDropScope.All, [], new(Equipment: 100))], true);
+        var clipped = new DungeonPassiveDropPolicy(_ => oversized, id => id == epic.Id ? epic : material with { Id = id }, dropControl: settings);
+        That(clipped.Prepare(f.Entry, room, _ => 0, Now).Single().Contents is [{ Item.ItemId: 3001 }],
+            "物件只控制原10001可达区间，尾部原不可达史诗不被倍率新增");
     }
 
     static void ObjectRules()
@@ -129,6 +167,72 @@ internal static partial class DungeonPassiveDropTests
         That(contents.Length == 4 && contents[0].GoldAmount == 17 && contents[1].Item!.ItemId == 1000 &&
             contents[2].Item is { ItemId: 2000, Durability: 41, Value: 1 } && contents[3].Item!.ItemId == 1000,
             "通用金币、堆叠品、独立装备和指定池依序完整生成，两个次数不互相替代");
+        int rarityStart = source.FindIndex(token => token.Type == 3 && names[token.Value] == "[basis of rarity dicision]") + 1;
+        var restrictionSource = source.ToArray();
+        for (int index = 0; index < 28; index++)
+            restrictionSource[rarityStart + index] = new(0, index % 7 < 3 ? 0 : index % 7 == 3 ? 500000 : 1000000);
+        DisjointRestrictions(DungeonDropRuleCatalog.Parse(restrictionSource, common, index => names[index], objectRules: true));
+    }
+
+    static void DisjointRestrictions(DungeonDropRuleCatalog rules)
+    {
+        var f = Fixture(99, 0);
+        var epic = Template(2001) with { Kind = ItemKind.Equipment, Rarity = 4, StackLimit = 1, Durability = 41 };
+        var unique = epic with { Id = 2002, Rarity = 3, Durability = 37 };
+        var material = Template(3001) with { Kind = ItemKind.Material, Rarity = 4 };
+        var otherMaterial = material with { Id = 3002, Rarity = 3 };
+        var templates = new[] { epic, unique, material, otherMaterial };
+        var originals = templates.ToArray();
+        var definition = new DungeonDefinition(3, "dungeon/restricted-passive-fixture.dgn", 1, 1, [f.Entry.Maze],
+            [Group(0, -1, 3, epic.Id, 3000, unique.Id, 3000, material.Id, 4001)]);
+        var policy = new DungeonPassiveDropPolicy(_ => definition, id => templates.Single(template => template.Id == id),
+            rules, DungeonItemDropCatalog.Create(templates));
+        var entry = f.Entry with { BasisLevel = 1 };
+        var restricted = entry with { DisjointForbiddenDropRarities = ImmutableHashSet.Create(4) };
+        CheckSource(random: true);
+        CheckSource(random: false);
+        That(templates.SequenceEqual(originals) && templates.All(template => !template.DisjointForbidden),
+            "物件来源限制只写本次装备实例，共享模板及后续普通掉落不被污染");
+
+        void CheckSource(bool random)
+        {
+            string label = random ? "通用物件" : "指定物件";
+            var parent = f.Plan.SpecialObjects[1];
+            var room = f.Plan with { SpecialObjects = [parent with { Source = parent.Source with
+            { Children = [new(0, "[item]", new[] { 0, random ? 0 : 4, random ? 2 : 0, -1, -1 }, null)] } }] };
+            var normal = Prepare(entry);
+            var limited = Prepare(restricted);
+            var after = Prepare(entry);
+            int expected = random ? 6 : 4;
+            That(normal.Contents.Length == expected && limited.Contents.Length == expected &&
+                normal.Draws.SequenceEqual(limited.Draws) && normal.Draws.SequenceEqual(after.Draws),
+                label + "来源限制不改变完整数量、抽样调用顺序、区间或结果");
+            That(normal.Contents.SequenceEqual(after.Contents) && normal.Contents.All(content => content.Item?.DisjointForbidden != true) &&
+                normal.Contents.Count(content => content.Item?.ItemId == epic.Id) == (random ? 1 : 2) &&
+                normal.Contents.Count(content => content.Item?.ItemId == unique.Id) == 1 &&
+                normal.Contents.Count(content => content.Item?.ItemId == material.Id) == 1,
+                label + "保留史诗、其它稀有度装备及同稀有度材料，受限后普通来源仍可分解");
+            That(normal.Contents.Zip(limited.Contents).All(pair => pair.First.Item?.ItemId == epic.Id
+                    ? pair.Second.Item is { DisjointForbidden: true } &&
+                        pair.First == pair.Second with { Item = pair.Second.Item with { DisjointForbidden = false } }
+                    : pair.First == pair.Second),
+                label + "仅命中史诗装备实例禁止分解，完整Core、品质、材料和金币保持原值");
+
+            (ImmutableArray<DungeonGroundContent> Contents, List<(int Bound, int Value)> Draws) Prepare(DungeonEntryPlan sourceEntry)
+            {
+                var draws = new List<(int Bound, int Value)>();
+                int rarity = 0, specified = 0;
+                int Draw(int bound)
+                {
+                    int value = bound == 1000000 ? (rarity++ < 2 ? 0 : 500000) :
+                        bound == 10001 ? new[] { 0, 3000, 6000, 0 }[specified++] :
+                        bound == 999999997 ? 24680 : 0;
+                    draws.Add((bound, value));
+                    return value;
+                }
+                return (policy.Prepare(sourceEntry, room, Draw, Now).Single().Contents, draws);
+            }
+        }
     }
 
     static (DungeonEntryPlan Entry, DungeonMonsterPlan Plan, SinglePlayerDungeonRun Run) Fixture(ushort id, long revision,

@@ -44,6 +44,64 @@ internal sealed partial class CharacterHandler(CharacterCatalog characters, Town
         commands.Register(CmdPacketType.STORY_DIGEST_UPDATE, StoryDigestAsync, nameof(CharacterHandler));
         commands.Register(CmdPacketType.USE_RENAME_CARD, UseRenameCardAsync, nameof(CharacterHandler));
         commands.Register(CmdPacketType.CHANGE_CHARAC_NAME, RenameCharacterAsync, nameof(CharacterHandler));
+        commands.Register(CmdPacketType.CHARACTER_STATUS, CharacterStatusAsync, nameof(CharacterHandler));
+        commands.Register(CmdPacketType.GET_GROWTHCAPSULE, GetGrowthCapsuleAsync, nameof(CharacterHandler));
+        commands.Register(CmdPacketType.CHANGE_PVP_PRIVATE_TO_NOMAL, ChangePvpPrivateToNormalAsync, nameof(CharacterHandler));
+    }
+
+    async Task<CommandResult> ChangePvpPrivateToNormalAsync(GameConnectionContext context, Packet request)
+    {
+        var converted = context.Session.ConvertSelectedPvpPrivateToNormal();
+        if (converted is null)
+        {
+            await context.Reply(CmdPacketType.CHANGE_PVP_PRIVATE_TO_NOMAL, [0, 19, 0], "pvp_private_convert_rejected");
+            return CommandResult.Handled;
+        }
+        await context.Reply(CmdPacketType.CHANGE_PVP_PRIVATE_TO_NOMAL, [1], "pvp_private_converted");
+        await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(converted, context.Session.ReadPvpGrade(converted), context.Channel,
+            adventureName: context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom, returningAdventurerType: context.Session.ReturningAdventurerType, marriage: context.MarriageAppearance), "pvp_private_converted_actor");
+        log.Write("pvp_private_converted", new { Connection = context.Id, Character = converted.Id, converted.Revision });
+        return CommandResult.Handled;
+    }
+
+    async Task<CommandResult> CharacterStatusAsync(GameConnectionContext context, Packet request)
+    {
+        if (context.Session.Selected is not { } character) return CommandResult.Unhandled;
+        if (request.Body.Length == 111)
+        {
+            if (!context.Session.RecordCharacterStatusSnapshot(request.Body)) return CommandResult.Unhandled;
+            await context.Reply(CmdPacketType.CHARACTER_STATUS, [1], "character_status_reported");
+            log.Write("character_status_reported", new { Connection = context.Id, Character = character.Id, Bytes = request.Body.Length });
+            return CommandResult.Handled;
+        }
+        if (request.Body.Length != 0) return CommandResult.Unhandled;
+        await context.Reply(CmdPacketType.CHARACTER_STATUS, [1], "character_status_ack");
+        await context.Notify(NotiPacketType.CHARACTER_STATUS, [], "character_status_request");
+        return CommandResult.Handled;
+    }
+
+    async Task<CommandResult> GetGrowthCapsuleAsync(GameConnectionContext context, Packet request)
+    {
+        if (request.Body.Length != 0) return CommandResult.Unhandled;
+        var result = context.Session.ClaimCharacterGrowthCapsule();
+        bool Guard() => context.Owner.Execute(() => context.Session.Ready && context.Session.Phase == DfoServer.Game.Session.SessionPhase.Town &&
+            context.Owner.Generation == result.Generation && context.Session.SelectionEpoch == result.Epoch &&
+            ReferenceEquals(context.Session.Selected, result.Character));
+        if (!result.Accepted || result.Character is not { } character)
+        {
+            await context.Reply(CmdPacketType.GET_GROWTHCAPSULE, [0, (byte)result.Error, (byte)(result.Error >> 8)], "growth_capsule_rejected");
+            return CommandResult.Handled;
+        }
+        await context.Reply(CmdPacketType.GET_GROWTHCAPSULE, [1], "growth_capsule_claimed", Guard);
+        if (character.DungeonState is { } state && DfoServer.Game.Characters.CharacterExperienceNotice.ShouldPublish(character.Level))
+        {
+            var auxiliary = new DfoServer.Game.Characters.CharacterGrowthAuxiliaryState(
+                checked((uint)character.Inventory.WinPoints), state.GrowthCapsuleExperience, state.ProficiencyLevel, state.ProficiencyExperience);
+            await context.Notify(NotiPacketType.EXP, GrowthPackets.Experience(character.Level, character.Learning, auxiliary,
+                DfoServer.Game.Characters.CharacterExperienceDisplay.Ordinary), "growth_capsule_experience", Guard);
+        }
+        log.Write("growth_capsule_claimed", new { Connection = context.Id, Character = character.Id, character.Revision });
+        return CommandResult.Handled;
     }
 
     Task<CommandResult> StoryDigestAsync(GameConnectionContext context, Packet request)
@@ -83,7 +141,7 @@ internal sealed partial class CharacterHandler(CharacterCatalog characters, Town
                 Type = context.Session.ChannelEntry?.Type, Reason = "fresh-login-requires-channel-selection" });
             return CommandResult.Handled;
         }
-        if(context.Session.PvpPrivateSelectionBlocked(selection) || context.Session.RenameCardSelectionBlocked(selection))
+        if(context.Session.BeastSelectionBlocked(selection) || context.Session.PvpPrivateSelectionBlocked(selection) || context.Session.RenameCardSelectionBlocked(selection))
         {
             // 023428B1的96明确显示当前频道不允许此操作，失败无额外body且重置选角UI。
             await context.Reply(CmdPacketType.SELECT_CHARACTER,[0,96,0],"pvp_private_channel_rejected");
@@ -129,7 +187,7 @@ internal sealed partial class CharacterHandler(CharacterCatalog characters, Town
         if (strongway2019 is not null) await strongway2019.RecoverRewardsAsync(context);
         if (warRewards is not null)
         {
-            var recovered = context.Session.RecoverEvildomWarRewards(warRewards, warPolicy);
+            var recovered = context.Session.RecoverEvildomWarRewards(warRewards, warPolicy, recoverHidden: false);
             if (!recovered.IsEmpty)
             {
                 await context.Notify(NotiPacketType.MAILBOX_ALARM, MailboxPackets.Alarm(), "evildom_war_reward_recovered",
@@ -168,9 +226,13 @@ internal sealed partial class CharacterHandler(CharacterCatalog characters, Town
             DfoServer.Network.Builders.Inventory.NpcFavorPackets.Snapshot(projectedCharacter.Character.Inventory.NpcFavor, time?.GetUtcNow()),
             "npc_favor_initialize", () => context.Owner.Execute(() => context.Session.Ready &&
                 ReferenceEquals(context.Session.Selected, projectedCharacter.Character)));
+        await projection.CashShopRestrictionsAsync(context, projectedCharacter.Character,
+            () => context.Owner.Execute(() => context.Session.Ready &&
+                ReferenceEquals(context.Session.Selected, projectedCharacter.Character)));
         // 每周地下城固定在入城完成包之后、任务核对与同屏加入之前下发，包序稳定且不依赖其他投影结果。
         if (weekly is not null) await weekly.DeliverAsync(context, includeReset: true);
         social?.Initialize(context);
+        await projection.GuildInformationAsync(context, projectedCharacter.Character);
         projection.GuildNpcs?.Post(context);
         await projection.ReconcileQuestsAsync(context);
         projection.Join(context);
@@ -194,7 +256,13 @@ internal sealed partial class CharacterHandler(CharacterCatalog characters, Town
 
     async Task<CommandResult> CheckNameAsync(GameConnectionContext context, Packet request)
     {
-        string name = CharacterRequests.CheckName(request.Body);
+        string? name = CharacterRequests.CheckAvailableName(request.Body);
+        if (name is null)
+        {
+            await context.Reply(CmdPacketType.CHECK_DOUBLE_CHARACTER_NAME,
+                CharacterPackets.NameCheck(ClientCharacterNameError.InvalidSpecialCharacters), "name_check_invalid");
+            return CommandResult.Handled;
+        }
         bool exists = context.Session.NameExists(name);
         await context.Reply(CmdPacketType.CHECK_DOUBLE_CHARACTER_NAME, CharacterPackets.NameCheck(exists), "name_check");
         return CommandResult.Handled;

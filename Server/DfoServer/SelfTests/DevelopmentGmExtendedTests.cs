@@ -2,6 +2,7 @@ using System.Text.Json;
 using DfoServer.Development;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
+using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Mailbox;
 using DfoServer.Game.Session;
 using DfoServer.GameWorld.Items;
@@ -31,7 +32,7 @@ internal static class DevelopmentGmExtendedTests
         using var f = new MailboxPersistenceTests.Fixture();
         f.OtherOwner.Dispose();
         var mailbox = new MailboxService(f.Repository, resources.Items, resources.GoldLimits, resources.EpicPieces);
-        var catalog = new DevelopmentCatalog(pvf, resources, quests) { Stats = new DfoServer.Game.Characters.CharacterStatComputer(characters) };
+        var catalog = new DevelopmentCatalog(pvf, resources, quests) { Stats = new DfoServer.Game.Characters.CharacterStatComputer(characters), NpcFavor = new NpcFavorCatalog(pvf) };
         MarriagePersistenceTests.RunDirectResources(catalog);
         string Answer(string line, GameSession? session = null) => DevelopmentGm.Answer(line, "other", f.Repository, f.Owners,
             _ => session, mailbox, resources.Items, catalog: catalog);
@@ -45,6 +46,15 @@ internal static class DevelopmentGmExtendedTests
             using var lease = f.Owners.Acquire("other", () => { });
             return f.Repository.LoadCharacter(lease, 0);
         }
+        var favorTargets = catalog.NpcFavor!.All();
+        TestCheck.That(favorTargets.Length is > 0 and <= 255, "累计PVF全量可培养NPC可由完整快照表示");
+        var favorReceipt = Json(Answer("npc-favor-max Other"));
+        TestCheck.That(favorReceipt.GetProperty("total").GetInt32() == favorTargets.Length &&
+            favorTargets.All(target => Load().Inventory.NpcFavor.Any(row => row.NpcId == target.OwnerId && row.Points == target.Maximum)),
+            "真实GM命令按累计资源各NPC上限一次写满");
+        long favorRevision = Load().Revision;
+        _ = Json(Answer("npc-favor-max Other"));
+        TestCheck.That(Load().Revision == favorRevision, "真实GM重复命令不重复写入");
         string first = Answer("item-search 0 0 0 * * 18400");
         TestCheck.That(first.StartsWith("OK ") || first.Contains("后台构建", StringComparison.Ordinal), "索引首次查询不阻塞GM端口");
         catalog.Warm(true, true, TimeSpan.FromMinutes(10));
@@ -182,6 +192,52 @@ internal static class DevelopmentGmExtendedTests
         TestCheck.That(Answer("grant Other 18400 2 5 0 direct").StartsWith("OK "), "装备直接入包");
         var granted = Load().Inventory.Items.Where(item => item.Core.ItemId == 18400).ToArray();
         TestCheck.That(granted.Length == 2 && granted.All(item => (item.Core.Attr & 31) == 5 && item.Uid > 0), "直接入包保留强化和独立UID");
+        var medalInfo = Json(Answer("item-info 100380058"));
+        var medalEdit = Preview(100380058).GetProperty("edit");
+        TestCheck.That(medalInfo.GetProperty("kind").GetString() == "GuildMedal" &&
+            medalInfo.GetProperty("upgradable").GetBoolean() && medalInfo.GetProperty("maxUpgrade").GetInt32() == 20 &&
+            !medalInfo.GetProperty("amplifiable").GetBoolean() && !medalInfo.GetProperty("refinable").GetBoolean() &&
+            medalEdit.GetProperty("reinforce").GetBoolean() && medalEdit.GetProperty("maxUpgrade").GetInt32() == 20 &&
+            !medalEdit.GetProperty("amplify").GetBoolean() && !medalEdit.GetProperty("refine").GetBoolean() &&
+            Json(Answer("item-info 18400")).GetProperty("maxUpgrade").GetInt32() == 31,
+            "勋章真实模板与预览能力统一最高20，仅强化，不借普通装备的增幅和锻造能力");
+        foreach (int level in new[] { 0, 1, 20 })
+            TestCheck.That(Answer($"grant Other 100380058 1 {level} 0 direct").StartsWith("OK ") &&
+                Load().Inventory.Items.Any(item => item.Core.ItemId == 100380058 && item.Core.Upgrade == level),
+                "GM勋章直发保留强化0/1/20");
+        var medalItem = Load().Inventory.Items.Single(item => item.Core.ItemId == 100380058 && item.Core.Upgrade == 20);
+        using (var medalOwner = f.Owners.Acquire("other", () => { }))
+        {
+            var current = f.Repository.LoadCharacter(medalOwner, 0);
+            medalItem = medalItem with { Core = medalItem.Core with { Attr = 0xB4, SortLockFlag = 1, GuardianGemKeys = 1, Extension97 = 71 } };
+            f.Repository.CommitInventory(medalOwner, current, new(current.Inventory,
+                current.Inventory with { Items = current.Inventory.Items.Replace(current.Inventory.Find(medalItem.Position)!, medalItem) }, "gm_medal_fixture"));
+        }
+        string medalRef = $"{(int)medalItem.Position.List}:{medalItem.Position.Index}:{medalItem.Uid}";
+        TestCheck.That(Answer("item-edit Other " + medalRef + " up:1").StartsWith("OK ") &&
+            Load().Inventory.Find(medalItem.Position) == medalItem with { Core = medalItem.Core with { Attr = 0xA1 } } &&
+            Answer("item-edit Other " + medalRef + " up:20").StartsWith("OK ") && Load().Inventory.Find(medalItem.Position) == medalItem,
+            "GM勋章编辑仅改强化低五位，保留UID、排序锁、守护珠与完整扩展核心");
+        TestCheck.That(Json(Answer("items Other")).GetProperty("items").EnumerateArray()
+            .Single(item => item.GetProperty("uid").GetInt64() == medalItem.Uid).GetProperty("upgrade").GetInt32() == 20,
+            "GM背包投影读取勋章真实强化而非固定0");
+        string medalSnapshot = f.Snapshot();
+        foreach (string bad in new[] { "grant Other 100380058 1 21 0 direct", "grant Other 100380058 1 21 0 mail",
+            "grant Other 100380058 1 -1 0 direct", "grant Other 100380058 1 20 1 direct", "grant Other 100380058 1 20 1 mail",
+            "grant Other 100380058 1 20 0 direct amp:1:5", "grant Other 100380058 1 20 0 mail amp:1:5",
+            "grant Other 90000 1 1 0 direct", "item-edit Other " + medalRef + " up:21",
+            "item-edit Other " + medalRef + " up:-1", "item-edit Other " + medalRef + " amp:0:0",
+            "item-edit Other " + medalRef + " ref:1" })
+            TestCheck.That(Answer(bad).StartsWith("ERR ") && f.Snapshot() == medalSnapshot,
+                "勋章超限/负数/增幅/锻造与守护珠强化拒绝后不改变资产、邮件或revision：" + bad);
+        var beforeBatch = Load();
+        TestCheck.That(!InventoryRewardGrantService.TryGrantBatch(beforeBatch, [new(100380058, 1, 20), new(90000, 1, 1)],
+            resources.Items, resources.GoldLimits, resources.EpicPieces).Accepted && f.Snapshot() == medalSnapshot,
+            "批量逐件检查真实强化能力，后项守护珠非法时不产生前项勋章半份资产");
+        uint medalMail = Json(Answer("grant Other 100380058 1 20 0 mail")).GetProperty("mail").GetUInt32();
+        TestCheck.That(Json(Answer("mails Other")).GetProperty("mails").EnumerateArray()
+            .Single(mail => mail.GetProperty("id").GetUInt32() == medalMail).GetProperty("attachments")[0].GetProperty("upgrade").GetInt32() == 20,
+            "GM勋章邮件投影保留强化20");
         // 封印：[sealing] 封装装备默认带封装标记；seal:open 直接发为已解封，对其他物品拒绝。
         var sealing = catalog.Items.Where(row => row.Equipment).Select(row => resources.Items.Get(row.Id))
             .FirstOrDefault(value => value.Kind == ItemKind.Equipment && value.AttachType.Contains("[sealing]", StringComparison.OrdinalIgnoreCase));
@@ -291,6 +347,12 @@ internal static class DevelopmentGmExtendedTests
         TestCheck.That(Answer("grant Other 18400 1 0 0 direct", session).StartsWith("ERR ") && Answer("item-clear Other 0", session).StartsWith("ERR "),
             "游戏中的角色拒绝背包实例写入");
         TestCheck.That(session.ClaimMail(mailbox, [.. mails.Select(mail => mail.GetProperty("id").GetUInt32())]).Accepted, "领取GM邮件");
+        var mailedMedal = session.Selected!.Inventory.Items.Single(item => item.Core.ItemId == 100380058 && item.Core.SortLockFlag == 0 && item.Core.Upgrade == 20);
+        session.ReturnToRoster();
+        session.Select(0, resources.GoldLimits);
+        session.MarkReady();
+        TestCheck.That(session.Selected!.Inventory.Find(mailedMedal.Position) == mailedMedal,
+            "强化20勋章经真实邮件领取后重选角色，UID和完整核心保持");
         TestCheck.That(session.Selected!.Inventory.Items.Any(item => item.Core.ItemId == 18400 && item.Core.Value == 999_999_943),
             "邮件附件按指定品级种子到账");
         TestCheck.That(Answer("mail-delete Other all", session).StartsWith("ERR "), "游戏中的角色拒绝删除邮件");
@@ -355,6 +417,8 @@ internal static class DevelopmentGmExtendedTests
         session.Select(0, resources.GoldLimits);
         session.MarkReady();
         TestCheck.That(Answer("rename Other Z_z", session).StartsWith("ERR ") && Answer("char-delete Other Other", session).StartsWith("ERR "), "游戏中的角色拒绝改名与删除");
+        TestCheck.That(Answer("npc-favor-max Other", session).StartsWith("ERR 角色正在游戏中", StringComparison.Ordinal),
+            "已选角色拒绝好感度GM写入，不能绕过在线内存");
         byte slotFlags = session.Selected!.EquipmentSlotFlags;
         TestCheck.That(Answer("equip-slots Other 1", session).StartsWith("ERR 角色正在游戏中", StringComparison.Ordinal) && Answer("equip-slots Other", session).StartsWith("OK ") &&
             session.Selected!.EquipmentSlotFlags == slotFlags, "游戏中的角色拒绝开扩展装备栏，只读查询仍可用");

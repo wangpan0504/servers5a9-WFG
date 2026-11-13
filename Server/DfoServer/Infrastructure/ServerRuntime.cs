@@ -61,16 +61,16 @@ internal static class ServerRuntime
     // 外置文件优先，任何部署形态都一样：运维直接改安装目录里的配置即可生效，不必重建程序；
     // 文件缺失才回退同版本内置资源。外置文件同时是运维关闭某个频道的唯一开关
     // （2026-10-30 实机：单文件发行包若绕过它就会把已关闭的频道又带回来），不能按部署形态跳过。
-    static Stream OpenDefaultOrShipped(string shippedFile, string logicalName)
+    static Stream OpenDefaultOrShipped(string shippedFile, string logicalName, string? resourcesDirectory = null)
     {
-        string path = Path.Combine(AppContext.BaseDirectory, "Resources", shippedFile);
+        string path = Path.Combine(resourcesDirectory ?? Path.Combine(AppContext.BaseDirectory, "Resources"), shippedFile);
         return File.Exists(path) ? File.OpenRead(path) : OpenShipped(logicalName);
     }
 
     // 把实际生效的来源写进日志：改了外置文件却没生效时，能一眼看出读的是哪一份。
-    static void LogResourceSource(ServerLog log, string stage, string shippedFile)
+    static void LogResourceSource(ServerLog log, string stage, string shippedFile, string? resourcesDirectory = null)
     {
-        string path = Path.Combine(AppContext.BaseDirectory, "Resources", shippedFile);
+        string path = Path.Combine(resourcesDirectory ?? Path.Combine(AppContext.BaseDirectory, "Resources"), shippedFile);
         log.Write("resource_source", new { Stage = stage, Source = File.Exists(path) ? "external" : "bundled", Path = path });
     }
 
@@ -89,20 +89,24 @@ internal static class ServerRuntime
     }
 
     // 漏掉内置回退会让服务端在「Cash shop promotions」阶段直接以 FileNotFoundException 结束（2026-10-30 实机）。
-    internal static string ReadShippedPromotionConfig()
+    internal static string ReadShippedPromotionConfig(string? resourcesDirectory = null)
     {
-        using var stream = OpenDefaultOrShipped("cash-shop-promotions.json", "DfoServer.Resources.cash-shop-promotions.json");
+        using var stream = OpenDefaultOrShipped("cash-shop-promotions.json", "DfoServer.Resources.cash-shop-promotions.json", resourcesDirectory);
         using var reader = new StreamReader(stream);
         return reader.ReadToEnd();
     }
 
-    internal static CashShopPromotionCatalog LoadCashShopPromotions(ItemResources items, string? json = null) =>
+    internal static CashShopPromotionCatalog LoadCashShopPromotions(ItemResources items, string? json = null,
+        IReadOnlySet<int>? hellTicketIds = null) =>
         CashShopPromotionCatalog.Parse(json ?? ReadShippedPromotionConfig(), items.CashShop, items.Items.Get,
             rules => new PromotionConsumerValidation(items.Items, items.Boosters, items.AvatarPackages, items.CashShop,
                 items.EpicPieces, items.Contracts, items.RandomOptions, items.AttributePairs,
                 items.Creatures, items.CollectBoxes, items.LimitCubes, items.Enchantments, items.Enhancements, items.RecoveryConsumables,
                 items.Amplifications, items.AmplifyUpgrades,
-                items.SpringTreasureAvatars, new SpringTreasureDropPolicy(items.SpringTreasureAvatars, items.Items.Get(490705287))).Validate(rules));
+                items.SpringTreasureAvatars, new SpringTreasureDropPolicy(items.SpringTreasureAvatars, items.Items.Get(490705287)),
+                creatureEggs: items.CreatureEggs, avatarCompounds: items.AvatarCompounds,
+                hellTicketIds: hellTicketIds, recipes: items.ItemRecipes,
+                makingSkills: items.ItemMakingSkills, expertJobs: () => items.ExpertJobs).Validate(rules));
 
     public static ServerHost Create(ServerOptions options, PvfArchive pvf, CharacterRepository repository, TownCatalog towns, CharacterCatalog characters,
         SkillLearningCatalog learning, ItemResources itemResources, ServerLog log, QuestCatalog quests,
@@ -112,17 +116,18 @@ internal static class ServerRuntime
         CharacterGrowthCatalog? growthCatalog = null, Game.Raids.LukeRaidStartPolicy? lukeStartPolicy = null,
         Func<int, int>? evildomHiddenDraw = null, Func<CashShopPromotionCatalog>? promotions = null, bool enablePromotionPage = false,
         Random? fiendwarMazeRandom = null, CashShopPromotionConfiguration? promotionConfiguration = null,
-        Func<int, ItemTemplate>? promotionItemResolver = null)
+        Func<int, ItemTemplate>? promotionItemResolver = null, bool epicRoad2019Enabled = false, DungeonCatalog? dungeonCatalog = null,
+        bool enableMonsterMockBattle = true, SecretShopCatalog? secretShopRules = null)
     {
         quests = quests.WithCreatures(itemResources.Creatures).WithItems(itemResources.Items);
         var questStages = QuestStageGraph.Build(quests);
         itemResources.Creatures.PrepareEvolutions();
-        var channels = LoadChannels();
+        var channels = LoadChannels(Path.Combine(options.ResourcesDirectory, "channel.txt"));
         var gameChannels = new GameChannelListeners(options, channels);
         log.Write("startup", new { Stage = "Runtime assembly", State = "starting" });
-        LogResourceSource(log, "Channel script", "channel.txt");
-        LogResourceSource(log, "Cash shop promotions", "cash-shop-promotions.json");
-        LogResourceSource(log, "Independent attribute pairs", "independent-attribute-pairs.json");
+        LogResourceSource(log, "Channel script", "channel.txt", options.ResourcesDirectory);
+        LogResourceSource(log, "Cash shop promotions", "cash-shop-promotions.json", options.ResourcesDirectory);
+        LogResourceSource(log, "Independent attribute pairs", "independent-attribute-pairs.json", options.ResourcesDirectory);
         if (!itemResources.ItemMakingSkills.Available)
             log.Write("resource_warning", new { Stage = "Item making skills", Missing = "etc/itemmakingskill.etc", Disabled = "带制作熟练度声明的配方" });
         var timer = Stopwatch.StartNew();
@@ -139,7 +144,7 @@ internal static class ServerRuntime
         var owners = new AccountOwners(gameCache);
         var online = new OnlineSessionDirectory(gameCache);
         var social = new Game.Social.SocialService(repository, online);
-        var socialProjection = new SocialProjection(social);
+        var socialProjection = new SocialProjection(social, repository);
         var parties = new Game.Party.PartyService(repository, clock, gameCache, guideStore: repository);
         var trades = new Game.Trade.TradeRegistry();
         var tradeHandler = new TradeHandler(trades, online, itemResources.Items, itemResources.GoldLimits, log);
@@ -163,8 +168,22 @@ internal static class ServerRuntime
         var accounts = new AuthenticationService(new AuthenticationRepository(Path.Combine(options.DataDirectory, "game.db")));
         accounts.EnsureDevelopmentAccount();
         // 网吧身份线上默认常开：本进程启动即为开，重启后自动恢复为开；GM 的 pc-room on/off 只改当前进程（不落盘）。
-        var debugSettings = new GameDebugSettings { PremiumPcRoom = PremiumPcRoomDefault(options.DataDirectory),
-            SupportProfiles = GameWorld.Dungeons.SupportCompanionCatalog.Load(pvf) };
+        var supportStore = new Game.Settings.SupportCompanionStore(options.DataDirectory);
+        var fatigueStore = new AccountFatigueStore(options.DataDirectory);
+        var adventurerStore = new AdventurerBenefitStore(options.DataDirectory);
+        var adventurerBenefits = new Game.Events.AdventurerBenefitService(new GameWorld.Events.AdventurerBenefitCatalog(pvf),
+            adventurerStore.Read(), adventurerStore.Write);
+        var returningCatalog = new GameWorld.Events.ReturningAdventurerCatalog(pvf);
+        foreach (var reward in returningCatalog.Missions.Select(row => row.Reward).Append(returningCatalog.Welcome).Append(returningCatalog.Daily))
+            _ = itemResources.Items.Get(reward.ItemId);
+        var returningAntiEvil = new Game.Characters.CharacterAntiEvil(itemResources.Items, new(pvf),
+            itemResources.RecoveryConsumables, clock, itemResources.Contracts, sets: new(pvf));
+        repository.ConfigureReturningAdventurers(returningCatalog, adventurerBenefits, returningAntiEvil.Compute, clock);
+        var debugSettings = new GameDebugSettings(supportStore.Read(), supportStore.Write,
+            fatigueStore.Read(), fatigueStore.Write) { PremiumPcRoom = PremiumPcRoomDefault(options.DataDirectory),
+            SupportProfiles = GameWorld.Dungeons.SupportCompanionCatalog.Load(pvf), AdventurerBenefits = adventurerBenefits };
+        debugSettings.ReturningAdventurers = new Game.Events.ReturningAdventurerService(repository, returningCatalog, adventurerBenefits,
+            itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, debugSettings, clock);
         var monsterBattleLevels = new DungeonBattleLevelConfiguration(options.DataDirectory);
         monsterBattleLevels.Reload();
         log.Write("monster_battle_level_config", new { Rules = monsterBattleLevels.Settings.Current.Rules.Count });
@@ -195,8 +214,9 @@ internal static class ServerRuntime
         var mailboxProjection = new MailboxProjection(mailbox, online);
         var creatureTransportMailPolicy = new CreatureTransportMailPolicy(1);
         var titleCatalog = new TitleCatalog(pvf, quests);
+        var npcFavor = new NpcFavorCatalog(pvf);
         var settings = new ClientSettingsService(new ClientSettingsRepository(Path.Combine(options.DataDirectory, "game.db")),
-            CharacterEmotionCatalog.Load(pvf), titleCatalog);
+            CharacterEmotionCatalog.Load(pvf), titleCatalog, npcFavor);
         var chatEmoticons = ChatEmoticonCatalog.Load(pvf, itemResources.Contracts);
         var settingsProjection = new SettingsProjection(settings, chatEmoticons);
         var questParameters = QuestRewardParameterCatalog.Load(pvf);
@@ -223,7 +243,7 @@ internal static class ServerRuntime
             {
                 Source = "experience_bonus", Reason = "equipped_item_template_missing", CharacterId = request.Character.Id,
                 request.Event, request.DungeonId, ItemId = item.Core.ItemId, item.Uid, Slot = item.Position.Index
-            }), clock: clock);
+            }), clock: clock, adventurerBenefits: adventurerBenefits);
         tutorials ??= new TutorialCatalog(pvf);
         var questProjection = new QuestProjection(quests,questParameters,itemResources.Items,itemResources.GoldLimits,itemResources.EpicPieces,growth);
         var stats = new Game.Characters.CharacterStatComputer(characters);
@@ -250,6 +270,7 @@ internal static class ServerRuntime
         var epicProductionProjection=new EpicProductionProjection(clock);
         var collectBoxProjection = new CollectBoxProjection(itemResources.CollectBoxes, clock);
         var incounts = LoadIncounts(pvf);
+        var ticketRewardLimits = incounts is null ? null : ClearRewardLimitCatalog.Load(pvf);
         var weaponSkinService = new InventorySkinStorageService(itemResources.Items, itemResources.Skins,
             itemResources.GoldLimits, itemResources.EpicPieces, itemResources.Contracts, clock);
         log.Write("weapon_skin_catalog", new { Recipes = itemResources.Skins.Recipes.Count,
@@ -257,7 +278,9 @@ internal static class ServerRuntime
             Cutscenes = itemResources.Skins.Cutscenes.Count,
             Enabled = itemResources.Skins.Recipes.Count > 0 && itemResources.Skins.Weapons.Count > 0 });
         var weaponSkinProjection = new SkinStorageProjection(weaponSkinService, parties, presence);
-        var dungeonCatalog = DungeonCatalog.Load(pvf);
+        dungeonCatalog ??= epicRoad2019Enabled
+            ? DungeonCatalog.Load(pvf, EpicRoadResourcePaths.Dungeons, EpicRoadResourcePaths.Maps)
+            : DungeonCatalog.Load(pvf);
         var marriageSupply = dungeonCatalog.ContainsDungeon((int)Game.Dungeons.MarriageDungeonAdmission.DungeonId)
             ? Game.Marriage.MarriageDungeonDailySupply.Create(dungeonCatalog.Get((int)Game.Dungeons.MarriageDungeonAdmission.DungeonId)) : null;
         if (marriageSupply is not null && !itemResources.Items.TryGet(marriageSupply.ItemId, out _))
@@ -295,6 +318,20 @@ internal static class ServerRuntime
             log.Write("startup", new { Stage = "Weekly attendance", weeklyCatalog.Weeks,
                 Resource = GameWorld.OnlineEvents.WeeklyAttendanceCatalog.ResourcePath });
         }
+        Game.MonsterMockBattle.MonsterMockBattleService? monsterMockBattle = null;
+        if (enableMonsterMockBattle && pvf.Contains(GameWorld.MonsterMockBattle.MonsterMockBattleCatalog.ResourcePath))
+        {
+            var mockCatalog = GameWorld.MonsterMockBattle.MonsterMockBattleCatalog.Load(pvf);
+            string settingsPath = Path.Combine(options.DataDirectory, "MonsterMockBattle", "settings.json");
+            var mockSettings = File.Exists(settingsPath)
+                ? System.Text.Json.JsonSerializer.Deserialize<Game.MonsterMockBattle.MockBattleSettings>(File.ReadAllText(settingsPath),
+                    new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ??
+                    throw new InvalidDataException("怪物模拟战配置为空") : new Game.MonsterMockBattle.MockBattleSettings();
+            monsterMockBattle = new(repository, mockCatalog, mockSettings, itemResources.Items, itemResources.GoldLimits,
+                itemResources.EpicPieces, events, clock, debugSettings: debugSettings);
+            log.Write("startup", new { Stage = "Monster mock battle", Cards = mockCatalog.Cards.Count,
+                Worlds = mockCatalog.Worlds.Count, SettingsFile = File.Exists(settingsPath) });
+        }
         if (pvf.Contains(GameWorld.OnlineEvents.PcRoomTimePointCatalog.ResourcePath))
         {
             var onlineCatalog = GameWorld.OnlineEvents.PcRoomTimePointCatalog.Load(pvf, itemResources.Items);
@@ -312,7 +349,7 @@ internal static class ServerRuntime
             ? new Game.CashShopPromotions.CashShopPromotionPageService(repository, promotionItem) : null;
         var promotionPage = promotionPageService is not null
             ? new PromotionPageProjection(promotions!, promotionPageService) : null;
-        var projection = new TownProjection(towns, stats, presence, itemResources.EpicPieces, mailboxProjection, settingsProjection, questProjection, learning, titleProjection, adventureProjection, clock, guildPermitDelivery, devil, collectBoxProjection, weaponSkinProjection, parties: parties, epicProduction: epicProductionProjection, dungeons: dungeonCatalog, marriage: marriageProjection, events: events, mileageShop: itemResources.CashShop.Mileage, promotionCatalog: promotionPageService is null ? null : promotions, promotionPages: promotionPageService, items: itemResources.Items, knightShields: knightShields);
+        var projection = new TownProjection(towns, stats, presence, itemResources.EpicPieces, mailboxProjection, settingsProjection, questProjection, learning, titleProjection, adventureProjection, clock, guildPermitDelivery, devil, collectBoxProjection, weaponSkinProjection, parties: parties, epicProduction: epicProductionProjection, dungeons: dungeonCatalog, marriage: marriageProjection, events: events, mileageShop: itemResources.CashShop.Mileage, promotionCatalog: promotionPageService is null ? null : promotions, promotionPages: promotionPageService, items: itemResources.Items, knightShields: knightShields, epicRoadAvailable: epicRoad2019Enabled, cashShop: itemResources.CashShop);
         var creatures = new Game.Creatures.CreatureService(itemResources.Creatures, clock, towns, itemResources.Items);
         var creatureProjection = new CreatureProjection(creatures, presence, questProjection);
         var inventoryProjection = new InventoryProjection(stats, projection, itemResources.EpicPieces, creatureProjection, weaponSkinProjection);
@@ -320,7 +357,7 @@ internal static class ServerRuntime
             itemResources.AmplifyUpgrades.ReinforceRules.NoticeLevel, itemResources.AmplifyUpgrades.Rules.NoticeLevel, log);
         var inventoryBoosters = new InventoryBoosterService(itemResources.Items, itemResources.Boosters, itemResources.GoldLimits,
             itemResources.EpicPieces, debugSettings: debugSettings, contracts: itemResources.Contracts,
-            avatars: itemResources.AvatarPackages, clock: clock, randomOptions: itemResources.RandomOptions, attributePairs: attributePairs);
+            avatars: itemResources.AvatarPackages, clock: clock, randomOptions: itemResources.RandomOptions, attributePairs: attributePairs, dropControl: dropControl.Settings);
         var totalTeamProjection = new PvpTotalTeamProjection(learning, stats, log);
         var marriageHandler = new MarriageHandler(repository, marriageCatalog, itemResources.Items,
             new Game.Marriage.MarriageInventoryPlanner(itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, clock),
@@ -399,8 +436,8 @@ internal static class ServerRuntime
         var cashShop = new InventoryCashShopService(itemResources.Items, itemResources.CashShop, itemResources.GoldLimits, itemResources.EpicPieces, itemResources.Cargo,
             debugSettings, itemResources.Contracts, itemResources.AvatarPackages, devil, itemResources.GuildHongbao, serverItemRules, events, clock,
             marriageCatalog.CeraShopRestrictItems.ToImmutableHashSet(), privileges: itemResources.PrivilegeServices,
-            deluxeOffer: BattlePassDeluxePurchase.Resolve(itemResources.CashShop));
-        var levelProjection = new CharacterLevelProjection(stats, questProjection, learning);
+            deluxeOffer: BattlePassDeluxePurchase.Resolve(itemResources.CashShop), packages: itemResources.Boosters);
+        var levelProjection = new CharacterLevelProjection(stats, questProjection, learning, adventureProjection);
         var levelUpProjection = new LevelUpTicketProjection(inventoryProjection,levelProjection);
         var questEffects=new Game.Quests.QuestSkipEffects(itemResources.Items,learning,itemResources.GoldLimits,itemResources.EpicPieces,titleService);
         var commands = new GameCommandRegistry(itemResources.Items);
@@ -468,7 +505,8 @@ internal static class ServerRuntime
                     phase.WeeklyEligibilityLimit, phase.Rewards.Offers, phase.Rewards.Result }).ToArray() });
         var raidRegistry = new Game.Raids.RaidRegistry(clock);
         var antonRejoin = new Game.Raids.AntonRaidRejoin(raidSettings.AntonRejoinEnabled,
-            lukeCandidatesEnabled: lukeStartPolicy is not null || raidCatalog.Find(2)?.Resources?.Fiendwar is not null, clock: clock);
+            lukeCandidatesEnabled: lukeStartPolicy is not null || raidCatalog.Find(2)?.Resources?.Fiendwar is not null ||
+                raidCatalog.Find(3)?.Resources?.PreyTeam is { PreyTeamStartReady: true }, clock: clock);
         raidRegistry.BindRejoin(antonRejoin);
         var antonRun = raidCatalog.Find(0)?.Resources?.EntryCatalog is { } antonCatalog
             ? new Game.Raids.AntonRaidDungeonService(raidRegistry, parties, antonCatalog, raidSettings.AntonFormalEntryEnabled) : null;
@@ -477,14 +515,21 @@ internal static class ServerRuntime
         var lukeAutomaticRewards = new Game.Raids.LukeAutomaticRewards(repository, owners, online, repository.LoadCharacterById,
             itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, clock ?? TimeProvider.System);
         var preyReady = raidCatalog.Find(3)?.Resources is { ResourcesReady: true, EntryCatalog.Ready: true };
-        var preyRun = preyReady ? new Game.Raids.AntonRaidDungeonService(raidRegistry, parties, raidCatalog.Find(3)!.Resources!.EntryCatalog!, true, Game.Raids.RaidKind.Prey) : null;
+        var preyTeamReady = raidCatalog.Find(3)?.Resources?.PreyTeam is { PreyTeamStartReady: true };
+        var preyRun = preyReady || preyTeamReady ? new Game.Raids.AntonRaidDungeonService(raidRegistry, parties,
+            raidCatalog.Find(3)!.Resources!.EntryCatalog!, true, Game.Raids.RaidKind.Prey,
+            preyTeamReady ? raidCatalog.Find(3)!.Resources!.PreyTeam!.EntryCatalog : null) : null;
         var preyRewards = preyReady ? new Game.Raids.PreyGuideRewards(raidCatalog.Find(3)!.Resources!.Script, itemResources.Items, itemResources.Boosters) : null;
         if (preyRewards is not null) _ = preyRewards.Create(false);
+        var preyTeamRewards = preyTeamReady ? new Game.Raids.PreyGuideRewards(raidCatalog.Find(3)!.Resources!.PreyTeam!.Script, itemResources.Items, itemResources.Boosters) : null;
+        if (preyTeamRewards is not null) _ = preyTeamRewards.CreateTeam(false, false);
+        log.Write("startup", new { Stage = "Prey raid modes", Guide = preyReady, Team = preyTeamReady,
+            TeamIssues = raidCatalog.Find(3)?.Resources?.PreyTeam?.Issues.Select(issue => new { issue.Code, issue.Path, issue.TokenIndex, issue.Detail }).ToArray() });
         bool fiendwarReady = raidCatalog.Find(2)?.Resources is { ResourcesReady: true, EntryCatalog.Ready: true, Fiendwar: not null };
         var fiendwarRun = fiendwarReady ? new Game.Raids.FiendwarDungeonService(raidRegistry, parties, raidCatalog.Find(2)!.Resources!.EntryCatalog!, raidCatalog.Find(2)!.Resources!.FiendwarGuide?.EntryCatalog) : null;
         var fiendwarRewards = fiendwarReady ? new Game.Raids.FiendwarRewards(raidCatalog.Find(2)!.Resources!.Fiendwar!, itemResources.Items, itemResources.Boosters, raidCatalog.Find(2)!.Resources!.FiendwarGuide?.Fiendwar) : null;
         if (fiendwarRewards is not null) _ = fiendwarRewards.Create(false);
-        var lukeTimers = !preyReady && !fiendwarReady && !raidSettings.AntonPhaseProgressEnabled && lukeStartPolicy?.Timers is null && lukeStartPolicy?.PhaseTimeout is null ? null : new Game.Raids.LukeRaidClocks(clock ?? TimeProvider.System,
+        var lukeTimers = !preyReady && !preyTeamReady && !fiendwarReady && !raidSettings.AntonPhaseProgressEnabled && lukeStartPolicy?.Timers is null && lukeStartPolicy?.PhaseTimeout is null ? null : new Game.Raids.LukeRaidClocks(clock ?? TimeProvider.System,
             repository, (stage, error) => log.Write("raid_timer_failed", new
             {
                 Stage = stage, Reason = error.GetType().Name, error.Message, error.StackTrace,
@@ -509,14 +554,14 @@ internal static class ServerRuntime
             ? new Game.Raids.AntonResourceRewards(antonScript, itemResources.Items, itemResources.Boosters) : null;
         // 启动时解析全部奖励模板，避免开战持owner锁时首次读取PVF。
         if (antonRewards is not null) _ = antonRewards.Create(false);
-        var lukeStart = lukeStartPolicy is null ? null : new Game.Raids.LukeRaidStart(raidRegistry, parties, repository, towns, itemResources.EpicPieces, lukeStartPolicy, clock, itemResources.Items, lukeTimers, lukeChannelCards);
+        var lukeStart = lukeStartPolicy is null ? null : new Game.Raids.LukeRaidStart(raidRegistry, parties, repository, towns, itemResources.EpicPieces, lukeStartPolicy, clock, itemResources.Items, lukeTimers, lukeChannelCards, dropControl.Settings);
         if (lukeStart?.UnavailableReason(raidCatalog.Find(1)) is { } unavailable)
         {
             log.Write("resource_warning", new { Source = "Luke raid start policy", Reason = unavailable });
             lukeStart = null;
         }
         // 原实例五分钟候选与835/668共用，不恢复进程重启前的活跃Battle。
-        var lukeRejoin = lukeStart is null && raidCatalog.Find(2)?.Resources?.Fiendwar is null ? null :
+        var lukeRejoin = lukeStart is null && raidCatalog.Find(2)?.Resources?.Fiendwar is null && !preyTeamReady ? null :
             new Game.Raids.LukeRaidRejoin(raidRegistry, parties, antonRejoin);
         var lukeRun = lukeStart is not null && lukeStartPolicy?.Run is { } runPolicy &&
             raidCatalog.Find(1)?.Resources?.EntryCatalog is { } runCatalog
@@ -528,7 +573,15 @@ internal static class ServerRuntime
         }
         var pvpRecords = new Game.Pvp.PvpRecordQuery(repository, repository);
         var raidStart = new Game.Raids.AntonRaidStart(raidRegistry, parties, repository, towns, itemResources.EpicPieces, clock, raidSettings.AntonPhaseProgressEnabled, antonRewards,
-            raidSettings.AntonPhaseProgressEnabled || preyReady || fiendwarReady ? lukeTimers : null, preyRewards, fiendwarRewards, fiendwarMazeRandom);
+            raidSettings.AntonPhaseProgressEnabled || preyReady || preyTeamReady || fiendwarReady ? lukeTimers : null,
+            preyRewards, fiendwarRewards, fiendwarMazeRandom, preyTeamRewards, dropControl.Settings, incounts)
+#if DEBUG
+            { DebugIgnorePreyEntryLimits = true, DebugIgnorePreyRewardLimits = true }
+#endif
+            ;
+#if DEBUG
+        log.Write("raid_start_debug_policy", new { RaidType = 3, IgnoreEntryLimits = true, IgnoreRewardLimits = true });
+#endif
         var raidHandler = new RaidHandler(log, raidCatalog, raidRegistry, online,
             raidStart, lukeStart, antonRejoin, parties, lukeRejoin, projection, pvpRecords);
         if (raidSettings.AntonRejoinEnabled)
@@ -569,7 +622,7 @@ internal static class ServerRuntime
         DungeonRoomCatalog? questRooms = null;
         DungeonCatalog? selectionDungeons = null;
         var progress = new Game.Characters.CharacterProgressReset(characters, learning, growth);
-        var developmentCatalog = new DevelopmentCatalog(pvf, itemResources, quests) { Stats = stats, Growth = growth, PvfPath = options.PvfPath, CacheDirectory = options.DataDirectory };
+        var developmentCatalog = new DevelopmentCatalog(pvf, itemResources, quests) { Stats = stats, Growth = growth, PvfPath = options.PvfPath, CacheDirectory = options.DataDirectory, NpcFavor = npcFavor };
         IGameCommandModule dungeon;
         Strongway2019Catalog? strongwayCatalog = null;
         Strongway2019MatchingService? strongwayMatching = null;
@@ -585,6 +638,8 @@ internal static class ServerRuntime
         DungeonPassiveDropPolicy? passiveDrops = null;
         SpringTreasureDropPolicy? springTreasure = null;
         EpicPieceShopService? epicPieceShop = null;
+        SecretShopService? secretShop = (secretShopRules ?? itemResources.SecretShop) is { } secretRules ?
+            new(secretRules, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces) : null;
         AssaultModeCatalog? assaultMode = null;
         OperationHopeCatalog? operationHope = null;
         RiftNamedEpicDropPolicy? riftNamedEpics = null;
@@ -599,6 +654,7 @@ internal static class ServerRuntime
             operationHope = StartupStage.Run(log, "Operation Hope catalog", () => OperationHopeCatalog.Load(pvf,dungeonCatalog,quests,rooms));
             tutorialScenes ??= new TutorialScenes(pvf, tutorials, dungeonCatalog);
             questRooms = rooms;
+            projection.BeastRooms = rooms;
             var drops = StartupStage.Run(log, "Dungeon monster drops", () => DungeonMonsterDropCatalog.Load(pvf));
             var dropRules = StartupStage.Run(log, "Dungeon drop rules", () => DungeonDropRuleCatalog.Load(pvf));
             var dropCandidates = StartupStage.Run(log, "Dungeon item candidates", () => itemResources.DungeonDropItems);
@@ -651,13 +707,25 @@ internal static class ServerRuntime
                     new SpringTreasureDropPolicy(itemResources.SpringTreasureAvatars, itemResources.Items.Get(490705287),
                         () => promotions().Activities.Any(activity => activity.Availability == PromotionAvailability.Active &&
                             activity.Configuration.Rules.Scope == new PromotionScope("spring-2020", "replica-1", "v1", "default", "package"))));
+            string? configuredTayberrsDrops = Environment.GetEnvironmentVariable("DFO_TAYBERRS_DROP_RULES");
+            var tayberrsDropRules = string.IsNullOrWhiteSpace(configuredTayberrsDrops)
+                ? new TayberrsDropRules()
+                : System.Text.Json.JsonSerializer.Deserialize<TayberrsDropRules>(configuredTayberrsDrops,
+                    new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+                    ?? throw new InvalidDataException("DFO_TAYBERRS_DROP_RULES 不能为空对象");
+            var tayberrsDrops = new TayberrsDropPolicy(tayberrsDropRules, itemResources.Items.Get);
             var resourceDrops = new DungeonResourceDropPolicy(dropRules, dropCandidates, drops.Get, itemResources.Items.Get,
                 specialDrops, amplificationDrops, materialDrops, harlemEpics, abyssBonuses,
                 new SleepyHollowMaterialDropPolicy(SleepyHollowRewardCatalog.Load(dungeonCatalog, rooms), itemResources.Items.Get),hopeRewards,dimensionRewards,dropControl.Settings,legacyHell,riftEpics,
                 regional: new PandemoniumRegionalDropPolicy(dungeonCatalog.Get, itemResources.Items.Get, specialDrops),
-                assaultMaterials: new AssaultMaterialDropPolicy(assaultMode, itemResources.Items.Get));
+                assaultMaterials: new AssaultMaterialDropPolicy(assaultMode, itemResources.Items.Get),
+                epicRoadSimulated: epicRoad2019Enabled
+                    ? new EpicRoad2019SimulatedDropPolicy(dawnEpicPool, options.EpicRoad2019SimulatedDropsEnabled, harlemEpics.Super
+                        ?? throw new InvalidDataException("超星河隐藏领主缺少 area54/list5 超界史诗池")) : null,
+                tayberrs: tayberrsDrops, carbonCrystal: new CarbonCrystalDropPolicy(itemResources.Items.Get));
             dropControl.Inspect = new DungeonDropInspection(dungeonCatalog, rooms, resourceDrops, dropControl.Settings).Query;
-            passiveDrops = new(dungeonCatalog.Get, itemResources.Items.Get, DungeonDropRuleCatalog.LoadObjects(pvf), dropCandidates, amplificationDrops);
+            passiveDrops = new(dungeonCatalog.Get, itemResources.Items.Get, DungeonDropRuleCatalog.LoadObjects(pvf), dropCandidates, amplificationDrops,
+                dropControl.Settings);
             int epicPermille = 1000;
             string? fragmentRate = Environment.GetEnvironmentVariable("DFO_HELL_EPIC_FRAGMENT_PERMILLE");
             if (fragmentRate is not null && (!int.TryParse(fragmentRate, out epicPermille) || epicPermille is < 0 or > 1000))
@@ -676,12 +744,24 @@ internal static class ServerRuntime
                 log.Write("startup", new { Stage = "Epic piece shop", State = "complete", shopRules.NpcId,
                     shopRules.AppearancePercent, Override = appearance is not null });
             }
-            var hellRewards = DungeonHellDropRules.TryLoad(pvf) is { } hellDropRules ? new DungeonHellRewardPolicy(hellDropRules, dropCandidates, epicPool, epicPermille) : null;
+            var hellRewards = DungeonHellDropRules.TryLoad(pvf) is { } hellDropRules ? new DungeonHellRewardPolicy(hellDropRules, dropCandidates, epicPool, epicPermille, itemResources.EpicPieceBonusDrops.MaximumBonus) : null;
             Func<DungeonPlannedMonster, DungeonDropGenerationPlan> PrepareDrops(DungeonEntryPlan entry) => resourceDrops.PrepareEntry(entry, hellRewards);
+            if (!itemResources.EpicPieceBonusDrops.Available || !itemResources.EpicPieceBonusDrops.MissingItems.IsEmpty)
+                log.Write("resource_warning", new { Stage = "Epic piece bonus sources", Source = EpicPieceBonusDropCatalog.Path,
+                    itemResources.EpicPieceBonusDrops.Available, itemResources.EpicPieceBonusDrops.MissingItems });
+            log.Write("startup", new { Stage = "Epic piece bonus sources", State = "complete", Source = EpicPieceBonusDropCatalog.Path,
+                Equipment = itemResources.EpicPieceBonusDrops.Equipment.Count, Stackable = itemResources.EpicPieceBonusDrops.Stackable.Count,
+                itemResources.EpicPieceBonusDrops.MaximumBonus });
             log.Write("dungeon_drop_policy", new { Rule = DungeonResourceDropPolicy.Rule,
+                EpicRoadSimulatedEnabled = epicRoad2019Enabled && options.EpicRoad2019SimulatedDropsEnabled,
+                EpicRoadSimulatedRule = EpicRoad2019SimulatedDropPolicy.Rule,
+                EpicRoadHiddenBossRule = epicRoad2019Enabled ? EpicRoad2019SimulatedDropPolicy.HiddenRule : null,
                 EquipmentWeights = "current_pvf_creation_rate", Retained = DungeonResourceDropPolicy.RetainedFields,
                 RegionalMaterialRule = PandemoniumRegionalDropPolicy.Rule, RegionalCardSource = DungeonSpecialDropCatalog.CardPath,
                 SleepyHollowMaterialRule = SleepyHollowMaterialDropPolicy.Rule,
+                CarbonCrystalRule = CarbonCrystalDropPolicy.Rule,
+                CarbonCrystalPermille = CarbonCrystalDropPolicy.DefaultPermille,
+                CarbonCrystalCount = CarbonCrystalDropPolicy.DefaultCount,
                 FifthProbabilityRows = dropRules.ProbabilityRows.Count(row => row.Values[4] != 0),
                 HellEpicRule = HarlemHellEpicDropPolicy.Rule, HellEpicSource = DungeonHellEpicCatalog.Path,
                 HellEpicArea = HarlemHellEpicDropPolicy.Area, NormalEpicList = HarlemHellEpicDropPolicy.NormalList,
@@ -720,14 +800,16 @@ internal static class ServerRuntime
                 evildomWar: warCatalog, lukeRaid: lukeRun, lukeLifecycle: repository, antonRaid: antonRun, preyRaid: preyRun,
                 evildomRewards: warPolicy, evildomRewardStore: repository, imperialArena: imperialArenaProjection, fiendwarRaid: fiendwarRun, raidStart: raidStart,
                 strongwayRoute: strongwayRoutes, strongwayMatching: strongwayMatching,
-                strongwayProjection: strongwayProjection, strongwayRewards: strongwayRewards, altarProjectionBusy: SqliteBusyRetry.IsBusy);
+                strongwayProjection: strongwayProjection, strongwayRewards: strongwayRewards, altarProjectionBusy: SqliteBusyRetry.IsBusy,
+                secretShop: secretShop);
             strongwayProjection.Depart = (context, holds) => ((DungeonHandler)dungeon).DepartStrongway2019Async(context, holds);
             strongwayHandler = new(strongwayMatching, strongwayProjection,
                 new Strongway2019MatchingEntryService(strongwayMatching, parties, repository, repository, clock),
                 dungeonCatalog, rooms, drops, itemResources.Items, itemResources.EpicPieces, strongwayCatalog, clock,
                 context => ((DungeonHandler)dungeon).DepartStrongway2019Async(context), PrepareDrops, online: online);
             var cardPrices = DungeonCardPriceCatalog.Load(pvf);
-            var tayberrsRewards = new Game.Dungeons.TayberrsCardRewardPolicy(cardPrices, itemResources.Boosters, itemResources.Items);
+            var clearRewardLimits = ticketRewardLimits ?? ClearRewardLimitCatalog.Load(pvf);
+            var tayberrsRewards = new Game.Dungeons.TayberrsCardRewardPolicy(cardPrices, itemResources.Boosters, itemResources.Items, clearRewardLimits);
             settlement = new DungeonSettlementHandler(log, dungeonCatalog, DungeonClearExperienceCatalog.Load(pvf), growth, projection,
                 rooms, drops, itemResources.Items, levelProjection, itemResources.EpicPieces,
                 new Game.Dungeons.DungeonCardRewardPolicy(dropRules, dropCandidates, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces,
@@ -751,7 +833,6 @@ internal static class ServerRuntime
             new Game.Characters.LevelUpTicketService(itemResources.Items,growth,clock,characters,learning),
             quests,levelUpProjection,log);
         var classChange = new Game.Characters.ClassChangeService(itemResources.Items, characters, learning, quests);
-        var npcFavor = new NpcFavorCatalog(pvf);
         var battlePassSeason = options.BattlePassSeasonKey;
         var battlePassStart = options.BattlePassSeasonStart;
         if (battlePassSeason is null)
@@ -762,7 +843,7 @@ internal static class ServerRuntime
                     (clock ?? TimeProvider.System).GetUtcNow());
                 battlePassSeason = defaults.SeasonKey; battlePassStart = defaults.Start;
             }
-            catch (Exception error) when (error is IOException or UnauthorizedAccessException or System.Text.Json.JsonException or System.Data.Common.DbException)
+            catch (Exception error) when (error is InvalidDataException or IOException or UnauthorizedAccessException or System.Text.Json.JsonException or System.Data.Common.DbException)
             {
                 log.Write("battle_pass_default_unavailable", new { Error = error.Message });
             }
@@ -778,19 +859,19 @@ internal static class ServerRuntime
                 if (battlePassSeason is null || battlePassCatalog is null)
                     throw new InvalidDataException("任务周期需要显式battle-pass-season");
                 var battlePassMissionPolicy = new Game.BattlePass.BattlePassMissionPolicy(battlePassSeason, start, battlePassCatalog,
-                    events.IsBattlePassActive, options.BattlePassSeasonKey is not null);
+                    events.IsBattlePassActive, true);
                 repository.ConfigureBattlePassMissions(battlePassMissionPolicy, clock);
-                events.ConfigureBattlePass(battlePassMissionPolicy.Start, battlePassMissionPolicy.End, options.BattlePassSeasonKey is not null);
+                events.ConfigureBattlePass(battlePassMissionPolicy.Start, battlePassMissionPolicy.End, true);
                 projection.BattlePassMissions = battlePassMissionPolicy;
             }
             if (battlePassSeason is not null)
             {
                 if (battlePassStart is null) events.ConfigureBattlePass(DateTimeOffset.MinValue, DateTimeOffset.MaxValue, true, missionsPrepared: false);
-                repository.ConfigureBattlePassEvents(events.IsBattlePassActive, options.BattlePassSeasonKey is not null, clock);
+                repository.ConfigureBattlePassEvents(events.IsBattlePassActive, true, clock);
             }
         }
         catch (Exception error) when (options.BattlePassSeasonKey is null &&
-            error is IOException or UnauthorizedAccessException or System.Text.Json.JsonException or System.Data.Common.DbException)
+            error is InvalidDataException or IOException or UnauthorizedAccessException or System.Text.Json.JsonException or System.Data.Common.DbException)
         {
             battlePassSeason = null; battlePassStart = null; battlePassCatalog = null; battlePassProjection = null;
             log.Write("battle_pass_default_unavailable", new { Error = error.Message });
@@ -799,6 +880,7 @@ internal static class ServerRuntime
         var battlePassRewards = battlePassCatalog is null ? null : new Game.BattlePass.BattlePassRewardService(
             battlePassCatalog, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, clock,
             events.IsBattlePassActive);
+        var cargoHandler = new CargoHandler(new InventoryCargoService(itemResources.Items, itemResources.Cargo, itemResources.GoldLimits, clock), inventoryProjection);
         IGameCommandModule[] modules =
         [
             new SessionHandler(projection, log),
@@ -830,7 +912,7 @@ internal static class ServerRuntime
             new SkillHandler(learning, log, inventoryProjection),
             new SkillSwitchInventoryHandler(skillSwitchInventory, log),
             new TownHandler(projection, log, tagEvildomProjection, fiendwarRun,
-                dungeon is DungeonHandler formalDungeon ? formalDungeon.EnterFiendwarAreaAsync : null),
+                dungeon is DungeonHandler formalDungeon ? formalDungeon.EnterFiendwarAreaAsync : null, preyParties: parties),
             new TeleportHandler(new Game.Town.TeleportService(towns, itemResources.Teleports, itemResources.Items.Get, clock,
                 options.TeleportPotionGates, guildParameters.TeleportCost, privilege: itemResources.PrivilegeServices), projection, inventoryProjection, presence, log, guildTeleportHandler),
             guildTeleportHandler,
@@ -858,20 +940,24 @@ internal static class ServerRuntime
             rentalHandler,
             new CurrencyHandler(new Game.Currency.CurrencyService(itemResources.GoldLimits), inventoryProjection),
             new InventoryExpansionHandler(new InventoryExpansionService(itemResources.Items, clock), inventoryProjection, log),
-            new CargoHandler(new InventoryCargoService(itemResources.Items, itemResources.Cargo, itemResources.GoldLimits, clock), inventoryProjection),
+            cargoHandler,
             new ShopHandler(
-                new InventoryShopService(itemResources.Items, itemResources.Shops, itemResources.GoldLimits, itemResources.EpicPieces, clock, serverItemRules),
+                new InventoryShopService(itemResources.Items, itemResources.Shops, itemResources.GoldLimits, itemResources.EpicPieces, clock, serverItemRules, epicRoadAvailable: epicRoad2019Enabled),
                 cashShop,
                 inventoryProjection, log,
                 new Game.Marriage.MarriageShopService(itemResources.Items, itemResources.Shops,
                     itemResources.GoldLimits, itemResources.EpicPieces, marriageCatalog, clock), marriageProjection, promotions: cashPromotions, promotionPage: promotionPage, nativePromotionTown: promotionPageService is null ? null : projection,
                 serverEvents: events, strongwayShops: itemResources.Shops,
-                battlePassCertificateChanged: battlePassProjection is null ? null : battlePassProjection.MissionStateAsync),
+                battlePassCertificateChanged: battlePassProjection is null ? null : battlePassProjection.MissionStateAsync, renameTown: projection),
             new RepairHandler(new InventoryRepairService(itemResources.Items, itemResources.Repair, towns, clock), inventoryProjection, log),
+            new CharmChargingHandler(new InventoryCharmChargingService(itemResources.Items.Get,
+                itemResources.Items.ActionConsumable, clock), inventoryProjection, log),
             new RandomOptionHandler(new InventoryRandomOptionService(itemResources.Items, itemResources.RandomOptions, clock: clock), inventoryProjection, log,
                 new EquipmentResealService(itemResources.Items, itemResources.EquipmentReseals, itemResources.EpicPieces, clock)),
             new TextureChangeHandler(new InventoryTextureChangeService(itemResources.Items, itemResources.TextureChanges,
                 itemResources.EpicPieces, clock), inventoryProjection, log),
+            new TitleChangeHandler(new InventoryTitleChangeService(itemResources.Items, itemResources.TitleChanges, clock),
+                inventoryProjection, log),
             new DarkRevelationHandler(new InventoryDarkRevelationService(itemResources.DarkRevelations,
                 itemResources.EpicPieces, clock), itemResources.DarkRevelations, inventoryProjection, log),
             new EchonEquipmentHandler(new InventoryEchonEquipmentService(itemResources.Items, itemResources.Echon,
@@ -913,8 +999,10 @@ internal static class ServerRuntime
             new AmplificationHandler(new InventoryAmplificationService(itemResources.Items, itemResources.Amplifications,
                 itemResources.Enhancements, clock), inventoryProjection, log),
             new CreatureSkinHandler(skinService, inventoryProjection, log),
+            new EquipmentEffectHandler(new InventoryEquipmentEffectService(itemResources.Items, clock), inventoryProjection, log),
             new CreatureEggHandler(new InventoryCreatureEggService(itemResources.CreatureEggs, itemResources.Items, clock), inventoryProjection, log),
             creatureHandler,
+            new CreatureSealHandler(new Game.Creatures.CreatureSealService(itemResources.Items, itemResources.EpicPieces, clock), inventoryProjection, log),
             new DisjointHandler(new InventoryDisjointService(itemResources.Items, itemResources.Disjoint, itemResources.GoldLimits, itemResources.EpicPieces, expertJobs: expertJobs, clock: clock), inventoryProjection),
             new ExpertJobHandler(quests, expertJobs, itemResources.Items,
                 itemResources.GoldLimits, itemResources.EpicPieces, inventoryProjection, log, presence, expertStores, enchantmentService, machineDisassembly,
@@ -924,7 +1012,7 @@ internal static class ServerRuntime
             new EpicBookHandler(new EpicPieceCraftService(itemResources.Items, itemResources.EpicPieces, itemResources.GoldLimits), inventoryProjection),
             // 原生史诗交换：CMD1569，配置 etc/epicitemexchange.etc，回执同 opcode 0x621。
             new EpicExchangeHandler(new EpicExchangeService(itemResources.EpicExchanges, itemResources.Items,
-                itemResources.EpicPieces, itemResources.GoldLimits), inventoryProjection),
+                itemResources.EpicPieces, itemResources.GoldLimits, itemResources.Boosters), inventoryProjection),
             new ChronicleEnchantHandler(new InventoryChronicleEnchantService(itemResources.Items, itemResources.ChronicleEnchants,
                 itemResources.Disjoint, itemResources.AmplifyUpgrades, itemResources.GoldLimits, itemResources.EpicPieces, clock: clock), inventoryProjection, log),
             // 设计图升级：CMD271，材料与产物来自设计图自身的 [emancipate group]。
@@ -939,7 +1027,7 @@ internal static class ServerRuntime
             new VendingHandler(new InventoryVendingService(itemResources.VendingMachines, itemResources.Items, itemResources.GoldLimits,
                 itemResources.EpicPieces, itemResources.Contracts, clock), inventoryProjection, log),
             new MagicBoxHandler(new InventoryMagicBoxService(itemResources.Items, itemResources.MagicBoxes, itemResources.GoldLimits, itemResources.EpicPieces,
-                contracts: itemResources.Contracts, debugSettings: debugSettings, clock: clock, events: events), inventoryProjection),
+                contracts: itemResources.Contracts, debugSettings: debugSettings, clock: clock, events: events), inventoryProjection, online, log),
             new DungeonSelectionHandler(projection, log, tutorials, selectionDungeons, partyDungeons, tagEvildomProjection, tagEvildomRun, lukeRun, antonRun, imperialArenaProjection, preyRun, fiendwarRun),
             new OperationHopeHandler(operationHope,selectionDungeons,log),
             new AssaultModeHandler(log, assaultMode, itemResources.EpicPieces, clock, itemResources.Items, itemResources.GoldLimits),
@@ -964,8 +1052,9 @@ internal static class ServerRuntime
                 new InventoryEquipmentPeriodChangeService(itemResources.Items, towns, clock), avatarPresetHandler, guildEconomyHandler, guildExperienceHandler,
                 new InventoryNpcFavorService(itemResources.Items.NpcFavorItem, npcFavor, towns, clock), marriageHandler,
                 new DimensionEntryTicketService(itemResources.Items, clock),
-                incounts is null ? null : new DungeonIncountTicketHandler(new Game.Dungeons.DungeonIncountTicketService(itemResources.Items, incounts, towns, clock), repository, inventoryProjection, log),
-                guildDungeonScrollHandler),
+                incounts is null ? null : new DungeonIncountTicketHandler(new Game.Dungeons.DungeonIncountTicketService(itemResources.Items, incounts, towns, clock,
+                    ticketRewardLimits), repository, inventoryProjection, log),
+                guildDungeonScrollHandler, cargoHandler),
             new CreatureTransportHandler(new Game.Creatures.CreatureTransportService(itemResources.Items.Get,
                 itemResources.Items.ActionConsumable, itemResources.Creatures, repository, () => creatureTransportMailPolicy, clock), inventoryProjection, log,
                 new EquipmentTransportService(itemResources.Items.Get, itemResources.Items.ActionConsumable,
@@ -979,7 +1068,7 @@ internal static class ServerRuntime
             marriageHandler,
             new AgitWarHandler(),
             raidHandler,
-            new RaidCombatHandler(repository, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, inventoryProjection, log, clock, repository),
+            new RaidCombatHandler(repository, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, inventoryProjection, log, clock, repository, projection),
             // 公会：创建窗口的两次查重（CMD 0x9C / 0x9D）、介绍校验（0x2E3）与建会认证链路（0x2E5 / 0x2E6 / 0x2E7）。
             // 顺序模式下创建者可能已经下线：接受认证时用离线账号租约提交，因此这里显式注入账号 owner 表。
             new GuildHandler(new Game.Guild.GuildDirectory(repository, guildParameters), guildPermits, online, owners, log, guildProjection, guildInvitations),
@@ -996,7 +1085,7 @@ internal static class ServerRuntime
             new GuildAppearanceHandler(new Game.Guild.GuildAppearanceService(repository,
                 new GameWorld.Guilds.GuildAppearanceCatalog(pvf), guildManagement), log),
             new AuctionHandler(itemResources.Items, auctions, inventoryProjection, auctionProbe.NextSearch, auctionProbe.NextAverage,
-                auctionProbe.NextMyList, log),
+                auctionProbe.NextMyList, log, online),
             new ClientNoticeHandler(log),
             // 聊天：0x0011 入站按 CP936 解析；普通/公会/悄悄话投 0x0C（正文带 CP936 文本，客户端按长度读取），
             // 两种喇叭投已实测可见的 0x76 喇叭页签（见 Docs/模块/聊天.md）。
@@ -1007,6 +1096,9 @@ internal static class ServerRuntime
                     itemResources.CharacterInvestmentMetadata, itemResources.CollectBoxes, itemResources.RandomOptions),
                     new Game.Characters.CombatPowerService(itemResources.Items, itemResources.CharacterInvestmentMetadata, stats)), chatEmoticons,
                 promotionPage: promotionPage, learning: learning)
+#if DEBUG
+                { DebugDungeonKill = dungeon is DungeonHandler killHandler ? killHandler.DebugKillAsync : null }
+#endif
         ];
         foreach (var module in modules)
             module.Register(commands);
@@ -1023,14 +1115,17 @@ internal static class ServerRuntime
         settlement?.Register(commands);
         questReplay?.Register(commands);
         if (epicPieceShop is not null) new EpicPieceShopHandler(epicPieceShop, inventoryProjection, log).Register(commands);
+        if (secretShop is not null) new SecretShopHandler(secretShop, inventoryProjection, log).Register(commands);
         if (pcRoomTimePoint is not null) new PcRoomTimePointHandler(log).Register(commands);
         if (dailyAttendance is not null) new DailyAttendanceHandler(log).Register(commands);
+        new ReturningAdventurerHandler(inventoryProjection, log).Register(commands);
         if (weeklyAttendance is not null) new WeeklyAttendanceHandler().Register(commands);
+        if (monsterMockBattle is not null) new MonsterMockBattleHandler(log).Register(commands);
         commands.Seal();
         log.Write("startup", new { Stage = "Command registration", State = "complete", Commands = commands.Count });
         var login = new LoginHandler(options, owners, accounts, channels, log);
         var native = new NativeChannel(options, online, log, new NpcFavorAppearanceService(npcFavor));
-        var game = new GameProtocolHandler(options, login, commands, repository, towns, online, projection, log, createActivity, mailboxProjection, quests, debugSettings, adventureProjection,questEffects,itemResources.Contracts,stats,inventoryProjection,clock,guildProjection,passiveDrops,devil,creatures,creatureProjection,questStages,itemResources.Boosters,native,itemResources.Items,itemResources.GoldLimits,itemResources.EpicPieces,experienceBonuses,weaponSkinProjection,expertStores,presence,incounts: incounts,levels: levelProjection,social: social,parties: parties,operationHope: operationHope,prepareDungeon: dungeon is DungeonHandler formal ? formal.PreparePartyContext : null,guildManagement: guildManagementProjection,guildInvitations: guildInvitations,guildCargo: guildCargoProjection,guildEconomy: guildEconomyProjection,guildTeleport: guildTeleportHandler,guildTeleportService: guildTeleportService,guildNpcs: guildNpcProjection,enableLukeRaidStart: lukeStart is not null,arena: arena,guildDungeons: guildDungeons,pvpRatings: pvpRatings,tagEvildomRun: tagEvildomRun,imperialArena: imperialArenaProjection, monsterBattleLevels: monsterBattleLevels.Settings, monsterAi: monsterAi.Settings, itemCycles: serverItemCycles,lukeRejoin: lukeRejoin,guildNpcBenefits: guildNpcBenefitService, trade: tradeHandler, pvpMissions: pvpMissions, missionBook: pvpMissionBook, serverEvents: events, promotionStore: repository, settingsProjection: settingsProjection, consumables: itemResources.RecoveryConsumables, springTreasure: springTreasure, strongway2019: strongwayCatalog, strongway2019AntiEvil: strongwayAntiEvil, strongwayMatching: strongwayMatching, strongwayProjection: strongwayProjection, pcRoom: itemResources.PcRoom, pcRoomTimePoint: pcRoomTimePoint, riftNamedEpics: riftNamedEpics, endlessAdventure: endlessAdventure, dailyAttendance: dailyAttendance, weeklyAttendance: weeklyAttendance);
+        var game = new GameProtocolHandler(options, login, commands, repository, towns, online, projection, log, createActivity, mailboxProjection, quests, debugSettings, adventureProjection,questEffects,itemResources.Contracts,stats,inventoryProjection,clock,guildProjection,passiveDrops,devil,creatures,creatureProjection,questStages,itemResources.Boosters,native,itemResources.Items,itemResources.GoldLimits,itemResources.EpicPieces,experienceBonuses,weaponSkinProjection,expertStores,presence,incounts: incounts,levels: levelProjection,social: social,parties: parties,operationHope: operationHope,prepareDungeon: dungeon is DungeonHandler formal ? formal.PreparePartyContext : null,guildManagement: guildManagementProjection,guildInvitations: guildInvitations,guildCargo: guildCargoProjection,guildEconomy: guildEconomyProjection,guildTeleport: guildTeleportHandler,guildTeleportService: guildTeleportService,guildNpcs: guildNpcProjection,enableLukeRaidStart: lukeStart is not null,arena: arena,guildDungeons: guildDungeons,pvpRatings: pvpRatings,tagEvildomRun: tagEvildomRun,imperialArena: imperialArenaProjection, monsterBattleLevels: monsterBattleLevels.Settings, monsterAi: monsterAi.Settings, itemCycles: serverItemCycles,lukeRejoin: lukeRejoin,guildNpcBenefits: guildNpcBenefitService, trade: tradeHandler, pvpMissions: pvpMissions, missionBook: pvpMissionBook, serverEvents: events, promotionStore: repository, settingsProjection: settingsProjection, consumables: itemResources.RecoveryConsumables, springTreasure: springTreasure, strongway2019: strongwayCatalog, strongway2019AntiEvil: strongwayAntiEvil, strongwayMatching: strongwayMatching, strongwayProjection: strongwayProjection, pcRoom: itemResources.PcRoom, pcRoomTimePoint: pcRoomTimePoint, riftNamedEpics: riftNamedEpics, endlessAdventure: endlessAdventure, dailyAttendance: dailyAttendance, weeklyAttendance: weeklyAttendance, monsterMockBattle: monsterMockBattle, epicPieceBonuses: itemResources.EpicPieceBonusDrops, dropControl: dropControl.Settings);
         if (options.EnableHostedDungeonEligibility)
             game.AttachHostedDungeonEligibility(new HostedDungeonEligibilityCoordinator(
                 new HostedDungeonEligibilityOptions
@@ -1047,7 +1142,7 @@ internal static class ServerRuntime
         log.Write("startup", new { Stage = "Common map geometry capability", State = "complete", Maps = geometrySignatures.Count });
         Func<PacketCapture?, CancellationToken, Task> gmWeb = (capture, stop) => GmWebServer.RunWithRechargeAsync(options.GmWebPort, options.RechargeWebPort,
             new GmWebData(options, startedAt, online, new GmAccountDirectory(Path.Combine(options.DataDirectory, "game.db")),
-                DevelopmentCommand, mailbox, itemResources.GoldLimits, new Network.Management.GmItemExtras(pvf, null) { AvatarLog = message => log.Write("gm-avatar", new { Message = message }) }, new GmAudit(Path.Combine(options.DataDirectory, "gm-audit.jsonl")), raidWindows,
+                DevelopmentCommand, mailbox, itemResources.GoldLimits, new Network.Management.GmItemExtras(pvf, null) { AvatarLog = message => log.Write("gm-avatar", new { Message = message }) }, new GmAudit(Path.Combine(options.DataDirectory, "gm-audit.jsonl"), options.FileLogsEnabled), raidWindows,
                 new GameWorld.Events.EventResourceCatalog(pvf), promotions, promotionConfiguration), stop, capture, options,
                 available => { rechargeWebAvailable = available; webReady.TrySetResult(); },
                 error => log.Write("client_web_failed", new { Address = options.ListenAddress, Port = options.RechargeWebPort,

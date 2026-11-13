@@ -95,7 +95,7 @@ internal static class RaidCombatPackets
         return stream.ToArray();
     }
 
-    // 015BCB50：op1无尾部，op5只读真实副本编号。
+    // 015BCB50：op1无尾部，触发原生五秒警报及音效；op5只读真实副本编号。
     internal static byte[] PreyStatus(int operation, int? dungeon = null)
     {
         if (operation == 1 && dungeon is null) return [1, 0, 0, 0];
@@ -103,6 +103,17 @@ internal static class RaidCombatPackets
         byte[] body = new byte[8];
         BinaryPrimitives.WriteInt32LittleEndian(body, operation);
         BinaryPrimitives.WriteInt32LittleEndian(body.AsSpan(4), dungeon.Value);
+        return body;
+    }
+
+    internal static byte[] PreyMarker(byte group, int target)
+    {
+        if (group > 2 || target != 0 && target is not (>= 301 and <= 320)) throw new ArgumentOutOfRangeException(nameof(target));
+        byte[] body = new byte[16];
+        BinaryPrimitives.WriteUInt32LittleEndian(body, 4);
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(4), target == 0 ? 2u : 1u);
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(8), group);
+        BinaryPrimitives.WriteInt32LittleEndian(body.AsSpan(12), target);
         return body;
     }
     // Luke专用准备层：02386120按1/4/4/4读取，01DD06DE忽略中间列并保存now+seconds。
