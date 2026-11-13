@@ -391,6 +391,11 @@ internal static class SqliteMigrations
         new(209, "角色键位与本地蓄电池208兼容", UpgradeFatigueBattery209),
         new(210, "冒险团好友最近在线时刻", static (db, tx) => Execute(db, tx,
             SocialSchema.PresenceSql.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal))),
+        new(211, "账号已看史诗制作等提示", static (db, tx) =>
+        {
+            if (!KnownTable(db, tx, "account_seen_notices", SeenNoticesSchema))
+                Execute(db, tx, SeenNoticesSchema);
+        }),
     ];
 
     static void UpgradeFatigueBattery209(SqliteConnection db, SqliteTransaction tx)
@@ -2706,6 +2711,7 @@ internal static class SqliteMigrations
                 throw new InvalidDataException("冒险团好友在线历史表的约束或外键不是已确认结构");
         }
         foreach (var (table,expected) in new[] { (SocialSchema.GroupsTable,SocialSchema.GroupsSql),
+            ("account_seen_notices",SeenNoticesSchema),
             ("character_hotkey_settings",CharacterHotkeySettingsSchema),
             ("character_quest_completion_receipts",QuestCompletionSchemaV180),
             ("character_epic_wishes",EpicWishSchema.Definition),
@@ -3087,6 +3093,13 @@ internal static class SqliteMigrations
         SkillSwitchInventoryStateSchema + SkillSwitchInventoryItemsSchema;
 
     // 设置按账号与角色分别保存原始字节；缺省不建行，不改角色资产与 revision。
+    internal const string SeenNoticesSchema = """
+        CREATE TABLE account_seen_notices(
+            account TEXT NOT NULL REFERENCES accounts(account_id),
+            notice_id INTEGER NOT NULL CHECK(notice_id BETWEEN 0 AND 127),
+            PRIMARY KEY(account,notice_id));
+        """;
+
     internal const string ClientSettingsSchema = """
         CREATE TABLE account_client_settings(
             account TEXT NOT NULL PRIMARY KEY REFERENCES accounts(account_id),

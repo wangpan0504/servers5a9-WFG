@@ -254,6 +254,7 @@ internal static partial class SettingsProtocolTests
         readonly Dictionary<ushort, ImmutableArray<byte>> roleMain = [];
         readonly Dictionary<ushort, ImmutableArray<byte>> hotkeys = [];
         ImmutableArray<byte> quickChat0, quickChat1;
+        public bool SaveSeenNotice(AccountOwners.Lease owner, byte id) => throw new NotSupportedException("此设置替身不保存提示");
         public ClientSettingsSnapshot Load(AccountOwners.Lease owner, ushort id) =>
             new(main, characters.GetValueOrDefault(id), roleMain.GetValueOrDefault(id), hotkeys.GetValueOrDefault(id), quickChat0, quickChat1);
         public bool SaveQuickChat(AccountOwners.Lease owner, byte bank, ImmutableArray<byte> text)

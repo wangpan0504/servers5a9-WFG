@@ -6,6 +6,8 @@ namespace DfoServer.Testing;
 
 internal static partial class ClientSettingsTcpTests
 {
+    // 保存/断线用例只验证设置，不让真实秒边界改变最近在线时间快照。
+    sealed class SettingsClock(DateTimeOffset now) : TimeProvider { public override DateTimeOffset GetUtcNow() => now; }
     const string HotkeyAccount = "keyowner";
     static readonly byte[] CommonKeys = "I01\t77\nI02\t55\nI03\t73\nI04\t58\nI05\t60\nC00\t134\nJ00\t134\nK02\t31\n"u8.ToArray();
     static readonly byte[] CreatorKeys = "I01\t134\nI02\t134\nI03\t134\nI04\t134\nC00\t77\nK02\t31\n"u8.ToArray();
@@ -25,7 +27,8 @@ internal static partial class ClientSettingsTcpTests
 
     static async Task RunMeasuredAsync(ServerOptions source, string root, TcpTestResources resources, ClientSettingsTimings timings)
     {
-        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "settings"), resources: resources);
+        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "settings"), resources: resources,
+            clock: new SettingsClock(DateTimeOffset.UtcNow));
         using (timings.Measure("initial-start"))
             await fixture.StartAsync();
         using var accountPhase = timings.Measure("account-persistence-and-rejection");

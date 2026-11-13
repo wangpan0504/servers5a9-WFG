@@ -6,6 +6,12 @@ namespace DfoServer.Network.Parsers;
 
 internal static class SettingsRequests
 {
+    public static byte SeenNotice(ReadOnlySpan<byte> body)
+    {
+        if (body.Length != 4 || BinaryPrimitives.ReadUInt32LittleEndian(body) >= 128)
+            throw new InvalidDataException("已看提示请求长度或编号无效");
+        return body[0];
+    }
     public static (bool Add, int NpcId) NpcBookmark(ReadOnlySpan<byte> body)
     {
         if (body.Length != 5 || body[0] > 1 || BinaryPrimitives.ReadInt32LittleEndian(body[1..]) <= 0)

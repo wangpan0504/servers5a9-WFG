@@ -6,6 +6,11 @@ namespace DfoServer.Game.Settings;
 internal sealed class ClientSettingsService(IClientSettingsStore store, DfoServer.GameWorld.Characters.CharacterEmotionCatalog? emotions = null,
     DfoServer.GameWorld.Quests.TitleCatalog? titles = null, DfoServer.GameWorld.Items.NpcFavorCatalog? npcs = null)
 {
+    public bool SaveSeenNotice(AccountOwners.Lease owner, byte id)
+    {
+        if (id >= 128) throw new InvalidDataException("提示编号超出客户端已看集合范围");
+        return store.SaveSeenNotice(owner, id);
+    }
     public const int GameOptionLength = 204;
     public const int CharacterOptionLength = 512;
     public const int QuickChatLength = 300;

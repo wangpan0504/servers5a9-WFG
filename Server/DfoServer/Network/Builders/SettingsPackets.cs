@@ -5,6 +5,13 @@ namespace DfoServer.Network.Builders;
 
 internal static class SettingsPackets
 {
+    public static byte[] SeenNotices(ImmutableArray<byte> ids)
+    {
+        if (ids.IsDefaultOrEmpty) return [0];
+        if (ids.Length > 128 || ids.Any(id => id >= 128) || ids.Distinct().Count() != ids.Length)
+            throw new InvalidDataException("已看提示列表编号无效或重复");
+        return [(byte)ids.Length, .. ids];
+    }
     public static byte[] NpcBookmarks(ImmutableArray<byte> entries)
     {
         if (entries.IsDefault) return new byte[4];
