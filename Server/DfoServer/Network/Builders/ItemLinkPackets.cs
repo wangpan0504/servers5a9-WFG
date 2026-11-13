@@ -180,7 +180,9 @@ internal static class ItemLinkPackets
         writer.Write(checked((uint)content.Text.Length));
         writer.Write(content.Text);
         WriteRecords(writer, content);
-        PacketEncoding.WriteString(writer, MegaphonePackets.Tag);
+        byte[] adventureTarget = MegaphonePackets.EncodeAdventureTarget(message.AdventureName);
+        writer.Write(checked((uint)adventureTarget.Length));
+        writer.Write(adventureTarget);
         return Result(content, NotiPacketType.MEGAPHONE_MSG_HYPER_LINK, stream.ToArray());
     }
 
