@@ -161,7 +161,8 @@ internal static class SocialTcpTests
                     alpha.Expect(0, 6, Build(w => w.Write(original)));
                 }
                 beta.Expect(1, 7, [1]); beta.Expect(0, 2);
-                Refresh(alpha, 1, accountOnline: false, characterOnline: false, accountAdventure: "TeamB");
+                Refresh(alpha, 1, accountOnline: false, characterOnline: false, accountAdventure: "TeamB",
+                    presence: slot == 1 ? "SocialB" : null);
                 if (slot == 1)
                 {
                     long observed = fixture.UtcNow.ToUnixTimeSeconds() - 7200;
@@ -173,7 +174,7 @@ internal static class SocialTcpTests
                 beta.Select(slot);
                 Bytes(beta.AccountFriendGroups, betaGroups, "换角登录1702恢复账号四组，不退回默认或其他账号配置");
                 Refresh(alpha, 1, characterOnline: slot == 0, accountAdventure: "TeamB",
-                    accountCharacter: slot == 0 ? "SocialB" : "SocialBAlt");
+                    accountCharacter: slot == 0 ? "SocialB" : "SocialBAlt", presence: slot == 0 ? "SocialB" : null);
                 That(slot == 0 ? beta.Id == original : beta.Id != original,
                     "换角使用真实不同Actor，冒险团好友仍只覆盖TeamB这一行");
                 beta.Barrier();
@@ -181,6 +182,7 @@ internal static class SocialTcpTests
             That(fixture.Query("SELECT count(*) FROM account_social_links") is [[2L]],
                 "换角不新增账号好友边，双方始终各一条冒险团关系");
         }
+        VerifyCharacterPresenceEvents(fixture);
         VerifyPartyDirectory(fixture);
         using (var rejected = Open(fixture, "groupsreject"))
         {
@@ -582,22 +584,81 @@ internal static class SocialTcpTests
             return body;
         }
     }
+    static void VerifyCharacterPresenceEvents(TcpTestFixture fixture)
+    {
+        using var observer = Open(fixture, "presencewatch");
+        using var never = Open(fixture, "presencenever");
+        observer.Create("PresWatch"); never.Create("PresNever");
+        observer.Select();
+        var states = new Dictionary<string, bool> { ["PresencePeer"] = true, ["PresNever"] = false };
+        using (var peer = Open(fixture, "presencepeer"))
+        {
+            peer.Create("PresencePeer"); peer.Select();
+            observer.Barrier(); peer.Barrier();
+            foreach (var target in new[] { (peer.Id, Name: "PresencePeer"), (never.Id, Name: "PresNever") })
+            {
+                observer.Send(290, Build(w => { w.Write(target.Id); w.Write((byte)2); WriteName(w, target.Name); }));
+                observer.Expect(1, 290, [1]);
+                Refresh(observer, target.Id == peer.Id ? 1 : 2,
+                    characterStates: target.Id == peer.Id ? null : states);
+            }
+            observer.Send(1684); observer.Expect(0, 1702); Refresh(observer, 2, characterStates: states);
+            peer.Send(7); peer.Expect(1, 7, [1]); peer.Expect(0, 2);
+            states["PresencePeer"] = false;
+            Refresh(observer, 2, characterOnline: false, presence: "PresencePeer", characterStates: states);
+            observer.Send(7); observer.Expect(1, 7, [1]); observer.Expect(0, 2);
+            observer.Select();
+            VerifyCharacterPresence(observer.CharacterFriends, 2, states: states);
+            That(fixture.Query("SELECT count(*) FROM account_social_presence WHERE account='presencenever'") is [[0L]],
+                "从未就绪的好友没有最近在线记录，重登入城与已离线好友一样仅回放273，不发送退出提示");
+            observer.Barrier();
+            peer.Select(); states["PresencePeer"] = true;
+            Refresh(observer, 2, presence: "PresencePeer", characterStates: states);
+            observer.Barrier(); peer.Barrier();
+        }
+        states["PresencePeer"] = false;
+        Refresh(observer, 2, characterOnline: false, presence: "PresencePeer", characterStates: states);
+        observer.Barrier();
+    }
     static byte[] Refresh(TcpPeer peer, int count, byte[]? requests = null, bool accountOnline = true,
         bool characterOnline = true, string? accountAdventure = null, string? accountCharacter = null,
-        long? expectedOfflineElapsedSeconds = null)
+        long? expectedOfflineElapsedSeconds = null, string? presence = null,
+        IReadOnlyDictionary<string, bool>? characterStates = null)
     {
         var body = peer.Expect(0, 273).Body;
-        That(U32(body, 0) == 0 && U32(body, 4) == count, "好友全量subcommand及真实行数");
-        for (int i = 0; i < count; i++)
-        {
-            var online = peer.Expect(0, 274).Body;
-            That(U16(online) == (characterOnline ? 10 : 0), "角色好友按当前角色在线状态下发真实频道，换角不能误判原角色在线");
-        }
+        VerifyCharacterPresence(body, count, characterOnline, characterStates);
+        if (presence is not null)
+            peer.Expect(0, 274, Build(w =>
+            {
+                w.Write(characterOnline ? (ushort)10 : (ushort)0); w.Write((byte)2);
+                WriteName(w, presence); w.Write(characterOnline ? (byte)1 : (byte)0); w.Write((byte)0);
+            }));
         VerifyAccountPresence(peer.Expect(0, 1376).Body, accountOnline, accountAdventure, accountCharacter,
             expectedOfflineElapsedSeconds);
         var receivedRequests = peer.Expect(0, 1377).Body;
         if (requests is not null) That(receivedRequests.AsSpan().SequenceEqual(requests), "申请方向、发起方冒险团、留言和时间按原生通知中心协议投递");
         return body;
+    }
+    static void VerifyCharacterPresence(byte[] body, int count, bool online = true,
+        IReadOnlyDictionary<string, bool>? states = null)
+    {
+        That(U32(body, 0) == 0 && U32(body, 4) == count, "好友全量subcommand及真实行数");
+        using var stream = new MemoryStream(body, 8, body.Length - 8);
+        using var reader = new BinaryReader(stream);
+        var names = new HashSet<string>();
+        for (int i = 0; i < count; i++)
+        {
+            byte server = reader.ReadByte(); ushort channel = reader.ReadUInt16();
+            string name = CharacterName.Encoding.GetString(reader.ReadBytes(reader.ReadInt32()));
+            That(names.Add(name) && (states is null || states.ContainsKey(name)), "273每个角色好友仅一行，不以目标事件覆盖其他好友");
+            bool expectedOnline = states is null ? online : states[name];
+            That(server == 2 && channel == (expectedOnline ? 10 : 0),
+                "273自身按当前角色在线状态下发真实频道，换角不能误判原角色在线，不依赖274初始化");
+            reader.ReadByte(); reader.ReadUInt32(); reader.ReadByte();
+            That(reader.ReadByte() == 0 && reader.ReadUInt32() == 0 && reader.ReadByte() == 0 && reader.ReadByte() == 0,
+                "273行尾保留blocked、Z、flag、group原合同");
+        }
+        That(stream.Position == stream.Length && (states is null || names.Count == states.Count), "273完整消费所有好友，不丢在线或离线行");
     }
     static void VerifyAccountPresence(byte[] body, bool online, string? expectedAdventure = null, string? expectedCharacter = null,
         long? expectedOfflineElapsedSeconds = null)
