@@ -28,7 +28,7 @@ internal sealed record AccountFriendGroup(byte Icon, string Name)
 internal sealed record SocialRow(SocialLink Link, byte Server, ushort Channel, bool Online,
     long OfflineElapsedSeconds = 0);
 internal sealed record SocialView(SocialRow[] Characters, SocialRow[] Accounts, AccountFriendRequest[] Requests,
-    Func<bool> IsCurrent);
+    Func<bool> IsCurrent, ushort? ChangedCharacter = null);
 internal sealed record SocialResult(ushort Error, SocialPerson? Person = null)
 {
     public bool Accepted => Error == 0;

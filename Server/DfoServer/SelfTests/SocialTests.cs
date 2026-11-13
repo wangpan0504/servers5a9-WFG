@@ -162,7 +162,22 @@ internal static class SocialTests
             var offlineView = socialService.Capture(sa)!;
             That(offlineView.Accounts.Single().OfflineElapsedSeconds == 7200,
                 "账号好友离线时按持久最近在线时刻计算elapsed秒，不把关系创建时间当离线时间");
+            SocialView? delivered = null;
+            sa.SocialNoticeArrived = view => delivered = view;
+            socialService.Refresh(a.Account);
+            That(delivered is { ChangedCharacter: null } && delivered.Characters.Single() is { Online: false, Channel: 0 },
+                "普通列表刷新只恢复离线快照，不标记任何角色上下线事件");
+            socialService.PresenceChanged(other.Character.Id, b.Account);
+            That(delivered is { } offlineNotice && offlineNotice.ChangedCharacter == other.Character.Id &&
+                offlineNotice.Characters.Single() is { Online: false, Channel: 0 },
+                "离线事件携带实际目标角色，账号好友与角色好友仍共用同一在线目录快照");
             sb.Select(0); sb.MarkReady();
+            socialService.PresenceChanged(other.Character.Id, b.Account);
+            That(delivered is { } onlineNotice && onlineNotice.ChangedCharacter == other.Character.Id && onlineNotice.Characters.Single().Online,
+                "真实上线只标记本次角色，不把完整列表当作逐行上线通知");
+            socialService.Refresh(a.Account);
+            That(delivered is { ChangedCharacter: null } && delivered.Characters.Single().Online,
+                "上线后的主动刷新仍是静默在线快照，不沿用上一次事件目标");
             var parties = new DfoServer.Game.Party.PartyService(repo);
             var publicIdentity = sa.PublicCharacter(actor.Character.Id)!;
             ushort noPartyId = parties.PartyId(actor.Character.Id);
@@ -279,6 +294,15 @@ internal static class SocialTests
                 "v87原库升级只创建空关系，不伪造好友");
             That(Scalar("SELECT count(*) FROM sqlite_schema WHERE name='player_trade_receipts'") == 0,
                 "独立社交迁移不创建交易表");
+            var previousSelection = socialService.Capture(sa)!;
+            sa.ReturnToRoster(); delivered = null; socialService.Refresh(a.Account);
+            That(!previousSelection.IsCurrent() && delivered is null, "退出选角后旧社交快照失效，不向未就绪角色刷新");
+            sa.Select(0); sa.MarkReady();
+            That(!previousSelection.IsCurrent(), "同一角色重新选角也不能恢复旧epoch的发送资格");
+            var previousOwner = socialService.Capture(sa)!;
+            using var replacement = owners.Acquire(a.Account, () => { });
+            delivered = null; socialService.Refresh(a.Account);
+            That(!previousOwner.IsCurrent() && delivered is null, "账号接管后旧owner快照和旧在线索引不能发布新通知");
         }
         finally { TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"PASS {Count - before} 社交协议、持久化、屏蔽、原子回滚及迁移断言");

@@ -34,14 +34,14 @@ internal sealed class SocialService(ISocialStore store, OnlineSessionDirectory o
             store.AccountRequests(actor.Owner.Account), actor.IsCurrent);
     }
 
-    public void Refresh(string account)
+    public void Refresh(string account, ushort? changedCharacter = null)
     {
         if (online.Find(account) is { } session && Capture(session) is { } view && view.IsCurrent())
-            session.SocialNoticeArrived?.Invoke(view);
+            session.SocialNoticeArrived?.Invoke(view with { ChangedCharacter = changedCharacter });
     }
 
     public void PresenceChanged(ushort character, string account)
     {
-        foreach (string observer in store.SocialObservers(character, account)) Refresh(observer);
+        foreach (string observer in store.SocialObservers(character, account)) Refresh(observer, character);
     }
 }

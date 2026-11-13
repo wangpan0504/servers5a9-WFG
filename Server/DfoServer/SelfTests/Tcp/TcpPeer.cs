@@ -1026,8 +1026,7 @@ internal sealed partial class TcpPeer : IDisposable
         TestCheck.That(WeeklyDungeonConfig.Length == 5, "每周地下城721固定回放5个槽位");
         AccountFriendGroups = Expect(0, 1702).Body;
         CharacterFriends = Expect(0, 273).Body;
-        uint friends = U32(CharacterFriends, 4);
-        for (uint i = 0; i < friends; i++) Expect(0, 274);
+        TestCheck.That(U32(CharacterFriends, 0) == 0, "登录以273静默恢复好友列表，不能用274伪造上下线事件");
         AccountFriends = Expect(0, 1376).Body;
         AccountFriendRequests = Expect(0, 1377).Body;
         if (OwnGuildGrade != 100)
