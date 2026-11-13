@@ -20,7 +20,8 @@ internal sealed class SocialProjection(SocialService service, ISocialStore store
     {
         context.Sender.Post(0, (ushort)NotiPacketType.UNITED_SERVER_FRIEND_INFO, SocialPackets.CharacterFriends(view.Characters),
             "character_friends", view.IsCurrent);
-        foreach (var row in view.Characters)
+        // 273子命令0静默恢复含频道的完整列表；274会直接显示上下线提示，只能回放本次事件目标。
+        foreach (var row in view.Characters.Where(row => row.Link.Person.Id == view.ChangedCharacter))
             context.Sender.Post(0, (ushort)NotiPacketType.INOUT_UNITED_SERVER_FRIEND, SocialPackets.CharacterPresence(row),
                 "character_friend_presence", view.IsCurrent);
         context.Sender.Post(0, (ushort)NotiPacketType.ACCOUNT_FRIEND_INFO, SocialPackets.AccountFriends(view.Accounts),
