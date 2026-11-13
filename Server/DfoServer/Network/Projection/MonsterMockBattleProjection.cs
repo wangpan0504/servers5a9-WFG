@@ -20,7 +20,9 @@ internal sealed class MonsterMockBattleProjection(GameConnectionContext context,
     MockBattleView? committedView;
     DateTimeOffset nextRefresh = DateTimeOffset.MinValue;
     public bool Enabled => service.Enabled;
-    public IEnumerable<int> AccountMaterialIds => service.Catalog.ItemDraws.Keys.Append(MonsterMockBattleService.CoinItemId);
+    public IEnumerable<int> AccountMaterialIds => service.Catalog.ItemDraws.Keys
+        .Append(MonsterMockBattleService.CoinItemId)
+        .Append(MonsterMockBattleService.RewardMaterialItemId);
     public DateTimeOffset NextRefresh => Enabled && context.Session.Phase == SessionPhase.Town ? nextRefresh : DateTimeOffset.MaxValue;
     public bool ContainsDungeon(uint dungeon) => service.ContainsDungeon(dungeon);
 

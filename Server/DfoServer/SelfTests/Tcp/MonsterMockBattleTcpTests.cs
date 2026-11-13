@@ -254,8 +254,12 @@ internal static class MonsterMockBattleTcpTests
             That(Material(490013685) == claimed + 120 && Settlements() == 1 && VictoryMails() == mails,
                 "同实例46重放不重复发币或邮件");
             Request(peer, 42, []);
-            Claim(peer, firstVictory);
-            That(Material(490013685) == claimed + 120, "回城后真实CMD95整封领取首次120硬币及原资源物品");
+            var firstVictoryClaim = Claim(peer, firstVictory);
+            CommonMaterial(firstVictoryClaim, 14, MonsterMockBattleService.RewardMaterialItemId,
+                catalog.Worlds[0].FirstReward.Items.Single(row => row.ItemId == MonsterMockBattleService.RewardMaterialItemId).Count);
+            That(Material(490013685) == claimed + 120 &&
+                Material(MonsterMockBattleService.RewardMaterialItemId) == catalog.Worlds[0].FirstReward.Items.Single(row => row.ItemId == MonsterMockBattleService.RewardMaterialItemId).Count,
+                "回城后真实CMD95整封领取首次120硬币、谋略家印章及原资源物品");
 
             byte[] name = new byte[20]; System.Text.Encoding.UTF8.GetBytes("RivalGroup").CopyTo(name, 0);
             var search = Request(peer, 1736, Command(8, payload: name));
