@@ -100,8 +100,8 @@ internal static class TalismanTcpTests
             colors = SocketColors();
             var face = new[] { (byte)colors, (byte)(colors >> 8), (byte)(colors >> 16) };
             That(MaterialCount() == materialBefore - perRefine && (colors >> 24) == (colorsBefore >> 24) &&
-                face.All(color => color is >= 1 and <= 5) && face.Distinct().Count() == 3,
-                "重锻按品级扣料并生成三种不重复的孔色，扩展高字节保留");
+                face[0] < face[1] && face[1] < face[2] && face.All(color => color is >= 1 and <= 5),
+                "重锻按品级扣料并按阵营编号升序生成三种孔色，扩展高字节保留");
             // 重锻孔色随机；五种阵营符文都在背包，挑与 210 孔同色的那枚验证装载，211 必然错色。
             var rune = campRunes.First(id => catalog.Rune(id)!.SocketColor == (byte)colors);
             That(catalog.Rune(rune)!.SkillIndex != catalog.Talisman(stone)!.SkillIndex,
