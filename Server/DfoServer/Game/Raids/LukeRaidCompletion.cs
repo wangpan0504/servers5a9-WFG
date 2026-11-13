@@ -169,7 +169,7 @@ internal sealed partial class AntonRaidBattle
 
     internal bool RequiresLukeCompletedPhaseReturn(RaidActor actor, Guid instance, int phase)
     {
-        lock (gate) return (Kind == RaidKind.Luke || Kind == RaidKind.Prey && !PreyGuide) &&
+        lock (gate) return (Kind == RaidKind.Luke || Kind == RaidKind.Prey && (!PreyGuide || phase + 1 == PhaseCount)) &&
             Instance == instance && current.Phase == phase &&
             !current.ClockFaulted && actor.IsCurrent && members.ContainsKey(actor) &&
             (pendingTransition is { State: AntonRaidBattleState.Reward } terminal && terminal.Phase == phase ||
@@ -198,7 +198,7 @@ internal sealed partial class AntonRaidBattle
             lukePhaseCommits.Add(candidate.Phase, receipt);
             if (candidate.SongLimit is not null) PublishSealedSongOffers(candidate.Phase, receipt);
             var transition = CommitPendingTransition();
-            if (transition is not null || !(Kind == RaidKind.Luke || Kind == RaidKind.Prey && !PreyGuide) ||
+            if (transition is not null || !(Kind == RaidKind.Luke || Kind == RaidKind.Prey && (!PreyGuide || candidate.FinalPhase)) ||
                 pendingTransition is not { State: AntonRaidBattleState.Reward }) return transition;
             // 持久资格确认后发布退场事实；正式Run仍由原退出路径释放，不能越过资产屏障直接翻牌。
             var before = current;

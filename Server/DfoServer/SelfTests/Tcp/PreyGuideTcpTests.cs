@@ -171,7 +171,7 @@ internal static class PreyGuideTcpTests
         await Reveal(0, phaseStart);
         phaseStart = observed.Count;
         AntonTcpProbe.Enter(peer, catalog, 291100394, report, clear: true);
-        AntonTcpProbe.Enter(peer, catalog, 291100397, report, clear: true);
+        AntonTcpProbe.Enter(peer, catalog, 291100397, report, clear: true, leave: false, allowPhaseReward: true);
         await Reveal(1, phaseStart);
         That(fixture.Query("SELECT state,phase0_event IS NOT NULL,phase1_event IS NOT NULL FROM character_raid_runs WHERE character_id=$p0", peer.Id)
             is [[2L, 1L, 1L]], "TCP真实MAP死亡与退场生成两阶段最终通关记录");
@@ -279,8 +279,17 @@ internal static class PreyGuideTcpTests
 
         async Task Reveal(int phase, int start)
         {
+            // 终杀后不发42，以真实退场及演出包为完成条件；屏障只负责收取当前已写帧。
+            if (phase == 1)
+                for (int tick = 0; tick < 50 && !observed.Skip(start).Any(row =>
+                    row is { Kind: 0, Opcode: 587, Body: [3, 1] }); tick++)
+                {
+                    await Task.Delay(10);
+                    Read("guide final automatic return");
+                }
             var initial = observed.Skip(start).ToList();
-            int returned = initial.FindLastIndex(row => row is { Kind: 0, Opcode: 24, Body: [59, 3, ..] });
+            int returned = initial.FindLastIndex(row => row is { Kind: 0, Opcode: 24, Body: [var town, var area, ..] } &&
+                town == (phase == 1 ? waiting.Town : 59) && area == (phase == 1 ? waiting.Area : 3));
             int result = initial.FindIndex(row => row is { Kind: 0, Opcode: 601, Body.Length: 10 } && row.Body[1] == phase);
             int movie = initial.FindIndex(row => row is { Kind: 0, Opcode: 587, Body: [3, 1] });
             That(returned >= 0 && result > returned && movie > result && initial.All(row => row.Opcode != 600 &&
@@ -302,9 +311,8 @@ internal static class PreyGuideTcpTests
             That(Read("guide movie finished " + phase).Any(row => row is { Kind: 1, Opcode: 659, Body: [1] }),
                 "真实6591确认当前引导阶段演出完成");
             long began = clock.GetTimestamp();
-            // 二阶段不能在 587 一出现就停。1278 屏障可能插在开窗写出和候战 24 之间。
-            // 完成条件是观察到目标 24 且库中位置已更新；25ms 只是轮询让出，不是等待完成。
-            bool Settled() => phase == 1 ? HomeReady() : Displayed();
+            // 最终退场已在演出前完成；奖励仍须等真实659完成事实与原自动领奖tick。
+            bool Settled() => Displayed() && (phase != 1 || HomeReady());
             for (int tick = 0; tick < 10 && !Settled(); tick++)
             {
                 clock.Advance(1);
@@ -313,7 +321,7 @@ internal static class PreyGuideTcpTests
             }
             That(Settled() && clock.GetElapsedTime(began).TotalSeconds <= 10,
                 phase == 1
-                    ? "二阶段以候战24和库中位置为完成条件，超时仍失败，不等待资源电影加120秒兜底"
+                    ? "二阶段候战落点与翻牌均完成，超时仍失败，不等待资源电影加120秒兜底"
                     : "引导演出完成后由原秒tick交付，不等待资源电影加120秒兜底");
             var shown = observed.Skip(start).ToList();
             int opened = shown.FindIndex(row => row is { Kind: 0, Opcode: 587, Body: [4, 1] });
@@ -344,10 +352,10 @@ internal static class PreyGuideTcpTests
                     town == waiting.Town && area == waiting.Area);
                 var saved = fixture.Query("SELECT town,area FROM characters WHERE id=$p0", peer.Id);
                 That(shown.Count(row => row is { Kind: 0, Opcode: 24, Body: [var town, var area, ..] } &&
-                    town == waiting.Town && area == waiting.Area) == 1 && home > opened &&
+                    town == waiting.Town && area == waiting.Area) == 1 && home >= 0 && home < result && home < movie && home < opened &&
                     saved is [[var dbTown, var dbArea]] &&
                     Convert.ToInt64(dbTown) == waiting.Town && Convert.ToInt64(dbArea) == waiting.Area,
-                    "二阶段开窗实际写出后只迁一次，回到脚本候战区");
+                    "二阶段终杀无需42自动回脚本候战区，只迁一次且早于演出和翻牌");
             }
             string committed = RewardAssets();
             int opens = observed.Count(row => row is { Kind: 0, Opcode: 587, Body: [4, 1] });

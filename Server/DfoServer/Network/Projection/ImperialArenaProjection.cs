@@ -42,8 +42,8 @@ internal sealed class ImperialArenaProjection(IImperialArenaStore store, IImperi
 
     public async Task DeathAsync(GameConnectionContext context, ImperialArenaDeathCommit commit, Func<bool> guard)
     {
-        // 0177B770收到1402后无论count是否为0都会打开201逐关KO奖励窗；困难模式按累计回合结算、普通模式同日重打无奖励时均不下发。
-        if (commit.Plan.Admission.Mode == ImperialArenaMode.Normal && !commit.Plan.Reward.IsEmpty)
+        // 0177B770收到1402后无论count是否为0都会打开201逐关KO奖励窗；困难模式也按本回合新增累计奖励下发，重打无新增奖励时不下发。
+        if (!commit.Plan.Reward.IsEmpty)
             await context.Notify(NotiPacketType.TAG_TOURNAMENT_NORMAL_REWARD, ImperialArenaPackets.Reward(commit.Plan.Reward),
                 "imperial_arena_round_reward", guard);
         if (commit.MailId != 0)

@@ -21,7 +21,7 @@ internal static partial class InventoryTcpTests
     {
         VerifyMaterialSortConditions();
         var itemResources = resources.ItemResources;
-        var clock = new Inventory.DailyBoosterTestClock(DateTimeOffset.UtcNow);
+        var clock = new InventoryTestClock();
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "inventory"), resources: resources, clock: clock);
         var characters = resources.Characters;
         var towns = resources.Towns;
@@ -238,13 +238,13 @@ internal static partial class InventoryTcpTests
                 U32(reselected[4].Body, 376) == 18400, "reselect restores equipment in quick slot through full inventory");
             peer.Send(19, MoveItem(0, 3, pantsId, 1, 3, 17, 0));
             peer.Expect(1, 19, MoveAck(0, 3, 1, 3, 17));
-            weakRefresh = DeltaAndAppearance(peer, 5, emptyQuick: true);
+            weakRefresh = DeltaAndAppearance(peer, 5, quickSlot: 3, clearQuick: true);
             That(weakRefresh.Player[36 + 84] == 10 &&
                 fixture.Query("SELECT stamina_until FROM characters WHERE id=$p0", characterId) is [[long refreshedUntil]] && refreshedUntil == staminaUntil,
                 "同档反复穿装刷新仍保留10%，不依赖下一NOTI4档位或修改期限");
             peer.Send(19, MoveItem(0, 8, 0, 1, 3, 17, pantsId));
             peer.Expect(1, 19, MoveAck(0, 8, 1, 3, 17));
-            DeltaAndAppearance(peer, 4);
+            DeltaAndAppearance(peer, 4, quickSlot: 8);
             peer.Send(19, MoveItem(0, 8, pantsId, 0, 0, 3, 0));
             peer.Expect(1, 19, MoveAck(0, 8, 1, 0, 3));
             Bytes(peer.Expect(0, 14).Body.AsSpan(0, 9), [0, 1, 0, 8, 0, 255, 255, 255, 255],
@@ -255,7 +255,7 @@ internal static partial class InventoryTcpTests
                 "装备快捷栏首尾换格同步列表，并保留原实例UID");
             peer.Send(19, MoveItem(0, 3, pantsId, 1, 3, 17, 0));
             peer.Expect(1, 19, MoveAck(0, 3, 1, 3, 17));
-            DeltaAndAppearance(peer, 5, emptyQuick: true);
+            DeltaAndAppearance(peer, 5, quickSlot: 3, clearQuick: true);
             string beforeCaptured = Snapshot(fixture);
             peer.Send(19, MoveItem(0, 9, 0, 1, 3, 16, quality));
             peer.Expect(1, 19, [0, 23, 0, 0, 3]);
@@ -356,6 +356,8 @@ internal static partial class InventoryTcpTests
                     new(0, new(InventoryListType.Main, 125), InventoryRewardGrantService.Create(invitation, 4))]
             }, "fixture_material_type_sort"));
         }
+        // 隔离子进程使用系统时钟，选角预期必须使用同一时钟，保留真实进程重启覆盖。
+        clock.UseSystemTime = true;
         await fixture.StartAsync("reopened", isolatedProcess: true);
         using (var peer = Open(fixture))
         {
@@ -585,15 +587,15 @@ internal static partial class InventoryTcpTests
             peer.Expect(1, 19, MoveAck(0, 9, 1, 3, 12));
             var update = DeltaAndAppearance(peer, 5, "BroomTest", broomSkillCount, extraEquipmentBytes: 15);
             var returnedWeapon = update.Main;
-            int returnedAt = MainEntry(returnedWeapon, 9);
             int appearance = 134 + NameWidth("BroomTest");
             That(update.Actor[appearance] == 12 && U32(update.Actor, appearance + 1) == broom.Id &&
                 update.Actor[appearance + 13] == 23 && update.Actor[appearance + 14] == 4 &&
                 U32(update.Actor, appearance + 20) == 10309006 && update.Actor[appearance + 24] == 2,
                 "穿戴后的Actor仍刷新原装备的强化/增幅标记、锻造和附魔信息");
             CheckBroomPlayer(update.Player);
-            That(U32(returnedWeapon, returnedAt + 2) == previousWeapon,
-                "NOTI13全量仍显示实际返回背包的武器，且不发14/1681新物品标记");
+            That(U16(returnedWeapon, 1) == 1 && U16(returnedWeapon, 3) == 9 &&
+                U32(returnedWeapon, 5) == previousWeapon,
+                "装备穿脱只用1681差量同步实际返回背包的武器，不重发整列");
             peer.Barrier();
             That(Equals(fixture.Query("SELECT item_uid FROM character_inventory_slots WHERE character_id=$p0 AND list_type=3 AND slot_index=12", peer.Id)[0][0], broomUid),
                 "enchantress broom swap commits original UID before successful reply");
@@ -611,11 +613,13 @@ internal static partial class InventoryTcpTests
             peer.Send(19, MoveItem(3, 12, broom.Id, 1, 0, 10, 0));
             peer.Expect(1, 19, MoveAck(3, 12, 1, 0, 10));
             var update = DeltaAndAppearance(peer, 4, "BroomTest", broomSkillCount);
-            int unequipAt = MainEntry(update.Main, 10);
+            That(update.Main[0] == 0 && U16(update.Main, 1) == 1 && U16(update.Main, 3) == 10,
+                "脱下后的Main只回放目标槽1681差量");
+            int unequipAt = 3;
             var row = update.Main.AsSpan(unequipAt, 123);
             That(row.Slice(2, 11).SequenceEqual(originalBroom.AsSpan(2, 11)) &&
                 row[13] == 0 && row[13] <= originalBroom[13] && row[14..].SequenceEqual(originalBroom.AsSpan(14)),
-                "脱下后的NOTI13完整核心逐字节保留，只有目标槽和合法穿戴解封标志可变");
+                "脱下后的1681完整核心逐字节保留，只有目标槽和合法穿戴解封标志可变");
             peer.Barrier();
             That(Equals(fixture.Query("SELECT item_uid FROM character_inventory_slots WHERE character_id=$p0 AND list_type=0 AND slot_index=10", peer.Id)[0][0], broomUid),
                 "reconnected enchantress restores and unequips the same broom instance");
@@ -689,19 +693,54 @@ internal static partial class InventoryTcpTests
         Slots = fixture.Query("SELECT * FROM character_inventory_slots ORDER BY character_id,list_type,slot_index"),
         Audit = fixture.Query("SELECT * FROM inventory_audit_log ORDER BY audit_id")
     });
-    static (byte[] Main, byte[] Actor, byte[] Player) DeltaAndAppearance(TcpPeer peer, byte count, string name = "BagGearTest", int totalSkills = 12,
-        int extraEquipmentBytes = 0, bool emptyQuick = false)
+    sealed class InventoryTestClock : TimeProvider
     {
-        if (emptyQuick)
+        readonly Inventory.DailyBoosterTestClock controlled = new(DateTimeOffset.UtcNow);
+        public bool UseSystemTime { get; set; }
+        TimeProvider Current => UseSystemTime ? TimeProvider.System : controlled;
+        public override DateTimeOffset GetUtcNow() => Current.GetUtcNow();
+        public override long GetTimestamp() => Current.GetTimestamp();
+        public override long TimestampFrequency => Current.TimestampFrequency;
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period) =>
+            Current.CreateTimer(callback, state, dueTime, period);
+        public void Advance(TimeSpan elapsed) => controlled.Advance(elapsed);
+    }
+
+    static (byte[] Main, byte[] Actor, byte[] Player) DeltaAndAppearance(TcpPeer peer, byte count, string name = "BagGearTest", int totalSkills = 12,
+        int extraEquipmentBytes = 0, short quickSlot = -1, bool clearQuick = false)
+    {
+        byte[] main;
+        if (quickSlot >= 0)
         {
-            var emptied = peer.Expect(0, 14).Body;
-            That(emptied[0] == 0 && U16(emptied, 1) == 1 && U16(emptied, 3) is >= 3 and <= 8 && U32(emptied, 5) == uint.MaxValue,
-                "穿出快捷栏3–8先用NOTI14清空，避免全量载入留下旧快捷格");
+            if (clearQuick)
+            {
+                var clear = peer.Expect(0, 14).Body;
+                That(clear.Length == 126 && clear[0] == 0 && U16(clear, 1) == 1 &&
+                    U16(clear, 3) == quickSlot && U32(clear, 5) == uint.MaxValue,
+                    "穿出快捷栏先精确清空旧格，再全量载入Main");
+            }
+            main = peer.Expect(0, 13).Body;
+            That(main[0] == 0 && main.Length == 5 + 123 * U16(main, 3),
+                "快捷栏装备移动仍用ITEM_LIST全量载入Main，避免旧快捷格残留");
         }
-        var main = peer.Expect(0, 13).Body;
-        That(main[0] == 0 && main.Length == 5 + 123 * U16(main, 3),
-            "普通穿脱用ITEM_LIST全量载入Main，完整载入标志跳过新物品标记");
-        var actor = peer.Expect(0, 2).Body;
+        else
+        {
+            main = peer.Expect(0, 1681).Body;
+            That(main.Length == 126 && main[0] == 0 && U16(main, 1) == 1,
+                "普通穿脱只用单槽1681差量，不重建整列");
+        }
+        var next = peer.Read();
+        if (quickSlot < 0 && next is { Kind: 0, Opcode: 1681 })
+        {
+            var fill = next.Body;
+            That(U32(main, 5) == uint.MaxValue && fill.Length == 126 && fill[0] == 0 &&
+                U16(fill, 1) == 1 && U16(fill, 3) == U16(main, 3) && U32(fill, 5) != uint.MaxValue,
+                "清空后只允许一次同一Main槽的完整回填，不能吞其他容器或额外差量");
+            main = fill;
+            next = peer.Read();
+        }
+        That(next is { Kind: 0, Opcode: 2 }, "穿脱差量之后才刷新Actor");
+        var actor = next.Body;
         var player = peer.Expect(0, 2).Body;
         That(actor[133 + NameWidth(name)] == count && player[126] == count && player.Length == 167 + count * 88 + totalSkills * 3 + extraEquipmentBytes,
             "appearance and complete player skill tail agree after wear change");
