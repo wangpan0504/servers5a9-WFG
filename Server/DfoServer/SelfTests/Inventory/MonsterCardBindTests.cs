@@ -39,13 +39,17 @@ internal static class MonsterCardBindTests
             1 3.00 4 2002 10
             [/bind result info]
             """, "bind");
-        That(contents.Count == 2 && contents[0] is { Coefficient: 1.00m, CountHint: 5, Rewards: [{ ItemId: 2001, Weight: 10 }] } &&
+        That(contents.Count == 2 && contents[0] is { Coefficient: 1.00m, MaximumCardCount: 5, Rewards: [{ ItemId: 2001, Weight: 10 }] } &&
             contents[1] is { Coefficient: 3.00m, Rewards: [{ ItemId: 2002 }] },
-            "bind result infos按稀有度保留系数、提示张数和正权重卡片");
-        That(MonsterCardBindCatalog.UpgradeChance(1.00m) == 100 &&
-            MonsterCardBindCatalog.UpgradeChance(12.00m) == 1200 &&
-            MonsterCardBindCatalog.UpgradeChance(0.00m) == 0,
-            "旧合成器升档把PVF系数读作万分比，1.00对应1%");
+            "bind result infos按稀有度保留系数、最多张数和正权重卡片");
+        That(MonsterCardBindCatalog.UpgradeChance(1.00m, 2) == 200 &&
+            MonsterCardBindCatalog.UpgradeChance(12.00m, 2) == 2400 &&
+            MonsterCardBindCatalog.UpgradeChance(12.00m, 3) == 3600 &&
+            MonsterCardBindCatalog.UpgradeChance(0.00m, 2) == 0,
+            "旧合成器升档按PVF系数乘实际张数，紫卡两张24%、三张36%");
+        Reject<InvalidDataException>(() => MonsterCardBindCatalog.ParsePools(
+            "[bind result info]\n0 1.00 6 2001 10\n[/bind result info]", "bind"),
+            "奖池最多张数不能超出CMD414五槽上限");
         var liveUpgrade = MonsterCardBindCatalog.ParseUpgradeRows("""
             [upgrade info]
             0 100 0 0 0 0
@@ -68,7 +72,7 @@ internal static class MonsterCardBindTests
 
         var fixture = new Fixture();
         var request = new MonsterCardBindRequest(65, [233, 234]);
-        var same = fixture.Service(Rolls(100, 0)).Apply(fixture.Character((65, 9000, 1), (233, 1001, 1), (234, 1002, 1)),
+        var same = fixture.Service(Rolls(200, 0)).Apply(fixture.Character((65, 9000, 1), (233, 1001, 1), (234, 1002, 1)),
             request, out var sameReceipt, out var sameRejection);
         That(same.Accepted && sameRejection is null && sameReceipt is
             { BindType: 0, InputRarity: 0, OutputRarity: 0, RarityUpgraded: false, Rewards: [{ ItemId: 2001, Extra: 0 }] },
@@ -78,7 +82,7 @@ internal static class MonsterCardBindTests
             same.Plan.After.Find(new(InventoryListType.Main, 233))?.Core.ItemId == 2001,
             "先扣合成器与卡片，奖励可复用刚腾出的卡片槽");
 
-        var repeated = fixture.Service(Rolls(100, 0)).Apply(fixture.Character((65, 9000, 1), (233, 1001, 3)),
+        var repeated = fixture.Service(Rolls(200, 0)).Apply(fixture.Character((65, 9000, 1), (233, 1001, 3)),
             new(65, [233, 233]), out var repeatedReceipt, out _);
         That(repeated.Accepted && repeatedReceipt!.DeletedSlots.SequenceEqual([(short)233, (short)233]) &&
             repeated.Plan!.After.Find(new(InventoryListType.Main, 233))?.Core.Count == 1 &&
@@ -113,14 +117,43 @@ internal static class MonsterCardBindTests
         That(enchanted is { Accepted: false, Error: 22 } && enchantedReason == "material-state",
             "已升级卡片缺少合成合同，整笔拒绝");
 
-        var wrongCount = fixture.Service(Rolls(0)).Apply(
-            fixture.Character((65, 9000, 1), (233, 1001, 1), (234, 1002, 1), (235, 1001, 1)),
-            new(65, [233, 234, 235]), out _, out var countReason);
+        foreach (var (rarity, itemId, count) in new[] { (0, 1001, 5), (1, 1101, 4), (2, 1201, 3), (3, 1301, 2) })
+        {
+            var accepted = fixture.Service(_ => 0).Apply(
+                fixture.Character((65, 2682575, 1), (233, itemId, count)),
+                new(65, Enumerable.Repeat((short)233, count).ToImmutableArray()), out var receipt, out _);
+            That(accepted.Accepted && receipt!.InputRarity == rarity && receipt.DeletedSlots.Length == count &&
+                receipt.OutputRarity == Math.Min(rarity + 1, 3),
+                $"白银合成器按稀有度{rarity}的PVF上限接受{count}张卡片");
+        }
+        var silverCards = fixture.Character((65, 2682575, 1), (233, 1201, 4));
+        var missingThird = fixture.Service(_ => throw new InvalidOperationException("unexpected draw")).Apply(
+            fixture.Character((65, 2682575, 1), (233, 1201, 2)), new(65, [233, 233, 233]),
+            out var missingReceipt, out var missingReason);
+        That(!missingThird.Accepted && missingThird.Plan is null && missingReceipt is null && missingReason == "material-count",
+            "三张同源合成的源堆只有两张时不抽奖、不生成扣费计划");
+        foreach (var (count, roll, expectedRarity) in new[] { (2, 2399, 3), (2, 2400, 2), (3, 3599, 3), (3, 3600, 2) })
+        {
+            var result = fixture.Service(Rolls(roll, 0)).Apply(silverCards,
+                new(65, Enumerable.Repeat((short)233, count).ToImmutableArray()), out var receipt, out _);
+            That(result.Accepted && receipt!.OutputRarity == expectedRarity &&
+                result.Plan!.After.Find(new(InventoryListType.Main, 233))?.Core.Count == 4 - count &&
+                result.Plan.After.Find(new(InventoryListType.Main, 65)) is null,
+                $"白银紫卡{count}张在万分比边界{roll}正确升档并精确扣费");
+        }
+        var wrongCount = fixture.Service(_ => throw new InvalidOperationException("unexpected draw")).Apply(
+            silverCards, new(65, [233, 233, 233, 233]), out _, out var countReason);
         That(wrongCount is { Accepted: false, Error: 22 } && countReason == "invalid-count",
-            "旧合成器只接受两张卡片");
+            "白银紫卡超过资源三张上限时在抽奖前拒绝");
+        var oneCard = fixture.Service(_ => throw new InvalidOperationException("unexpected draw")).Apply(
+            silverCards, new(65, [233]), out _, out var oneReason);
+        That(!oneCard.Accepted && oneReason == "invalid-count", "合成至少需要两张卡片");
+        var legend = fixture.Service(_ => throw new InvalidOperationException("unexpected draw")).Apply(
+            fixture.Character((65, 2682575, 1), (233, 1601, 2)), new(65, [233, 233]), out _, out var legendReason);
+        That(!legend.Accepted && legendReason == "reward-roll", "没有传说卡奖池时不虚构粉卡以上合成路径");
 
         var full = fixture.FullCharacter();
-        var fullResult = fixture.Service(Rolls(100, 0)).Apply(full, request, out var fullReceipt, out var fullReason);
+        var fullResult = fixture.Service(Rolls(200, 0)).Apply(full, request, out var fullReceipt, out var fullReason);
         That(fullResult is { Accepted: false, Error: 23, Plan: null } && fullReceipt is null &&
             fullReason == "card-capacity" && full.Inventory.Find(new(InventoryListType.Main, 233))?.Core.Count == 2,
             "卡片页满且输入堆仍有剩余时回23，原快照不扣材料");
@@ -142,7 +175,7 @@ internal static class MonsterCardBindTests
             "现场monstercardcontents同时提供旧奖池与五卡奖池各四档");
         foreach (var pool in bind.BindPools.Concat(bind.SpherePools))
         {
-            That(pool.Rewards.Length > 0 && pool.Coefficient >= 0 && pool.CountHint >= 0,
+            That(pool.Rewards.Length > 0 && pool.Coefficient >= 0 && pool.MaximumCardCount is >= 2 and <= 5,
                 "现场卡片合成奖池保留正权重候选");
             foreach (var reward in pool.Rewards)
             {
@@ -151,6 +184,9 @@ internal static class MonsterCardBindTests
                     reward.Weight > 0, "现场奖池候选必须是对应稀有度的怪物卡片");
             }
         }
+        That(bind.BindPools.OrderBy(pool => pool.Rarity).Select(pool => pool.MaximumCardCount).SequenceEqual([5, 4, 3, 2]) &&
+            bind.Pool(2, 2).Coefficient == 12m && bind.Pool(2, 3).Coefficient == 0m,
+            "现场旧池按普通/高级/稀有/神器分别最多5/4/3/2张，紫卡系数12且粉卡不升档");
         int[] binders = [2600479, 2600480, 2600481, 2682573, 2682574, 2682575, 10307440, 10307439, 10307441];
         int[] types = [0, 1, 2, 0, 1, 2, 3, 4, 5];
         for (int index = 0; index < binders.Length; index++)
@@ -203,6 +239,12 @@ internal static class MonsterCardBindTests
                 [bind result info]
                 1 3.00 4 2002 10
                 [/bind result info]
+                [bind result info]
+                2 12.00 3 2003 10
+                [/bind result info]
+                [bind result info]
+                3 0.00 2 2004 10
+                [/bind result info]
                 [/bind result infos]
                 [bind shpere result infos]
                 [bind result info]
@@ -218,16 +260,17 @@ internal static class MonsterCardBindTests
                 """);
             Items = new(null!, new Dictionary<int, string>(), new Dictionary<int, string>
             {
-                [9000] = "binder0.stk", [9003] = "binder3.stk",
+                [9000] = "binder0.stk", [9003] = "binder3.stk", [2682575] = "silver.stk",
                 [1001] = "card0a.stk", [1002] = "card0b.stk", [1101] = "card1.stk",
-                [2001] = "reward0.stk", [2002] = "reward1.stk",
+                [1201] = "card2.stk", [1301] = "card3.stk", [1601] = "card6.stk",
+                [2001] = "reward0.stk", [2002] = "reward1.stk", [2003] = "reward2.stk", [2004] = "reward3.stk",
                 [3001] = "sphere0.stk", [3002] = "sphere1.stk"
             }, 0);
             Items.PrefillTemplates(new[]
             {
-                Binder(9000, 0), Binder(9003, 3),
-                Card(1001, 0), Card(1002, 0), Card(1101, 1),
-                Card(2001, 0), Card(2002, 1), Card(3001, 0), Card(3002, 1)
+                Binder(9000, 0), Binder(9003, 3), Binder(2682575, 2),
+                Card(1001, 0), Card(1002, 0), Card(1101, 1), Card(1201, 2), Card(1301, 3), Card(1601, 6),
+                Card(2001, 0), Card(2002, 1), Card(2003, 2), Card(2004, 3), Card(3001, 0), Card(3002, 1)
             }.ToDictionary(template => template.Id));
         }
 
