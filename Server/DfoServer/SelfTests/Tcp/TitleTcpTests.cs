@@ -376,26 +376,15 @@ internal static partial class TitleTcpTests
             var cloneSource = Read(InventoryListType.Main, 9, cloneRuleSlot)!;
             var hiddenSource = Read(InventoryListType.Main, hiddenFromSlot, cloneRuleSlot)!;
             string walletsBefore = Wallets();
+            string otherMainBefore = OtherMainAssets();
             peer.Send(19, MoveEquipment(0, hiddenFromSlot, hiddenTargetId, 3, 13, 0));
             peer.Expect(1, 19, MoveEquipmentAck(0, hiddenFromSlot, 3, 13));
-            byte[] reloadedMain = peer.Expect(0, 13).Body;
-            That(cloneRuleMain[0] == 0 && cloneRuleMain.Length == 5 + U16(cloneRuleMain, 3) * 123 &&
-                reloadedMain[0] == 0 && reloadedMain.Length == 5 + U16(reloadedMain, 3) * 123,
-                "普通称号穿戴严格接收完整Main13头与123B条目，不回退为1681新物品标记");
-            byte[] expectedMain = Build(writer =>
-            {
-                writer.Write((byte)0); writer.Write(U16(cloneRuleMain, 1));
-                writer.Write(checked((ushort)(U16(cloneRuleMain, 3) - 1)));
-                for (int index = 0; index < U16(cloneRuleMain, 3); index++)
-                {
-                    int offset = 5 + index * 123;
-                    if (U16(cloneRuleMain, offset) != hiddenFromSlot)
-                        writer.Write(cloneRuleMain.AsSpan(offset, 123));
-                }
-            });
-            That(reloadedMain.SequenceEqual(expectedMain),
-                "Main完整重载仅移除已穿戴源槽，槽9动画来源、其他实体和全部虚拟钱包逐字节保留");
+            That(cloneRuleMain[0] == 0 && cloneRuleMain.Length == 5 + U16(cloneRuleMain, 3) * 123,
+                "选角仍使用完整Main13头与123B条目");
+            InventoryDeltaTestChecks.Read(peer, 0, hiddenFromSlot, 0);
             ReadAppearance(peer, hiddenTargetId, cloneTitle: 0); peer.Barrier();
+            That(OtherMainAssets() == otherMainBefore,
+                "称号穿戴仅清源槽且不发布其他库存差量，其他Main实体及完整核心逐字保持，虚拟钱包另行核对");
             That(fixture.Query("SELECT clone_title_item_id FROM characters WHERE id=$p0", cloneRuleCharacterId) is [[0L]] &&
                 Read(InventoryListType.Main, hiddenFromSlot, cloneRuleSlot) is null &&
                 Read(InventoryListType.Main, 9, cloneRuleSlot) == cloneSource &&
@@ -403,6 +392,11 @@ internal static partial class TitleTcpTests
                     hiddenSource with { Position = new(InventoryListType.Equipment, 13), Core = hiddenSource.Core with { SealFlag = 0 } } &&
                 Wallets() == walletsBefore,
                 "TCP穿戴带40称号清零DB与外观动画，保留双方UID及除穿戴消封外完整核心，角色及账号钱包不变");
+
+            string OtherMainAssets() => fixture.Snapshot("""
+                SELECT s.*,i.* FROM character_inventory_slots s JOIN character_inventory_items i USING(item_uid)
+                WHERE s.character_id=$p0 AND s.list_type=0 AND s.slot_index<>$p1 ORDER BY s.slot_index
+                """, cloneRuleCharacterId, hiddenFromSlot);
 
             // 13号槽穿戴带40称号期间：CMD568拒绝选择26597，但允许0清空。
             peer.Send(568, Build(writer => writer.Write(26597u)));

@@ -52,6 +52,13 @@ internal static partial class InventoryTcpTests
             peer.Expect(1, 20, Convert.FromHexString("010400000008001000"));
             peer.Barrier();
             That(Snapshot(fixture) == before, "locked final page slot stays fixed and repeated sorting lock is idempotent");
+            // 快捷栏全量还会重建未变化的Main实例，必须恢复它的排序锁。
+            int spareId = characters.Get(0).Equipment.Single(item => item.Slot == 17).Template.Id;
+            peer.Send(19, MoveItem(3, 17, spareId, 1, 0, 63, 0));
+            peer.Expect(1, 19, MoveAck(3, 17, 1, 0, 63));
+            WearDelta(peer);
+            peer.Send(713, [0, 63, 0]);
+            peer.Expect(1, 713, [1, 0, 63, 0]);
             peer.Send(19, MoveItem(0, 64, weaponId, 1, 0, 8, 0));
             peer.Expect(1, 19, MoveAck(0, 64, 1, 0, 8));
             Bytes(peer.Expect(0, 14).Body.AsSpan(0, 9), [0, 1, 0, 64, 0, 255, 255, 255, 255],
@@ -59,13 +66,17 @@ internal static partial class InventoryTcpTests
             var quickList = peer.Expect(0, 13).Body;
             That(U32(quickList, MainEntry(quickList, 8) + 2) == weaponId, "快捷栏全量保留锁定装备模板");
             peer.Expect(1, 714, [1, 0, 8, 0]);
+            peer.Expect(1, 713, [1, 0, 63, 0]);
             peer.Expect(0, 251, [1, 0, 0, 8, 0, 1]);
             That(Equals(fixture.Query("SELECT item_uid FROM character_inventory_slots WHERE list_type=0 AND slot_index=8")[0][0], uid),
                 "locked equipment remains original instance in quick bar");
             peer.Send(19, MoveItem(0, 8, weaponId, 1, 3, 12, 0));
             peer.Expect(1, 19, MoveAck(0, 8, 1, 3, 12));
             WearDelta(peer, emptyQuick: true);
+            peer.Expect(1, 713, [1, 0, 63, 0]);
             peer.Expect(0, 251, [1, 0, 3, 12, 0, 1]);
+            peer.Send(714, [0, 63, 0]);
+            peer.Expect(1, 714, [1, 0, 63, 0]);
             peer.Send(713, [3, 12, 0]);
             peer.Expect(1, 713, [1, 3, 12, 0]);
             peer.Expect(1, 714, [1, 3, 12, 0]);
@@ -132,15 +143,39 @@ internal static partial class InventoryTcpTests
         {
             if (emptyQuick)
             {
-                var emptied = peer.Expect(0, 14).Body;
-                That(emptied[0] == 0 && U16(emptied, 3) is >= 3 and <= 8 && U32(emptied, 5) == uint.MaxValue,
-                    "锁定装备穿出快捷栏先清空3–8，再全量载入");
+                var clear = peer.Expect(0, 14).Body;
+                That(clear.Length == 126 && clear[0] == 0 && U16(clear, 1) == 1 &&
+                    U16(clear, 3) == 8 && U32(clear, 5) == uint.MaxValue,
+                    "锁定装备穿出快捷栏先精确清空8格");
+                var main = peer.Expect(0, 13).Body;
+                That(main[0] == 0 && main.Length == 5 + 123 * U16(main, 3),
+                    "锁定装备快捷栏移动仍用NOTI13全量载入");
             }
-            var main = peer.Expect(0, 13).Body;
-            That(main[0] == 0 && main.Length == 5 + 123 * U16(main, 3),
-                "锁定装备穿脱用NOTI13全量载入，不发14/1681新物品标记");
-            peer.Expect(0, 2);
-            peer.Expect(0, 2);
+            else
+            {
+                var main = peer.Expect(0, 1681).Body;
+                That(main.Length == 126 && main[0] == 0 && U16(main, 1) == 1,
+                    "锁定装备穿脱只发Main单槽差量");
+                if (U32(main, 5) == uint.MaxValue)
+                {
+                    var next = peer.Read();
+                    if (next is { Kind: 0, Opcode: 1681 })
+                    {
+                        var fill = next.Body;
+                        That(fill.Length == 126 && fill[0] == 0 && U16(fill, 1) == 1 &&
+                            U16(fill, 3) == U16(main, 3) && U32(fill, 5) != uint.MaxValue,
+                            "锁定装备最多回填同一Main槽一次");
+                    }
+                    else
+                    {
+                        That(next is { Kind: 0, Opcode: 2 } && next.Body[0] == 0, "清空后直接刷新Actor");
+                        That(peer.Expect(0, 2).Body[0] == 1, "Actor后刷新Player");
+                        return;
+                    }
+                }
+            }
+            That(peer.Expect(0, 2).Body[0] == 0 && peer.Expect(0, 2).Body[0] == 1,
+                "锁定装备差量后严格按Actor、Player刷新");
         }
     }
 }

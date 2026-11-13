@@ -465,10 +465,24 @@ internal static class MonsterMockBattleTcpTests
             }));
             That(packets.Single(row => row is { Kind: 1, Opcode: 19 }).Body[0] == 1,
                 "真实CMD19时装穿脱成功");
-            That(packets.Count(row => row is { Kind: 0, Opcode: 13 } && row.Body[0] == 1) == 1 &&
-                packets.All(row => row is not { Kind: 0, Opcode: 1681 }) &&
-                packets.Count(row => row is { Kind: 0, Opcode: 2 }) == 2,
-                "时装穿脱按最新静默整表协议刷新Avatar及本人Actor/Player，不重引入1681新物品黄框");
+            short bagSlot = sourceList == 1 ? sourceSlot : targetSlot;
+            int returnedId = sourceList == 1 ? targetId : sourceId;
+            var deltas = packets.Where(row => row is { Kind: 0, Opcode: 1681 }).ToArray();
+            That(deltas.Length == (returnedId == 0 ? 1 : 2), "时装穿脱只清变化槽，需要返回物品时再完整回填一次");
+            for (int index = 0; index < deltas.Length; index++)
+            {
+                byte[] body = deltas[index].Body;
+                That(body.Length == 168 && body[0] == 1 && U16(body, 1) == 1 && U16(body, 3) == bagSlot &&
+                    U32(body, 5) == (index == 0 ? uint.MaxValue : checked((uint)returnedId)) &&
+                    U32(body, 126) == 30 && U32(body, 160) == 4,
+                    "时装差量严格匹配Avatar、单槽、清空/返回模板及完整165B含双RAW条目");
+            }
+            var appearance = packets.Where(row => row is { Kind: 0, Opcode: 2 }).ToArray();
+            That(packets.All(row => row is not { Kind: 0, Opcode: 13 or 14 }) &&
+                appearance.Length == 2 && appearance[0].Body[0] == 0 && appearance[1].Body[0] == 1 &&
+                Array.IndexOf(packets, packets.Single(row => row is { Kind: 1, Opcode: 19 })) < Array.IndexOf(packets, deltas[0]) &&
+                Array.IndexOf(packets, deltas[^1]) < Array.IndexOf(packets, appearance[0]),
+                "时装穿脱按ACK、静默局部差量、Actor、Player顺序发布，不重建全量或发送普通获得差量");
             That(packets.All(row => row is not { Kind: 0, Opcode: 1766 }),
                 "背包快照变化但完整模拟战状态相同，不重复发送1766");
         }

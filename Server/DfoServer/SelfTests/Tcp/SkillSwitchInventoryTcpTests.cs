@@ -326,15 +326,21 @@ internal static class SkillSwitchInventoryTcpTests
                 }
                 peer.Send(19, MoveItem(fromSlot, row.Item, toSlot, from, to));
                 peer.Expect(1, 19, MoveAck(fromSlot, toSlot, from, to));
-                int deltaCount = 0, equipmentCount = 0, actorCount = 0, creatureDetails = 0;
+                int deltaCount = 0, equipmentCount = 0, actorCount = 0, creatureDetails = 0, bagDeltas = 0;
                 peer.Barrier(packet =>
                 {
                     That(packet.Opcode is 2 or 13 or 14 or 105 or 1372 or 1449 or 1599 or 1681,
                         "普通穿脱只发布库存、外观及登记同步，不发送未知窗口通知");
-                    if (packet.Opcode == 13)
-                        That(packet.Body[0] is 0 or 1 or 7, "登记中的穿脱只全量重载本次包裹，跳过新物品标记");
+                    That(packet.Opcode != 13, "登记中的普通穿脱不重建整列包裹");
                     if (packet.Opcode is 14 or 1681 && packet.Body.Length > 0 && packet.Body[0] is 0 or 1 or 7)
-                        That(false, "包裹侧不再用14/1681回填已有物品");
+                    {
+                        int size = row.List == 1 ? 165 : 123;
+                        That(packet.Opcode == 1681 && packet.Body.Length == 3 + size && packet.Body[0] == row.List &&
+                            U16(packet.Body, 1) == 1 && U16(packet.Body, 3) == bag &&
+                            U32(packet.Body, 5) == (bagDeltas == 0 ? uint.MaxValue : (uint)row.Item),
+                            "登记包裹严格只同步本次槽，先静默清槽再按需回填完整核心");
+                        bagDeltas++;
+                    }
                     if (packet.Opcode == 2 && packet.Body[0] == 1)
                         closingPlayers++;
                     if (packet.Opcode == 2 && packet.Body[0] == 0)
@@ -378,7 +384,8 @@ internal static class SkillSwitchInventoryTcpTests
                 });
                 That(deltaCount == 1 && fixture.Snapshot("SELECT * FROM character_skill_switch_inventory_items WHERE character_id=$p0 ORDER BY equipment_part", created.Id) == bindings,
                     "穿脱只更新登记投影的位置，同一UID登记保持不变");
-                That(equipmentCount == 1 && actorCount == 1, "完整装备差量和外观声明各发布一次，替代登记重建");
+                That(equipmentCount == 1 && actorCount == 1 && bagDeltas == (wear ? 1 : 2),
+                    "完整装备差量和外观声明各发布一次，包裹仅清源或清目标后回填，替代登记重建");
                 if (!wear)
                 {
                     peer.Send(Command, Request(profile.Skill, 36, 47, ushort.MaxValue));

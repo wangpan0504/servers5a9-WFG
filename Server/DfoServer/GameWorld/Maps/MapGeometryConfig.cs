@@ -120,9 +120,9 @@ internal sealed partial class MapGeometryConfig
                     throw new InvalidDataException("World epic NPC restore source coordinates");
         }
     }
-    private static void ValidateAnimationAppend(Atom[] before, Atom[] after)
+    private static void ValidateAnimationAppend(Atom[] before, Atom[] after, bool town = false)
     {
-        if (before.Length == 0 || before.Length % 5 != 0 || after.Length != before.Length + 5 ||
+        if (before.Length == 0 || before.Length % 5 != 0 || after.Length != before.Length + (town ? 10 : 5) ||
             !before.SequenceEqual(after.Take(before.Length)))
             throw new InvalidDataException("World animation append prefix/shape");
         for (int at = 0; at < after.Length; at += 5)
@@ -130,14 +130,21 @@ internal sealed partial class MapGeometryConfig
                 if (after[at + n].Kind != (n < 2 ? 6 : 0) ||
                     n >= 2 && after[at + n].Number is < -1048576 or > 1048576)
                     throw new InvalidDataException("World animation append record kind/range");
-        int target = before.Length;
-        if (after[target + 2].Number != 1008)
-            throw new InvalidDataException("World animation append target X");
-        bool source = false;
-        for (int at = 0; at < before.Length; at += 5)
-            if (before[at + 2].Number == 784 && Enumerable.Range(0,5).All(n =>
-                n == 2 || before[at + n] == after[target + n])) source = true;
-        if (!source) throw new InvalidDataException("World animation append source identity");
+        for (int added = before.Length; added < after.Length; added += 5)
+        {
+            bool source = false;
+            for (int at = 0; at < before.Length; at += 5)
+            {
+                int donorX = before[at + 2].Number;
+                int targetX = town ? donorX switch { 771 => 995, 664 => 888, _ => int.MinValue } : donorX == 784 ? 1008 : int.MinValue;
+                if (targetX != int.MinValue && after[added + 2].Number == targetX && Enumerable.Range(0,5).All(n =>
+                    n == 2 || before[at + n] == after[added + n])) source = true;
+            }
+            if (!source) throw new InvalidDataException("World animation append source identity");
+            for (int at = 0; at < added; at += 5)
+                if (after.AsSpan(at,5).SequenceEqual(after.AsSpan(added,5)))
+                    throw new InvalidDataException("World animation append duplicate");
+        }
     }
     private MapGeometryConfig(Dictionary<string, Rule[]> maps, Dictionary<string, string> aliases)
     {
@@ -222,7 +229,7 @@ internal sealed partial class MapGeometryConfig
                 ("dungeon_ext_tilemap3", "[tile map]") => 1,
                 ("dungeon_animation5", "[animation]") => 5,
                 ("dungeon_tent_animation5", "[animation]") => 5,
-                ("dungeon_animation5_append", "[animation]") => 5,
+                ("dungeon_animation5_append" or "town_animation5_append", "[animation]") => 5,
                 ("dungeon_passive4", "[passive object]") => 4,
                 ("dungeon_tent_passive4", "[passive object]") => 4,
                 ("dungeon_monster10_fixed_normal", "[monster]") => 10,
@@ -248,7 +255,7 @@ internal sealed partial class MapGeometryConfig
             if (!to[0].SequenceEqual(to[1]) || !to[0].SequenceEqual(to[2])) throw new InvalidDataException("Ratio-dependent world geometry");
             bool gate = kind is "gate_points8" or "gate_recognize8", tile = kind == "tile_pass14";
             bool anchor = AnchorLayout(kind).Stride != 0, metadata = kind is "dungeon_movable_xywh3" or "dungeon_virtual_xywh1" or "dungeon_virtual_xywh4_append";
-            bool dungeon = kind is "dungeon_tiles" or "dungeon_tiles3" or "dungeon_tiles1" or "dungeon_ext_tilefiles" or "dungeon_ext_tilefiles_repair" or "dungeon_ext_tilemap" or "dungeon_ext_tilemap3" or "dungeon_animation5_append";
+            bool dungeon = kind is "dungeon_tiles" or "dungeon_tiles3" or "dungeon_tiles1" or "dungeon_ext_tilefiles" or "dungeon_ext_tilefiles_repair" or "dungeon_ext_tilemap" or "dungeon_ext_tilemap3" or "dungeon_animation5_append" or "town_animation5_append";
             bool native = IsNativeRestore(kind);
             if (kind == "native_geometry_restore")
             {
@@ -267,7 +274,7 @@ internal sealed partial class MapGeometryConfig
             {
                 if (native) { ValidateNativeRecord(path,kind,tag,before,to[0]); continue; }
                 if (kind == "epic_road_npc_restore") { ValidateEpicRoadNpc(before,to[0]); continue; }
-                if (kind == "dungeon_animation5_append") { ValidateAnimationAppend(before,to[0]); continue; }
+                if (kind is "dungeon_animation5_append" or "town_animation5_append") { ValidateAnimationAppend(before,to[0],kind == "town_animation5_append"); continue; }
                 if (anchor) { ValidateAnchor(kind,before,to[0]); continue; }
                 if (metadata)
                 {
@@ -351,6 +358,9 @@ internal sealed partial class MapGeometryConfig
             ValidateVisibleExtensionClone(row.Key,row.Value,aliases,result);
             if (row.Value.Any(rule => rule.Kind is "dungeon_animation5_append" or "dungeon_virtual_xywh1") && row.Value.Count(rule => rule.Kind == "dungeon_tiles") != 1)
                 throw new InvalidDataException("World animation append requires the same map four-to-five tile root");
+            if (row.Value.Any(rule => rule.Kind == "town_animation5_append") &&
+                (row.Key != "map/town/metrocenter/metro_time_waiting.map" || row.Value.Count(rule => rule.Kind == "town_gate") != 1 || row.Value.Count(rule => rule.Kind == "walk_area") != 1))
+                throw new InvalidDataException("World town animation requires metro town geometry");
             if (row.Value.Any(rule => rule.Kind == "dungeon_virtual_xywh4_append") && row.Value.Count(rule => rule.Kind == "dungeon_tiles3") != 1)
                 throw new InvalidDataException("World four virtual rectangles require the same map three-to-five tile root");
         }

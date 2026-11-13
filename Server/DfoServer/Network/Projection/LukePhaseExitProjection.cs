@@ -87,7 +87,7 @@ internal sealed class LukePhaseExitProjection(GameConnectionContext context, Par
             if (finished)
             {
                 if (request.Actor.IsCurrent && context.Session.CurrentRaidBattle(request.Actor) is { } battle &&
-                    (battle.Kind == RaidKind.Fiendwar || battle is { Kind: RaidKind.Prey, PreyGuide: false }))
+                    (battle.Kind == RaidKind.Fiendwar || battle.Kind == RaidKind.Prey))
                     context.Session.PublishRaidCombat();
                 return;
             }

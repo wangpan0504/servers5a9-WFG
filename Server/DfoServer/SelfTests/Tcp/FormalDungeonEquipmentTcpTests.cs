@@ -170,24 +170,27 @@ internal static partial class FormalDungeonTcpTests
                     {
                         byte list = index == 0 && deltas == 2 ? (byte)3 : (byte)family.Bag;
                         bool quietBag = list != 3 && family.Bag is InventoryListType.Main or InventoryListType.Avatar or InventoryListType.Pet;
-                        ushort opcode = quietBag ? (ushort)13 : (ushort)14;
+                        if (quietBag)
+                        {
+                            That(list != 0 || bag is < 3 or > 8, "副本普通装备夹具使用包裹格，快捷装备格保留独立全量合同");
+                            InventoryDeltaTestChecks.Read(peer, list, bag, toId);
+                            continue;
+                        }
+                        const ushort opcode = 14;
                         var delta = peer.Expect(0, opcode).Body;
                         short slot = list == 3 ? family.Worn : bag;
                         int beforeId = list == 3 ? toId : fromId;
                         int afterId = list == 3 ? fromId : toId;
-                        if (!quietBag && beforeId != 0 && afterId != 0 && beforeId != afterId)
+                        if (beforeId != 0 && afterId != 0 && beforeId != afterId)
                         {
                             That(delta[0] == list && U16(delta, 1) == 1 && U16(delta, 3) == slot && U32(delta, 5) == uint.MaxValue,
-                                "穿戴槽模板覆盖先清再写；包裹侧改走全量，不再双发差量");
+                                "穿戴槽模板覆盖先清再写；包裹侧独立同步变化槽");
                             delta = peer.Expect(0, opcode).Body;
                         }
                         That(delta[0] == list, "保留所属容器及宠物专属差量");
                         if (list == 3 && family.Worn == 26)
                             That(delta.Length == 126 && U16(delta, 1) == 1 && U16(delta, 3) == slot &&
                                 U32(delta, 5) == (afterId == 0 ? uint.MaxValue : (uint)afterId), "宠物交换差量使用真实模板并清空卸下槽26");
-                        if (quietBag)
-                            That(QuietHolds(delta, family.Bag, bag, toId),
-                                "副本穿脱的包裹用NOTI13全量，返回装备仍在目标格，不发14/1681，也不重置房间");
                     }
                     // 装扮与光环都在装备栏0..11内，换装改变当前橱窗内容：投影在Actor前按槽补发0x063F。
                     if (family.Worn is 0 or 9 or 11)
@@ -296,9 +299,7 @@ internal static partial class FormalDungeonTcpTests
                 { writer.Write((byte)1); writer.Write((byte)1); writer.Write(bag); writer.Write(1);
                     writer.Write((byte)3); writer.Write(wornSlot); });
                 That(ack.SequenceEqual(expectedAck), $"结算光环ACK: {wornSlot}, {fromId}->{toId}, actual={Convert.ToHexString(ack)}, expected={Convert.ToHexString(expectedAck)}");
-                var avatarDelta = peer.Expect(0, 13).Body;
-                That(avatarDelta[0] == 1 && QuietHolds(avatarDelta, InventoryListType.Avatar, bag, toId),
-                    "结算光环穿脱用Avatar的NOTI13，不发14/1681新物品标记");
+                InventoryDeltaTestChecks.Read(peer, 1, bag, toId);
                 That(peer.Expect(0, 0x063F).Body[0] == 0, "结算光环穿脱补发1号橱窗单条");
                 byte[] actor = peer.Expect(0, 2).Body;
                 int nameWidth = checked((int)U32(actor, 123));
@@ -332,7 +333,7 @@ internal static partial class FormalDungeonTcpTests
                 peer.Send(19, CreatureMove(bag, fromId, toId));
                 peer.Expect(1, 19, [1, 7, (byte)bag, (byte)(bag >> 8), 1, 0, 0, 0, 3, 26, 0]);
                 peer.Expect(0, 105); peer.Expect(0, 14);
-                PetDelta(toId);
+                InventoryDeltaTestChecks.Read(peer, 7, bag, toId);
                 byte[] actor = peer.Expect(0, 2).Body;
                 int nameWidth = checked((int)U32(actor, 123));
                 int creatureOffset = 156 + nameWidth + actor[133 + nameWidth] * 25;
@@ -352,7 +353,7 @@ internal static partial class FormalDungeonTcpTests
                 peer.Expect(1, 19, Build(writer =>
                 { writer.Write((byte)1); writer.Write((byte)7); writer.Write(bag); writer.Write(1); writer.Write((byte)3); writer.Write((short)33); }));
                 peer.Expect(0, 105);
-                That(PetDelta(toId)[0] == 7, "33由ACK移动，宠物背包仍发布完整提交差量");
+                InventoryDeltaTestChecks.Read(peer, 7, bag, toId);
                 byte[] actor = peer.Expect(0, 2).Body;
                 int nameWidth = checked((int)U32(actor, 123));
                 int creatureOffset = 156 + nameWidth + actor[133 + nameWidth] * 25;
@@ -360,27 +361,6 @@ internal static partial class FormalDungeonTcpTests
                     U32(actor, 94) == (real == 0 ? 0u : (uint)fromId), "选图及结算幻化保留成员状态；无真宠时清外观而不清幻化资产");
                 That(peer.Expect(0, 2).Body[0] == 1, "33独立外观声明之后才发Player");
                 peer.Barrier();
-            }
-
-            byte[] PetDelta(int toId)
-            {
-                var body = peer.Expect(0, 13).Body;
-                That(body[0] == 7 && body.Length == 3 + 123 * U16(body, 1),
-                    "宠物返回包裹用NOTI13全量，不发14/1681新物品标记");
-                _ = toId;
-                return body;
-            }
-
-            static bool QuietHolds(byte[] body, InventoryListType list, short slot, int itemId)
-            {
-                int header = list == InventoryListType.Pet ? 3 : 5;
-                int row = list == InventoryListType.Avatar ? 165 : 123;
-                int count = U16(body, header - 2);
-                That(body.Length == header + row * count, "穿脱全量的条目宽度与容器一致");
-                var hits = Enumerable.Range(0, count).Select(index => header + index * row).Where(at => U16(body, at) == slot).ToArray();
-                if (itemId == 0)
-                    return hits.Length == 0;
-                return hits.Length == 1 && U32(body, hits[0] + 2) == (uint)itemId;
             }
 
             byte[] CreatureMove(short bag, int fromId, int toId) => Build(writer =>

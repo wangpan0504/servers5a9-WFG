@@ -163,9 +163,7 @@ internal static class AuraSkinTcpTests
         if (!accepted) { peer.Expect(1, 19, [0, 23, 0, 1, 3]); peer.Barrier(); return; }
         peer.Expect(1, 19, Build(writer =>
         { writer.Write((byte)1); writer.Write((byte)1); writer.Write(bag); writer.Write(1); writer.Write((byte)3); writer.Write(worn); }));
-        var delta = peer.Expect(0, 13).Body;
-        That(delta[0] == 1 && delta.Length == 5 + 165 * U16(delta, 3),
-            "装扮穿脱用NOTI13全量载入，不发14/1681新物品标记");
+        InventoryDeltaTestChecks.Read(peer, 1, bag, toId);
         // 光环在装备栏0..11内，换装改变当前橱窗内容，投影在Actor前补发0x063F。
         That(peer.Expect(0, 0x063F).Body[0] == 0, "城镇光环装卸后补发1号橱窗单条，装扮栏缓存跟随穿戴");
         That(peer.Expect(0, 2).Body[0] == 0 && peer.Expect(0, 2).Body[0] == 1,
