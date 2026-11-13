@@ -28,12 +28,17 @@ internal sealed partial class AntonRaidBattle
                 symbols = symbols.SetItem($"[area_{area}]", 0).SetItem($"[area_{area}_dgn_type]", 7);
             // 单人布局在实例创建时冻结；两阶段沿原symbol继承，不把分支改成另一套圣地。
             symbols = symbols.SetItem("[single raid type]", preyRandom.Next(2)).SetItem("[slenikon hp]", PreyHeader("[max hp]"));
-            // 本服布局策略：七个初始据点隔位分布，分支在实例内冻结；不声称是原服随机布局算法。
-            int slot = 2;
+            // 原生只有1/5/9/13号区域声明圣地图案；其余初始据点保留偶数槽，不能把圣地排到12/14。
+            ReadOnlySpan<int> sanctuarySlots = [1, 5, 9, 13];
+            int ordinarySlot = 2, sanctuary = 0;
             foreach (var dungeon in script.Phases[0].Dungeons.Where(row => PreyBranchMatches(row, symbols)))
             {
+                bool holy = PreyDungeonType(dungeon) == 4;
+                if (holy ? sanctuary == sanctuarySlots.Length : ordinarySlot > 16)
+                    throw new InvalidDataException("普雷引导据点超过战略图可用区域容量");
+                int slot = holy ? sanctuarySlots[sanctuary++] : ordinarySlot;
                 symbols = symbols.SetItem($"[area_{slot}]", dungeon.Id).SetItem($"[area_{slot}_dgn_type]", PreyDungeonType(dungeon));
-                slot += 2;
+                if (!holy) ordinarySlot += 2;
             }
         }
         return symbols;

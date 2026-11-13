@@ -27,6 +27,8 @@ internal sealed class SettingsProjection(ClientSettingsService settings, DfoServ
     public async Task InitializeAsync(GameConnectionContext context, ClientSettingsReceipt receipt)
     {
         bool CanSend() => context.Session.CanPublishClientSettings(receipt);
+        await context.Notify(NotiPacketType.INFORM_NOTICE_2ND, SettingsPackets.SeenNotices(receipt.Settings.SeenNotices),
+            "account_seen_notices_initialize", CanSend);
         await context.Notify(NotiPacketType.NPC_BOOKMARK_INFO, SettingsPackets.NpcBookmarks(receipt.Settings.NpcBookmarks),
             "npc_bookmarks_initialize", CanSend);
         if (context.ChatEmoticons is { } chat)

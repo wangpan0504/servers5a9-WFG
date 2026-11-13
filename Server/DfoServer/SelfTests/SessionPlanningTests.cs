@@ -742,9 +742,10 @@ internal static partial class SessionPlanningTests
         static bool RetainedStrongway2019AccountFact(string table) => table is
             "character_strongway2019_completions" or "character_strongway2019_match_facts";
 
+        // 在线好友观察时间是会话副作用，不属于删角资产合同；测试在基线后还会经历选角/回列表。
         public string SharedSnapshot() => string.Join('|', Tables().Where(table => (table.StartsWith("account", StringComparison.Ordinal) ||
             RetainedStrongway2019AccountFact(table)) &&
-            table != "account_completed_quests").Select(table => Rows("SELECT rowid,* FROM \"" + table + "\" ORDER BY rowid"))) +
+            table is not ("account_completed_quests" or "account_social_presence")).Select(table => Rows("SELECT rowid,* FROM \"" + table + "\" ORDER BY rowid"))) +
             Rows("SELECT rowid,account,quest_id,acceptance_id,daily_period,answer FROM account_completed_quests ORDER BY rowid") +
             Rows("SELECT * FROM character_inventory_items WHERE character_id IS NULL ORDER BY item_uid") +
             Rows("SELECT * FROM character_inventory_slots WHERE character_id IS NULL ORDER BY item_uid") +

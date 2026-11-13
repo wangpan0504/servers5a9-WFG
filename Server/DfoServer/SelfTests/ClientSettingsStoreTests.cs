@@ -21,6 +21,7 @@ internal static partial class ClientSettingsStoreTests
     public static void Run()
     {
         int before = TestCheck.Count;
+        SeenNoticeStorage();
         QuestNotifyStorage();
         NpcBookmarkStorage();
         CloneTitleStorage();

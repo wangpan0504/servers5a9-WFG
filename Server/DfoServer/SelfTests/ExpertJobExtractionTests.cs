@@ -32,6 +32,10 @@ internal static class ExpertJobExtractionTests
             That(Plan(character, out var valid) && valid.Inventory.After.Find(target.Position) is null &&
                 valid.Inventory.After.Find(extractor.Position) == extractor && valid.Products.Length > 0,
                 "萃取消费真实装备、发材料并保留无限次工具");
+            That(Plan(character with { ExpertJobExperience = int.MaxValue }, out var capped) &&
+                capped.Experience == resources.ExpertJobs.ClampExperience(job, int.MaxValue) &&
+                capped.Inventory.After.Find(target.Position) is null && capped.Products.Length > 0,
+                "三职业满级溢出仍完成萃取与发材料，累计经验封顶");
             var expiring = character with { Inventory = character.Inventory with
             { Items = character.Inventory.Items.Replace(extractor, extractor with { Core = extractor.Core with { ExpireTime = checked((int)now.ToUnixTimeSeconds() + 10) } }) } };
             That(Plan(expiring, out var expiringPlan) && expiringPlan.Inventory.CharacterPrecondition is { } precondition &&

@@ -3,6 +3,7 @@ using DfoServer.Game.Accounts;
 using DfoServer.Game.ExpertJob;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
+using DfoServer.Game.Session;
 using DfoServer.Infrastructure;
 using DfoServer.Persistence;
 using DfoServer.GameWorld.Towns;
@@ -17,6 +18,14 @@ internal static class ExpertJobActionTests
     {
         int checks = Count;
         var scripts = resources.ExpertJobs;
+        foreach (byte job in new byte[] { 1, 2, 3, 4 })
+        {
+            int cap = scripts.ClampExperience(job, int.MaxValue);
+            That(cap > scripts.ExperienceForLevel(job, scripts.MaxLevel(job)) &&
+                scripts.AddExperience(job, cap - 1, 1) == cap && scripts.AddExperience(job, cap - 1, 2) == cap &&
+                scripts.AddExperience(job, int.MaxValue, long.MaxValue) == cap && scripts.AddExperience(job, 0, 0) == 0,
+                "四副职业按实际末档经验封顶，保留满级经验条并避免整数溢出：" + job);
+        }
         That(scripts.DisjointRules.TryGet(0, 1, 0, out var ordinary) && ordinary.AdditionalTable == 1 &&
             ordinary.BigWinTable == 1 && ordinary.BigWinPercent == 9 && scripts.DisjointRules.Pool(1, false).Count == 4 &&
             scripts.DisjointRules.OwnMachineBigWinPercent(9) == 5,
@@ -61,6 +70,10 @@ internal static class ExpertJobActionTests
             });
             Sql($"INSERT INTO character_expert_job(character_id,account,job_type,expertness) VALUES({created.Id},'profession-action',3,51)");
             var current = repository.LoadCharacter(owner, 0);
+            That(disjoint.Plan(current with { ExpertJobExperience = 1333 }, gearSlot) is { Experience: 1195 },
+                "分解师满级旧经验1333按实际EXJ上限1195收敛，分解仍正常产出");
+            That(disjoint.Plan(current with { ExpertJobExperience = int.MaxValue }, gearSlot) is
+                { Experience: 1195, Disjoint.Rewards.Length: > 0 }, "分解师极大旧经验不阻断真实分解和产物");
             var white = current with { Inventory = current.Inventory with { Items =
                 [current.Inventory.Find(gearSlot)! with { Core = InventoryRewardGrantService.Create(items.Get(10400)) }] } };
             That(disjoint.Plan(white, gearSlot)!.Disjoint!.Rewards.All(row => row.ItemId != 2610045),
@@ -121,6 +134,8 @@ internal static class ExpertJobActionTests
             That(enchanting.Plan(enchanter with { ExpertJobExperience = 0 }, cardRecipe.RecipeId, gearSlot, cardSlot) is null,
                 "Lv1不能附魔要求Lv9的卡片，不为截图错误提示取消真实等级门禁");
             var enchanted = enchanting.Plan(enchanter, cardRecipe.RecipeId, gearSlot, cardSlot)!;
+            That(enchanting.Plan(enchanter with { ExpertJobExperience = int.MaxValue }, cardRecipe.RecipeId, gearSlot, cardSlot)
+                is { Succeeded: true, Experience: 1195 }, "满级溢出角色仍正常附魔，卡片成功不再突破经验上限");
             That(enchanted is { Succeeded: true } && enchanted.Inventory.After.Find(cardSlot) is null &&
                 enchanted.Inventory.After.Find(gearSlot)!.Core.EnchantCardId == cardRecipe.CardId,
                 "已学卡片配方真实消耗卡、材料并保留目标UID写入附魔");
@@ -163,6 +178,54 @@ internal static class ExpertJobActionTests
             void Sql(string sql) { using var db = database.Open(); using var command = db.CreateCommand(); command.CommandText = sql; command.ExecuteNonQuery(); }
         }
         finally { SqliteConnection.ClearAllPools(); TestFiles.DeleteDirectory(root, true); }
+        InitializeExperience(towns, resources);
         Console.WriteLine($"PASS {Count - checks} 副职业兼容规则、分解/附魔原子性与回滚断言");
+    }
+
+    static void InitializeExperience(TownCatalog towns, ItemResources resources)
+    {
+        string root = Path.Combine(Path.GetTempPath(), "s5a9-expert-exp-cap-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            string path = Path.Combine(root, "game.db");
+            var database = new SqliteGameDatabase(path);
+            var repository = new CharacterRepository(path);
+            var owners = new AccountOwners();
+            foreach (byte job in new byte[] { 1, 2, 3, 4 })
+            {
+                using var owner = owners.Acquire("experience-cap-" + job, () => { });
+                var created = repository.Create(owner, new("Experience" + job, towns.Room, towns.InitialReturn));
+                Sql($"INSERT INTO character_expert_job(character_id,account,job_type,expertness) VALUES({created.Id},'experience-cap-{job}',{job},2147483647)");
+                var session = new GameSession(repository, towns, owner);
+                session.Select(created.Slot);
+                var before = session.Selected!;
+                Sql($"CREATE TRIGGER fail_exp_cap BEFORE UPDATE OF revision ON characters WHEN NEW.id={created.Id} BEGIN SELECT RAISE(ABORT,'experience cap failure'); END");
+                Reject<SqliteException>(() => session.InitializeExpertJobExperience(resources.ExpertJobs),
+                    "入城经验纠正末段失败整笔回滚：" + job);
+                var failed = repository.LoadCharacter(owner, created.Slot);
+                That(ReferenceEquals(session.Selected, before) && failed.ExpertJobExperience == int.MaxValue && failed.Revision == before.Revision,
+                    "纠正失败保持会话快照、原熟练度和版本：" + job);
+                Sql("DROP TRIGGER fail_exp_cap");
+                int cap = resources.ExpertJobs.ClampExperience(job, int.MaxValue);
+                That(session.InitializeExpertJobExperience(resources.ExpertJobs) && session.Selected!.ExpertJobExperience == cap &&
+                    session.Selected.Revision == before.Revision + 1 && session.Selected.Inventory == before.Inventory,
+                    "选角投影前通过原owner事务收敛，资产不变：" + job);
+                var normalized = session.Selected!;
+                That(!session.InitializeExpertJobExperience(resources.ExpertJobs) && ReferenceEquals(session.Selected, normalized),
+                    "重复初始化不追加版本或重复写库：" + job);
+                session.MarkReady();
+                That(!session.InitializeExpertJobExperience(resources.ExpertJobs), "入城后不能复用选角初始化入口：" + job);
+                session.ReturnToRoster(); session.Select(created.Slot);
+                That(session.Selected!.ExpertJobExperience == cap && !session.InitializeExpertJobExperience(resources.ExpertJobs),
+                    "重选恢复已收敛经验且无需再次纠正：" + job);
+            }
+            void Sql(string sql)
+            {
+                using var db = database.Open(); using var command = db.CreateCommand();
+                command.CommandText = sql; command.ExecuteNonQuery();
+            }
+        }
+        finally { SqliteConnection.ClearAllPools(); TestFiles.DeleteDirectory(root, true); }
     }
 }

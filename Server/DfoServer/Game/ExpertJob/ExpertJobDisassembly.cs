@@ -58,7 +58,8 @@ internal sealed class ExpertJobDisassembly(InventoryDisjointService disjoint, Ex
             }
             if (products.Count > byte.MaxValue) return null;
             var gain = scripts.DisjointGain(3);
-            int experience = checked(character.ExpertJobExperience + gain.Min + (gain.Max > gain.Min ? next(gain.Max - gain.Min + 1) : 0));
+            int experience = scripts.AddExperience(3, character.ExpertJobExperience,
+                (long)gain.Min + (gain.Max > gain.Min ? next(gain.Max - gain.Min + 1) : 0));
             var receipt = new DisjointReceipt(request, products.ToArray());
             var inventory = new InventoryPlan(character.Inventory, grant.Plan.After, "expert_job_machine_disjoint",
                 new(character, source.ExpireTime > 0 ? source.ExpireTime : null, time))
