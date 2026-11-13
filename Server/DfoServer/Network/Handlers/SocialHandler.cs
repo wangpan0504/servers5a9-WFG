@@ -29,6 +29,8 @@ internal sealed class SocialHandler(ISocialStore store, SocialService service, O
             store.SaveAccountGroups(actor, groups);
             log.Write("social_committed", new { Connection = context.Id, Character = actor.Character.Id, packet.Opcode });
             await context.Reply(opcode, SocialPackets.Ack(0), "account_friend_groups_saved", actor.IsCurrent);
+            // 成功ACK不重建分组下拉；仅回放本次已提交的四组，不另读库或刷新好友列表。
+            await context.Notify(NotiPacketType.ACCOUNT_FRIEND_GROUP_INFO, SocialPackets.AccountGroups(groups), "account_friend_groups", actor.IsCurrent);
             return CommandResult.Handled;
         }
         if (opcode == CmdPacketType.ACCOUNT_FRIEND_REFRESH)
