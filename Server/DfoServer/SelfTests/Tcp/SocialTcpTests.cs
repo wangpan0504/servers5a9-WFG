@@ -162,6 +162,14 @@ internal static class SocialTcpTests
                 }
                 beta.Expect(1, 7, [1]); beta.Expect(0, 2);
                 Refresh(alpha, 1, accountOnline: false, characterOnline: false, accountAdventure: "TeamB");
+                if (slot == 1)
+                {
+                    long observed = fixture.UtcNow.ToUnixTimeSeconds() - 7200;
+                    fixture.Sql("UPDATE account_social_presence SET last_seen_unix=$p0 WHERE account='socialb'", observed);
+                    alpha.Send(1684); alpha.Expect(0, 1702, alphaGroups);
+                    Refresh(alpha, 1, accountOnline: false, characterOnline: false, accountAdventure: "TeamB",
+                        expectedOfflineElapsedSeconds: 7200);
+                }
                 beta.Select(slot);
                 Bytes(beta.AccountFriendGroups, betaGroups, "换角登录1702恢复账号四组，不退回默认或其他账号配置");
                 Refresh(alpha, 1, characterOnline: slot == 0, accountAdventure: "TeamB",
@@ -575,7 +583,8 @@ internal static class SocialTcpTests
         }
     }
     static byte[] Refresh(TcpPeer peer, int count, byte[]? requests = null, bool accountOnline = true,
-        bool characterOnline = true, string? accountAdventure = null, string? accountCharacter = null)
+        bool characterOnline = true, string? accountAdventure = null, string? accountCharacter = null,
+        long? expectedOfflineElapsedSeconds = null)
     {
         var body = peer.Expect(0, 273).Body;
         That(U32(body, 0) == 0 && U32(body, 4) == count, "好友全量subcommand及真实行数");
@@ -584,12 +593,14 @@ internal static class SocialTcpTests
             var online = peer.Expect(0, 274).Body;
             That(U16(online) == (characterOnline ? 10 : 0), "角色好友按当前角色在线状态下发真实频道，换角不能误判原角色在线");
         }
-        VerifyAccountPresence(peer.Expect(0, 1376).Body, accountOnline, accountAdventure, accountCharacter);
+        VerifyAccountPresence(peer.Expect(0, 1376).Body, accountOnline, accountAdventure, accountCharacter,
+            expectedOfflineElapsedSeconds);
         var receivedRequests = peer.Expect(0, 1377).Body;
         if (requests is not null) That(receivedRequests.AsSpan().SequenceEqual(requests), "申请方向、发起方冒险团、留言和时间按原生通知中心协议投递");
         return body;
     }
-    static void VerifyAccountPresence(byte[] body, bool online, string? expectedAdventure = null, string? expectedCharacter = null)
+    static void VerifyAccountPresence(byte[] body, bool online, string? expectedAdventure = null, string? expectedCharacter = null,
+        long? expectedOfflineElapsedSeconds = null)
     {
         using var stream = new MemoryStream(body);
         using var reader = new BinaryReader(stream);
@@ -603,9 +614,12 @@ internal static class SocialTcpTests
             That(homeServer == 2 && channelServer == 2, "不同角色、换角和离线均使用相同真实大区，不能写ActorID");
             string character = Name(); reader.ReadBytes(3);
             ushort channel = reader.ReadUInt16(); string adventure = Name(); Name();
-            reader.ReadUInt32(); byte unavailable = reader.ReadByte(); reader.ReadBytes(2);
+            uint offlineElapsedSeconds = reader.ReadUInt32(); byte unavailable = reader.ReadByte(); reader.ReadBytes(2);
             That(adventure.Length != 0 && (online ? channel == 10 && character.Length != 0 && unavailable == 0 : channel == 0),
                 "冒险团在线绘制要求真实非零频道、角色名及不可用标记0，离线由频道0表示");
+            if (!online && expectedOfflineElapsedSeconds is long expected)
+                That(Math.Abs((long)offlineElapsedSeconds - expected) <= 2,
+                    "冒险团离线行在不可用标记前写最近在线elapsed秒，按实测时钟允许两秒采样误差");
             if (expectedAdventure is not null) That(adventure == expectedAdventure, "冒险团唯一键不随登录角色变化");
             if (expectedCharacter is not null) That(character == expectedCharacter, "登录角色字段显示当前角色，不与冒险团昵称互换");
         }
