@@ -30,7 +30,7 @@ internal static class AuctionPackets
     const int ExpiresOffset = 4;
     const int PriceOffset = 9;
     const int BuyoutOffset = 13;
-    // 道具块内字段：物品种类 1B、itemId 4B、attr(强化) 1B、value(数量/品级 seed) 4B、耐久 2B、封印 1B，其余为 0。
+    // 道具块内已确认字段逐项编码；附魔升级位于+61，不能沿用普通条目的+18。
     // 与普通物品条目相比，value 与 attr 的位置互换了，这就是「反排」的实际含义。
     const int BlockKindOffset = 0;
     const int BlockItemIdOffset = 1;
@@ -38,6 +38,8 @@ internal static class AuctionPackets
     const int BlockValueOffset = 6;
     const int BlockDurabilityOffset = 10;
     const int BlockSealOffset = 12;
+    // 027F3925读取83B源块+0x3D，随后写入与普通条目+18相同的内部核心+0x20。
+    const int BlockEnchantUpgradeOffset = 61;
     /// <summary>
     /// 道具块 <c>+6</c>（= 记录 <c>[49..52]</c>）在 itemId 合法时的**下限**：见下方「丢行过滤器」注释。
     /// 取 1 只是为了非 0，不是「最小合法数量」的业务断言。
@@ -49,8 +51,9 @@ internal static class AuctionPackets
     const int EntryAttrOffset = 10;
     const int EntryDurabilityOffset = 11;
     const int EntrySealOffset = 13;
-    /// <summary>读取条目快照字段所需的最小长度（最大用到封印 @13）。</summary>
-    const int EntryMinimumLength = 14;
+    const int EntryEnchantUpgradeOffset = 18;
+    /// <summary>读取条目快照字段所需的最小长度（最大用到附魔升级 @18）。</summary>
+    const int EntryMinimumLength = 19;
     const int EpicExchangeTrailerSize = 12;
     const int DisjointTrailerSize = 8;
     const uint DisjointTrailerMagic = 0x31524A44; // 持久BLOB专用ASCII "DJR1"，不属于客户端条目。
@@ -100,7 +103,7 @@ internal static class AuctionPackets
         var record = new byte[RecordSize];
         WriteInt32(record, ListingIdOffset, listing.ListingId);
         WriteInt32(record, ExpiresOffset, checked((int)listing.ExpiresAtUnix));
-        WriteInt32(record, PriceOffset, listing.DisplayPrice);
+        WriteInt32(record, PriceOffset, BidDisplayPrice(listing));
         // 一口价**总额**（单价 × 数量）：客户端 `cmp [row+0x365], -1` 判「有无一口价」，并把该字段当总额
         // 用于「比一口价高」校验与购买确认框。纯竞拍必须原样写 -1（写 0 会被判成「出价高于一口价」）。
         WriteInt32(record, BuyoutOffset, BuyoutTotal(listing));
@@ -129,6 +132,7 @@ internal static class AuctionPackets
         block[BlockDurabilityOffset] = entry[EntryDurabilityOffset];
         block[BlockDurabilityOffset + 1] = entry[EntryDurabilityOffset + 1];
         block[BlockSealOffset] = entry[EntrySealOffset];
+        block[BlockEnchantUpgradeOffset] = entry[EntryEnchantUpgradeOffset];
         return block;
     }
 
@@ -143,6 +147,7 @@ internal static class AuctionPackets
         block[BlockDurabilityOffset] = (byte)core.Durability;
         block[BlockDurabilityOffset + 1] = (byte)(core.Durability >> 8);
         block[BlockSealOffset] = core.SealFlag;
+        block[BlockEnchantUpgradeOffset] = core.EnchantUpgrade;
         return block;
     }
 
@@ -254,13 +259,18 @@ internal static class AuctionPackets
             throw new InvalidDataException("「我的拍卖品」记录的两个首字段同时为 0：客户端会隐藏整行");
         WriteInt32(record, AuctionMyListReply.ListingIdOffset, listing.ListingId);
         WriteInt32(record, AuctionMyListReply.ExpiresOffset, checked((int)listing.ExpiresAtUnix));
-        // [8..11] 是**单价**（界面「价格」列），与搜索合同的「当前竞拍」同源：有出价取最高出价、否则起拍价。
-        WriteInt32(record, AuctionMyListReply.PriceOffset, listing.DisplayPrice);
+        // 转成共享行对象后，这里控制「当前竞拍」行；无出价的一口价挂牌必须隐藏此行。
+        WriteInt32(record, AuctionMyListReply.PriceOffset, BidDisplayPrice(listing));
         WriteInt32(record, AuctionMyListReply.BuyoutOffset, BuyoutTotal(listing));
         ItemBlock(listing.ItemEntry, listing.ItemKind).CopyTo(record[layout.ItemOffset..]);
         if (layout.RemainOffset >= 0)
             WriteInt32(record, layout.RemainOffset, RemainingSeconds(listing.ExpiresAtUnix, now));
     }
+
+    // 026F2300以行对象+3D1（搜索记录+9，我的上架记录+8）的-1跳过第二价格行。
+    // 只改变无竞价的一口价挂牌的展示，不改变库内起拍价、均价、排序或成交金额。
+    static int BidDisplayPrice(AuctionListing listing) => listing.BuyoutPrice >= 0 && listing.CurrentBid <= 0
+        ? -1 : listing.DisplayPrice;
 
     /// <summary>
     /// 一口价**总额**（单价 × 数量，上限夹 int.MaxValue）：参考实现的这两个面板读的就是总额

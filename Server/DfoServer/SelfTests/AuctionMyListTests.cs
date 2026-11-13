@@ -82,7 +82,12 @@ internal static class AuctionMyListTests
         That(one.Length == 3 + 151 && one[2] == 1, "★ 188 一条记录 = 3 + 1×151");
         That(BitConverter.ToInt32(one, 3 + 0) == 0x11223344, "记录 [0..3] = 挂牌 id");
         That(BitConverter.ToInt32(one, 3 + 4) == 1_700_086_400, "记录 [4..7] = 到期时间");
-        That(BitConverter.ToInt32(one, 3 + 8) == 12_000, "记录 [8..11] = 单价（界面价格列）");
+        That(BitConverter.ToInt32(one, 3 + 8) == -1, "记录 [8..11] 隐藏无出价一口价挂牌的当前竞拍行");
+        That(BitConverter.ToInt32(AuctionPackets.EncodeMyListing(listing with { CurrentBid = 13_000 },
+                AuctionMyListReply.Registed151, 0), 8) == 13_000 &&
+            BitConverter.ToInt32(AuctionPackets.EncodeMyListing(listing with { BuyoutPrice = -1 },
+                AuctionMyListReply.Registed151, 0), 8) == 12_000,
+            "真实出价及纯竞拍旧记录仍保留当前竞价或起拍价");
         That(BitConverter.ToInt32(one, 3 + 12) == 17_000, "记录 [12..15] = 一口价总额（单价 × 数量）");
         That(one.Skip(3 + 16).Take(13).All(value => value == 0), "记录 [16..28] 的 13B 字符串保持 0");
         var block = one.AsSpan(3 + 30, 83);
@@ -185,7 +190,8 @@ internal static class AuctionMyListTests
         var real = active[0];
         That(BitConverter.ToInt32(record[0..]) == real.ListingId && BitConverter.ToInt32(record[4..]) == real.ExpiresAtUnix,
             "记录 [0..3]/[4..7] 取自库里的挂牌 id 与到期时间");
-        That(BitConverter.ToInt32(record[8..]) == real.DisplayPrice, "记录 [8..11] = 库里那行的显示价（无出价取起拍价）");
+        That(BitConverter.ToInt32(record[8..]) == -1 && real.CurrentBid == 0 && real.BuyoutPrice >= 0,
+            "真实库内无出价一口价挂牌隐藏当前竞拍行，仍按库内一口价编码售价");
         That(BitConverter.ToInt32(record[12..]) == real.BuyoutPrice * real.ItemCount, "记录 [12..15] = 一口价总额");
         That(BitConverter.ToInt32(record[31..]) == SampleTemplate,
             "★ 道具块 @30 的 itemId（块内 [1..4]）与库里那条挂牌一致（记录体真的来自真实在售数据）");
