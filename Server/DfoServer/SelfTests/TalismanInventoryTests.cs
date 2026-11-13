@@ -25,6 +25,13 @@ internal static class TalismanInventoryTests
     static readonly GoldLimitCatalog Limits = new("[gold limit from level]\n0 1000000000\n[/gold limit from level]");
     static readonly EpicPieceCatalog Pieces = new("[piece list]\n50000 50001\n[/piece list]");
 
+    static Func<int, int> UnsortedSocketDraw()
+    {
+        int[] offsets = [4, 3, 0]; // Fisher-Yates 原始抽出 5、1、3。
+        int index = 0;
+        return _ => offsets[index++];
+    }
+
     public static void RunCore()
     {
         int start = Count;
@@ -38,8 +45,11 @@ internal static class TalismanInventoryTests
             granted.Plan.After.Items.All(item => item.Position.List == InventoryListType.Talisman), "护石与符文奖励自动进入各自专用分页");
         var newStone = granted.Plan!.After.Find(new(InventoryListType.Talisman, 0))!.Core;
         var colors = TalismanSocketColors.Read(newStone);
-        That(colors.IsComplete && new[] { colors.First, colors.Second, colors.Third }.Distinct().Count() == 3,
-            "新护石一次生成三种有效孔色");
+        That(colors.IsComplete && colors.First < colors.Second && colors.Second < colors.Third,
+            "新护石一次生成三种有效孔色并按阵营编号升序落孔");
+        That(TalismanSocketColors.Read(InventoryRewardGrantService.Create(Stone,
+            talismanColorDraw: UnsortedSocketDraw())) == new TalismanSocketColors(1, 3, 5),
+            "新护石将抽出的乱序三色按阵营编号升序写入孔位");
         That(ItemSlotBoundService.Range(ItemKind.Talisman, 0) == ((short)0, (short)69) &&
             ItemSlotBoundService.Range(ItemKind.Rune, 0) == ((short)70, (short)209) &&
             ItemSlotBoundService.Allows(0, new(InventoryListType.Equipment, 35), ItemKind.Talisman) &&
@@ -73,6 +83,12 @@ internal static class TalismanInventoryTests
         That(incoming.Accepted && incoming.Plan!.After.Items.Count(item => item.Uid == 20) == 1 &&
             incoming.Plan.After.Items.Where(item => item.Core.Kind == ItemKind.Rune).Sum(item => item.Core.Count) == 2001,
             "旧邮件附件在领取输出归一分类并守恒拆分，不重写原附件身份");
+        var unorderedLegacyCore = new TalismanSocketColors(5, 1, 3).Apply(originalCore with
+        { Kind = ItemKind.Talisman, EquipmentLockId = 0 });
+        var unorderedIncoming = InventoryRewardGrantService.TryGrantItems(empty,
+            [legacyStone with { Core = unorderedLegacyCore }], catalog, Limits, Pieces, DateTimeOffset.FromUnixTimeSeconds(Now));
+        That(unorderedIncoming.Accepted && unorderedIncoming.Plan!.After.Find(new(InventoryListType.Talisman, 0))?.Core == unorderedLegacyCore,
+            "已有护石附件领取保留原孔位顺序，不按新实例生成规则重排");
 
         var service = new InventoryTalismanService(catalog, _ => 0);
         var worn = StoneItem(1, 34, InventoryListType.Equipment);
@@ -143,6 +159,13 @@ internal static class TalismanInventoryTests
             "重锻按品级足额扣料，仅替换三孔颜色，其他完整实例字段保留");
         That(refinedCore == target.Core && refined.Plan.ChangedSlots.SequenceEqual(new[] { material.Position }),
             "重锻允许抽回原孔色并照常扣料，值未变的目标不进入通用库存差量，回执后仍须恢复目标显示");
+        var reordered = new InventoryTalismanService(catalog, UnsortedSocketDraw())
+            .Refine(Character(target, material), new(121, 0), costs, Now);
+        var reorderedCore = reordered.Plan!.After.Find(target.Position)!.Core;
+        That(reordered.Accepted && TalismanSocketColors.Read(reorderedCore) == new TalismanSocketColors(1, 3, 5) &&
+            reorderedCore.Extension114.Flag == originalCore.Extension114.Flag &&
+            (reorderedCore.Extension114.Value >> 24) == 0xFE && reorderedCore.Rune == originalCore.Rune,
+            "重锻将抽出的乱序三色升序落孔，保留扩展高字节、Flag及其他实例属性");
         That(!service.Refine(Character(target, material with { Core = material.Core with { Value = 1 } }), new(121, 0), costs, Now).Accepted,
             "重锻材料不足不返回扣料计划");
 

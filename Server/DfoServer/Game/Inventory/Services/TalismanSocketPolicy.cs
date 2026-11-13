@@ -18,6 +18,8 @@ internal static class TalismanSocketPolicy
             int selected = i + offset;
             (colors[i], colors[selected]) = (colors[selected], colors[i]);
         }
+        // 新生成与重锻固定落孔顺序；存量实例仍按原顺序读取。
+        colors[..3].Sort();
         return new(colors[0], colors[1], colors[2]);
     }
 }
