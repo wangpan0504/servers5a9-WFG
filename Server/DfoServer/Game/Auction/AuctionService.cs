@@ -187,7 +187,7 @@ internal static class AuctionRegisterErrors
 }
 
 /// <summary>
-/// 拍卖行读用例：分页搜索（匹配总数 + 排除自己 + 分类过滤）与开发种子。
+/// 拍卖行读用例：分页搜索（匹配总数 + 可选卖家排除 + 分类过滤）与开发种子。
 /// 只依赖存储合同：条目字节的排列由物品模块的编码入口产生，在装配处传进来（见 <see cref="ResolveSeedItems"/>），
 /// 分类 id 的翻译由 <see cref="AuctionCategoryResolver"/> 负责，因此本层不引用 Network，也不需要 PVF 就能自测。
 ///
@@ -659,7 +659,7 @@ internal sealed class AuctionService(IAuctionListingStore store, AuctionCategory
         // 一口价 -1 = 纯竞拍：竞价不实现，绝不能按一口价把纯竞拍的挂牌卖掉。
         if (listing.BuyoutPrice < 0)
             return AuctionBuyDecision.Reject(AuctionBuyError.AuctionOnly, $"挂牌 {listing.ListingId} 的一口价是 {listing.BuyoutPrice}（-1 = 纯竞拍）");
-        // 买自己的挂牌：对应白名单里的 0x69（参考实现里该码就是这条语义，D95 未实测其文本）。
+        // 自买始终在服务端拒绝；0x69仅保留旧兼容选码，当前客户端专用文案由搜索记录的原生预检显示。
         if (listing.SellerCharacterId == buyer.Id)
             return AuctionBuyDecision.Reject(AuctionBuyError.SelfBuy, $"挂牌 {listing.ListingId} 的卖家就是当前角色 {buyer.Id}");
         // [26..29] 与库内的物品模板 id 交叉校验：不一致说明客户端窗口里那行与库里不是同一件东西。
@@ -725,7 +725,7 @@ internal sealed class AuctionService(IAuctionListingStore store, AuctionCategory
         if (TransferBlocked(core, template) is { } transferError)
             return AuctionBuyDecision.Reject(AuctionBuyError.Unavailable, transferError);
         core = StackableTradePolicy.AfterTransfer(core, template);
-        var itemText = $"拍卖行成交（挂牌 {listing.ListingId}）：您拍得的道具";
+        var itemText = $"您在拍卖行以{totalPrice}金币购买了{template.Name}（{listing.ItemCount}个），请领取附件。";
         var overlong = AuctionCustodyMail.TextTooLong(listing.SellerName, itemText);
         if (overlong is not null)
             return AuctionBuyDecision.Reject(AuctionBuyError.Unavailable, overlong);
@@ -737,7 +737,7 @@ internal sealed class AuctionService(IAuctionListingStore store, AuctionCategory
         long proceeds = SellerProceeds(totalPrice, taxPercent);
         if (listing.SellerCharacterId is { } sellerId)
         {
-            var goldText = $"拍卖行成交（挂牌 {listing.ListingId}）：卖方所得（已扣 {taxPercent}% 手续费）";
+            var goldText = $"您在拍卖行上架的{template.Name}（{listing.ItemCount}个）已售出。成交价{totalPrice}金币，扣除{taxPercent}%手续费{totalPrice - proceeds}金币，实收{proceeds}金币，请领取。";
             overlong = AuctionCustodyMail.TextTooLong(SystemSender, goldText);
             if (overlong is not null)
                 return AuctionBuyDecision.Reject(AuctionBuyError.Unavailable, overlong);
@@ -854,7 +854,7 @@ internal sealed class AuctionService(IAuctionListingStore store, AuctionCategory
             : ImmutableArray<byte>.Empty;
 
         var custody = ImmutableArray.CreateBuilder<AuctionCustodyMail>();
-        var itemText = $"拍卖行成交（挂牌 {listing.ListingId}）：您拍得的道具";
+        var itemText = $"您在拍卖行以{totalPrice}金币购买了{template.Name}（{request.Count}个），请领取附件。";
         var overlong = AuctionCustodyMail.TextTooLong(listing.SellerName, itemText);
         if (overlong is not null)
             return AuctionBuyDecision.Reject(AuctionBuyError.Unavailable, overlong);
@@ -866,7 +866,7 @@ internal sealed class AuctionService(IAuctionListingStore store, AuctionCategory
         long proceeds = SellerProceeds(totalPrice, taxPercent);
         if (listing.SellerCharacterId is { } sellerId)
         {
-            var goldText = $"拍卖行成交（挂牌 {listing.ListingId}）：卖方所得（已扣 {taxPercent}% 手续费）";
+            var goldText = $"您在拍卖行上架的{template.Name}（{request.Count}个）已售出。成交价{totalPrice}金币，扣除{taxPercent}%手续费{totalPrice - proceeds}金币，实收{proceeds}金币，请领取。";
             overlong = AuctionCustodyMail.TextTooLong(SystemSender, goldText);
             if (overlong is not null)
                 return AuctionBuyDecision.Reject(AuctionBuyError.Unavailable, overlong);

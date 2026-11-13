@@ -211,7 +211,22 @@ internal sealed class AuctionListingRepository(string path)
     {
         var conditions = new List<string> { "state=0", "expires_at_unix>$now" };
         command.Parameters.AddWithValue("$now", now);
-        if (filter.ItemTemplateId is { } template)
+        if (!filter.ItemTemplateIds.IsDefault)
+        {
+            if (filter.ItemTemplateIds.IsEmpty)
+                conditions.Add("0=1");
+            else
+            {
+                var names = new string[filter.ItemTemplateIds.Length];
+                for (int index = 0; index < names.Length; index++)
+                {
+                    names[index] = "$template" + index;
+                    command.Parameters.AddWithValue(names[index], filter.ItemTemplateIds[index]);
+                }
+                conditions.Add($"item_template_id IN ({string.Join(',', names)})");
+            }
+        }
+        else if (filter.ItemTemplateId is { } template)
         {
             conditions.Add("item_template_id=$template");
             command.Parameters.AddWithValue("$template", template);

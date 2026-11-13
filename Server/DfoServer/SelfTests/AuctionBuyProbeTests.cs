@@ -156,7 +156,7 @@ internal static class AuctionBuyProbeTests
             using var log = new ServerLog(logDirectory);
             var handler = new AuctionHandler(catalog, service, projection,
                 static () => AuctionProbeSettings.Disabled, static () => AuctionProbeSettings.Disabled,
-                static _ => AuctionProbeSettings.Disabled, log);
+                static _ => AuctionProbeSettings.Disabled, log, new OnlineSessionDirectory());
             var commands = new GameCommandRegistry();
             handler.Register(commands);
             commands.Seal();
