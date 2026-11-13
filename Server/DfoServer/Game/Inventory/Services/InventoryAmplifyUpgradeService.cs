@@ -33,7 +33,7 @@ internal sealed class InventoryAmplifyUpgradeService(ItemCatalog items, AmplifyU
             target.Core.ItemId != request.TargetItemId || target.Core.Kind != ItemKind.Equipment || target.Core.IsRental ||
             target.Core.EquipmentLockId != 0 || target.IsExpired(now) ||
             (reinforce ? target.Core.AmplifyType != 0 : target.Core.AmplifyType is < 1 or > 4 || target.Core.AmplifyValue == 0) ||
-            target.Core.Upgrade >= 31 ||
+            target.Core.Upgrade >= 31 && request.Mode != EnhancementMode.Amplify ||
             !ItemSlotBoundService.Allows(before, target.Position, target.Core.Kind))
             return InventoryResult.Reject(RejectCode);
         var template = items.Get(target.Core.ItemId);
@@ -50,6 +50,11 @@ internal sealed class InventoryAmplifyUpgradeService(ItemCatalog items, AmplifyU
             return InventoryResult.Reject(RejectCode);
         if (use is not null && !AllowsUse(use, character, target, template))
             return InventoryResult.Reject(RejectCode);
+        // 普通NPC增幅已到五位等级上限时走原生“无法继续强化”提示；不读取下一档概率或规划费用。
+        // 便携、幸运及强化仍保留原拒绝；源实体门禁与目标资格不能被上限提示覆盖。
+        if (old >= 31)
+            return InventoryResult.Reject(request.Mode == EnhancementMode.Amplify && use is null && !InvalidPhysicalSource()
+                ? (ushort)13 : RejectCode);
         // 便携强化读取普通normal表；幸运强化仍只使用自己的三段权重。
         var rules = reinforce && !lucky ? upgrades.ReinforceRules : upgrades.Rules;
         if (old >= rules.Steps.Length || rules.MaximumLevels.TryGetValue(template.Rarity, out int maximum) && old >= maximum)
