@@ -328,6 +328,7 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
             loginWearRestatementUntil = (timeProvider ?? TimeProvider.System).GetUtcNow().ToUnixTimeMilliseconds() +
                 LoginWearRestatementWindowMillis;
             SetState(SessionPhase.Town);
+            ObserveSocialPresence();
             ObserveGuildPresence();
             ObserveGuildAttendance();
             return true;
@@ -409,6 +410,7 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
         }
         GuildManagementClosing?.Invoke();
         ObserveGuildPresence();
+        ObserveSocialPresence();
         InvalidateRaids(notices, reason == "session-ended");
         CancelHostedDungeonEligibility();
         mailboxRestore = null;

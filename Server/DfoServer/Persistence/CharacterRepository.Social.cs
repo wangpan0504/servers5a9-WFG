@@ -140,6 +140,26 @@ internal sealed partial class CharacterRepository : ISocialStore
         while (row.Read()) rows.Add(new(ReadSocialPerson(row), DateTimeOffset.FromUnixTimeSeconds(row.GetInt64(8)), row.GetString(9), checked((byte)row.GetInt32(10))));
         return rows.ToArray();
     }
+
+    public IReadOnlyDictionary<string, long> AccountLastSeenUnix(IEnumerable<string> accounts)
+    {
+        string[] distinct = accounts.Where(account => !string.IsNullOrEmpty(account))
+            .Distinct(StringComparer.Ordinal).ToArray();
+        if (distinct.Length == 0) return new Dictionary<string, long>(StringComparer.Ordinal);
+        using var db = database.Open();
+        using var query = db.CreateCommand();
+        var placeholders = new string[distinct.Length];
+        for (int i = 0; i < distinct.Length; i++)
+        {
+            placeholders[i] = "$account" + i;
+            query.Parameters.AddWithValue(placeholders[i], distinct[i]);
+        }
+        query.CommandText = $"SELECT account,last_seen_unix FROM account_social_presence WHERE account IN ({string.Join(',', placeholders)})";
+        var result = new Dictionary<string, long>(StringComparer.Ordinal);
+        using var row = query.ExecuteReader();
+        while (row.Read()) result[row.GetString(0)] = row.GetInt64(1);
+        return result;
+    }
     public AccountFriendRequest[] AccountRequests(string account)
     {
         using var db = database.Open();

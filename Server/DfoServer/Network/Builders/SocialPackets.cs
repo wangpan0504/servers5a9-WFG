@@ -39,7 +39,9 @@ internal static class SocialPackets
             PacketEncoding.WriteString(w, p.Adventure); PacketEncoding.WriteString(w, row.Link.Memo);
             // 023B4F39写行+CC；012B2045/2058要求频道非零且此标记为0才绘制在线角色。
             // 在线与否由channel表示，不能把Online写入客户端的不可用标记。
-            w.Write(0u); w.Write((byte)0); w.Write(row.Link.Group); w.Write((byte)0);
+            long elapsed = row.Online ? 0 : Math.Max(0, row.OfflineElapsedSeconds);
+            w.Write(checked((uint)Math.Min(elapsed, uint.MaxValue)));
+            w.Write((byte)0); w.Write(row.Link.Group); w.Write((byte)0);
         }
     });
     public static byte[] CharacterPresence(SocialRow row) => Build(w =>

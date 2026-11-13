@@ -26,6 +26,9 @@ internal static class SocialTests
             "1376行首大区2不能写角色42，角色名在前、冒险团唯一键在后");
         Bytes(SocialPackets.AccountFriends([friend with { Online = false, Channel = 0 }]).AsSpan(1, 3).ToArray(),
             [2, 0, 2], "离线行保留本服大区和频道服务器，不使用角色ID或离线哨兵覆盖大区");
+        byte[] elapsedFriend = SocialPackets.AccountFriends([friend with { Online = false, Channel = 0, OfflineElapsedSeconds = 7200 }]);
+        That(BitConverter.ToUInt32(elapsedFriend, elapsedFriend.Length - 7) == 7200,
+            "冒险团好友离线行在memo后写真实elapsed秒，不再固定为零");
         Bytes(ChatPackets.NamedMessage(new(DfoServer.Game.Chat.ChatMessageType.OneToOne, 0, "A", 2, "hi") { AdventureName = "TeamA" }),
             Convert.FromHexString("2400010000004102020000006869050000005465616D410100000041"),
             "1对1正文后先读附加名字串，再读发送者作为会话对象，不能让接收端回复自己");
@@ -62,10 +65,21 @@ internal static class SocialTests
             repo.Create(a, new("SocialA", point, point)); repo.Create(b, new("SocialB", point, point));
             var sa = new GameSession(repo, towns, a); sa.Select(0); sa.MarkReady();
             var sb = new GameSession(repo, towns, b); sb.Select(0); sb.MarkReady();
+            var presence = (ISocialPresenceStore)repo;
+            long observed = DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 10;
+            presence.ObserveSocialAccountOnline(a, observed);
+            presence.ObserveSocialAccountOnline(a, observed - 1);
+            That(repo.AccountLastSeenUnix([a.Account])[a.Account] == observed,
+                "账号好友最近在线时刻按账号持久化且拒绝时钟回拨");
             var actor = sa.CaptureSocialActor()!; var other = sb.CaptureSocialActor()!;
             var now = new DateTimeOffset(2026, 10, 23, 12, 0, 0, TimeSpan.Zero);
             using var db = new SqliteConnection("Data Source=" + path + ";Pooling=False;Foreign Keys=True"); db.Open();
-            void Execute(string sql) { using var cmd = db.CreateCommand(); cmd.CommandText = sql; cmd.ExecuteNonQuery(); }
+            void Execute(string sql, long? p0 = null)
+            {
+                using var cmd = db.CreateCommand(); cmd.CommandText = sql;
+                if (p0.HasValue) cmd.Parameters.AddWithValue("$p0", p0.Value);
+                cmd.ExecuteNonQuery();
+            }
             long Scalar(string sql) { using var cmd = db.CreateCommand(); cmd.CommandText = sql; return Convert.ToInt64(cmd.ExecuteScalar()); }
             That(repo.ChangeCharacterLink(actor, "SocialB", false, false, "", now).Accepted &&
                 repo.CharacterLinks(other.Character.Id, false).Length == 0 &&
@@ -142,6 +156,13 @@ internal static class SocialTests
                 repo.AccountFriends(a.Account).Single() is { Memo: "发起方备注", Group: 1 },
                 "重开后接受仍保存双方独立备注和分组，留言不用于目标角色校验");
             That(new CharacterRepository(path).AccountFriends(a.Account).Length == 1, "重开恢复真实社交关系");
+            sb.ReturnToRoster();
+            Execute("UPDATE account_social_presence SET last_seen_unix=$p0 WHERE account='socialb'", now.ToUnixTimeSeconds() - 7200);
+            var socialService = new SocialService(repo, online, new FixedClock(now));
+            var offlineView = socialService.Capture(sa)!;
+            That(offlineView.Accounts.Single().OfflineElapsedSeconds == 7200,
+                "账号好友离线时按持久最近在线时刻计算elapsed秒，不把关系创建时间当离线时间");
+            sb.Select(0); sb.MarkReady();
             var parties = new DfoServer.Game.Party.PartyService(repo);
             var publicIdentity = sa.PublicCharacter(actor.Character.Id)!;
             ushort noPartyId = parties.PartyId(actor.Character.Id);
@@ -261,6 +282,11 @@ internal static class SocialTests
         }
         finally { TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"PASS {Count - before} 社交协议、持久化、屏蔽、原子回滚及迁移断言");
+    }
+
+    sealed class FixedClock(DateTimeOffset now) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => now;
     }
 
     [DllImport("msvcrt.dll", EntryPoint = "_localtime32_s", CallingConvention = CallingConvention.Cdecl)]
