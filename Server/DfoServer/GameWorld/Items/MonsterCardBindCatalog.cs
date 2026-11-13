@@ -9,7 +9,7 @@ using static PvfLib.PvfScript;
 namespace DfoServer.GameWorld.Items;
 
 internal sealed record MonsterCardBindRewardDefinition(int ItemId, long Weight);
-internal sealed record MonsterCardBindPool(int Rarity, decimal Coefficient, int CountHint,
+internal sealed record MonsterCardBindPool(int Rarity, decimal Coefficient, int MaximumCardCount,
     ImmutableArray<MonsterCardBindRewardDefinition> Rewards);
 internal sealed record MonsterCardBindUpgradeRow(int Rarity, ImmutableArray<int> Weights);
 
@@ -71,7 +71,7 @@ internal sealed class MonsterCardBindCatalog
             if (!int.TryParse(tokens[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out int rarity) || rarity < 0 ||
                 !decimal.TryParse(tokens[1], NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out decimal coefficient) ||
                 coefficient < 0 ||
-                !int.TryParse(tokens[2], NumberStyles.Integer, CultureInfo.InvariantCulture, out int hint) || hint < 0)
+                !int.TryParse(tokens[2], NumberStyles.Integer, CultureInfo.InvariantCulture, out int maximum) || maximum is < 2 or > 5)
                 throw new InvalidDataException($"PVF怪物卡片{name}奖池头无效");
             var rewards = ImmutableArray.CreateBuilder<MonsterCardBindRewardDefinition>();
             long total = 0;
@@ -85,7 +85,7 @@ internal sealed class MonsterCardBindCatalog
                 total = checked(total + weight);
                 rewards.Add(new(itemId, weight));
             }
-            if (total <= 0 || rewards.Count == 0 || !pools.TryAdd(rarity, new(rarity, coefficient, hint, rewards.ToImmutable())))
+            if (total <= 0 || rewards.Count == 0 || !pools.TryAdd(rarity, new(rarity, coefficient, maximum, rewards.ToImmutable())))
                 throw new InvalidDataException($"PVF怪物卡片{name}奖池重复或没有正权重: rarity={rarity}");
         }
         if (pools.Count == 0)
@@ -126,9 +126,11 @@ internal sealed class MonsterCardBindCatalog
         return rows.ToFrozenDictionary();
     }
 
-    public static int UpgradeChance(decimal coefficient)
+    public static int UpgradeChance(decimal coefficient, int count)
     {
-        long value = decimal.ToInt64(decimal.Truncate(checked(coefficient * 100m)));
+        if (count is < 2 or > 5)
+            throw new InvalidDataException("怪物卡片合成张数越界");
+        long value = decimal.ToInt64(decimal.Truncate(checked(coefficient * count * 100m)));
         if (value < 0 || value > UpgradeRollRange)
             throw new InvalidDataException("怪物卡片升档系数超出万分比范围");
         return checked((int)value);

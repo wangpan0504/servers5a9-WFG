@@ -56,7 +56,20 @@ internal static class BattlePassMonsterCardBindTests
         var sphereFact = fact with { Synthesizer = sphereBinder, BindType = 5, Request = sphereRequest, Receipt = sphereReceipt,
             Materials = [new(sphereCards, 5, 0)], Before = sphereBefore, Paid = spherePaid, After = sphereAfter };
         That(sphereFact.Matches(new(sphereBefore, sphereAfter, "monster_card_bind"), sphereAfter with { Items = [other, reward with { Uid = 47 }] }), "原Sphere五卡同族成功也只产生一次合成来源");
-        That(!(sphereFact with { BindType = 0, Receipt = sphereReceipt with { BindType = 0 } }).Matches(new(sphereBefore, sphereAfter, "monster_card_bind"), actual), "普通两卡不得借Sphere五卡资格");
+        var silverBinder = binder with { Core = binder.Core with { ItemId = 2682575 } };
+        var silverCards = cards with { Core = cards.Core with { Value = 3 } };
+        var silverBefore = initial with { Items = [silverBinder, silverCards, other] };
+        var silverPaid = silverBefore with { Items = [other] };
+        var silverRequest = new MonsterCardBindRequest(65, [233, 233, 233]);
+        var silverReceipt = receipt with { BindType = 2, InputRarity = 2, OutputRarity = 3, DeletedSlots = silverRequest.CardSlots };
+        var silverAfter = silverPaid with { Items = [other, reward] };
+        var silverFact = fact with { Synthesizer = silverBinder, BindType = 2, Request = silverRequest, Receipt = silverReceipt,
+            Materials = [new(silverCards, 3, 2)], Before = silverBefore, Paid = silverPaid, After = silverAfter };
+        var silverActual = silverAfter with { Items = [other, reward with { Uid = 53 }] };
+        That(silverFact.Matches(new(silverBefore, silverAfter, "monster_card_bind"), silverActual),
+            "白银三张卡合成通过原逐源扣费与奖励UID事实校验，产生一次战令来源");
+        That(!(silverFact with { Materials = [new(silverCards, 2, 2)] }).Matches(new(silverBefore, silverAfter, "monster_card_bind"), silverActual),
+            "三张合成不能用两张扣费事实蒙混通过");
         foreach (var definition in new BattlePassMission[] { new(21, 1, 100, 21, "", -1), new(34, 2, 1000, 21, "", -1), new(60, 20, 1600, 21, "", -1) })
         {
             That(BattlePassMonsterCardBindSource.Matches(definition), "仅保存正常原目录三定义接线" + definition.Id);
