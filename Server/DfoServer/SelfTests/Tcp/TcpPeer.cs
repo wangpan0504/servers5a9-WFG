@@ -121,6 +121,7 @@ internal sealed partial class TcpPeer : IDisposable
     public WirePacket[] ClientSettings { get; private set; } = [];
     public byte[] ChatEmoticonInfo { get; private set; } = [];
     public byte[] RecentEmoticonInfo { get; private set; } = [];
+    public byte[] SeenNotices { get; private set; } = [];
     public byte[] NpcBookmarks { get; private set; } = [];
 
     internal void ReadChatEmoticons(WirePacket packet)
@@ -1678,6 +1679,8 @@ internal sealed partial class TcpPeer : IDisposable
                 foreach (ushort id in ids) { writer.Write(id); writer.Write(guideCount); }
             })).Body).ToArray();
             var expectedChatEmoticons = fixture?.ExpectedChatEmoticons(Id);
+            SeenNotices = Expect(0, 440).Body;
+            TestCheck.That(SeenNotices.Length >= 1 && SeenNotices.Length == 1 + SeenNotices[0], "账号提示完整计数及编号回放");
             var bookmarks = Expect(0, 1737).Body;
             NpcBookmarks = bookmarks;
             TestCheck.That(bookmarks.Length >= 4 && bookmarks.Length == 4 + U32(bookmarks, 0) * 4L,
