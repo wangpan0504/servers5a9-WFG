@@ -14,6 +14,28 @@ internal sealed class InventoryService(ItemCatalog catalog, GoldLimitCatalog gol
     // 在线入口在owner锁外预读至多两端及六个快捷格；规划中的Get只命中共享模板缓存。
     public void PrepareMove(Character character, InventoryMoveRequest request)
     {
+        bool talismanUnequip =
+            (request.Source.List == InventoryListType.Equipment &&
+             (request.Source.Index == ItemSlotBoundService.TalismanEquipmentStart ||
+              request.Source.Index == ItemSlotBoundService.TalismanEquipmentEnd) &&
+             request.Destination.List == InventoryListType.Talisman && request.Destination.Index is >= 0 and < 70) ||
+            (request.Destination.List == InventoryListType.Equipment &&
+             (request.Destination.Index == ItemSlotBoundService.TalismanEquipmentStart ||
+              request.Destination.Index == ItemSlotBoundService.TalismanEquipmentEnd) &&
+             request.Source.List == InventoryListType.Talisman && request.Source.Index is >= 0 and < 70);
+        if (talismanUnequip)
+        {
+            var equipmentSlot = request.Source.List == InventoryListType.Equipment ? request.Source : request.Destination;
+            if (character.Inventory.Find(equipmentSlot)?.Core.Kind == ItemKind.Talisman)
+                for (short offset = 0; offset < 3; offset++)
+                {
+                    var rune = character.Inventory.Find(new(InventoryListType.Talisman,
+                        (short)(ItemSlotBoundService.EquippedRuneStart +
+                            (equipmentSlot.Index - ItemSlotBoundService.TalismanEquipmentStart) * 3 + offset)));
+                    if (rune is not null)
+                        _ = catalog.Get(rune.Core.ItemId);
+                }
+        }
         if (!QuickSlotEquipmentRules.IsQuickSlot(request.Source) && !QuickSlotEquipmentRules.IsQuickSlot(request.Destination)) return;
         foreach (var item in character.Inventory.Items)
             if (item.Core.Kind == ItemKind.Equipment && (item.Position == request.Source || item.Position == request.Destination ||

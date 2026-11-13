@@ -15,6 +15,7 @@ internal static class TalismanTcpTests
 {
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
+        TalismanInventoryTests.RunUnequipChecks();
         var catalog = resources.ItemResources.Items;
         var costs = catalog.TalismanRefineCosts();
         var (stone, legacyStone, campRunes, legacyRune) = Pick(catalog, resources.Archive, costs);
@@ -166,9 +167,34 @@ internal static class TalismanTcpTests
                 "重放装载不重复扣除符文");
 
             peer.Send(19, Move(3, (short)ItemSlotBoundService.TalismanEquipmentStart, stone, 1, 46, stoneSlot.Slot, 0));
-            peer.Expect(1, 19, Rejected(3, 46));
+            peer.Expect(1, 19, Ack(3, (short)ItemSlotBoundService.TalismanEquipmentStart, 1, 46, stoneSlot.Slot));
+            peer.Expect(0, 14);
+            peer.Expect(0, 2);
+            peer.Expect(0, 2);
             peer.Barrier();
-            That(Rows("list_type=3 AND slot_index=34") == 1, "带已装符文的护石卸下被拒绝，穿戴槽保持不变");
+            That(Rows("list_type=3 AND slot_index=34") == 0 &&
+                Rows($"list_type=46 AND slot_index={stoneSlot.Slot}") == 1 &&
+                Rows("list_type=46 AND slot_index=210") == 0 && StackCount(rune) == 3,
+                "带已装符文的护石直接卸下并原子归还符文");
+
+            // 直接卸下后重新穿戴，后续 TCP 用例继续覆盖孔位拒绝与专用卸除回包。
+            peer.Send(19, Move(46, stoneSlot.Slot, stone, 1, 3, 34, 0));
+            peer.Expect(1, 19, Ack(46, stoneSlot.Slot, 1, 3, 34));
+            peer.Expect(0, 14);
+            peer.Expect(0, 2);
+            peer.Expect(0, 2);
+            peer.Barrier();
+            That(Rows("list_type=3 AND slot_index=34") == 1 &&
+                Rows($"list_type=46 AND slot_index={stoneSlot.Slot}") == 0,
+                "直接卸下后的护石可重新穿戴");
+            peer.Send(1659, Equip(210, (ushort)runeSlot.Slot, rune));
+            peer.Expect(0, 14);
+            peer.Expect(1, 1659, Equipped(210, rune));
+            peer.Expect(0, 14);
+            peer.Expect(0, 14);
+            peer.Barrier();
+            That(Rows("list_type=46 AND slot_index=210") == 1 && StackCount(rune) == 2,
+                "重新穿戴后可再次装载符文");
 
             peer.Send(1659, Equip(211, (ushort)runeSlot.Slot, rune));
             peer.Expect(1, 1659, Failure(23));
