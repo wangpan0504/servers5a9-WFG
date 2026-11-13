@@ -1,4 +1,5 @@
 using DfoServer.Game.Auction;
+using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.GameWorld.Items;
 using DfoServer.Network.Builders.Inventory;
@@ -28,6 +29,9 @@ internal static class AuctionPackets
     public const int ItemBlockSize = 83;
     const int ListingIdOffset = 0;
     const int ExpiresOffset = 4;
+    const int SellerServerOffset = 8;
+    const int SellerNameOffset = 21;
+    const int SellerNameBytes = 13;
     const int PriceOffset = 9;
     const int BuyoutOffset = 13;
     // 道具块内已确认字段逐项编码；附魔升级位于+61，不能沿用普通条目的+18。
@@ -79,14 +83,14 @@ internal static class AuctionPackets
     /// 记录里除已确认字段外全部保持 0。
     /// </summary>
     public static byte[] SearchReply(byte mode, int totalCount, IReadOnlyList<AuctionListing> listings,
-        AuctionSearchRecordProbe? recordProbe = null, long now = 0) => Build(writer =>
+        AuctionSearchRecordProbe? recordProbe = null, long now = 0, byte sellerServerIndex = 0) => Build(writer =>
     {
         writer.Write((byte)1);
         writer.Write(mode);
         writer.Write(totalCount);
         writer.Write(checked((ushort)Math.Min(listings.Count, ushort.MaxValue)));
         foreach (var listing in listings)
-            writer.Write(EncodeListing(listing, recordProbe, now));
+            writer.Write(EncodeListing(listing, recordProbe, now, sellerServerIndex));
     });
 
     /// <summary>
@@ -98,11 +102,16 @@ internal static class AuctionPackets
     /// （见该类里的「丢行过滤器」注释）：itemId 合法而该字段 ≤ 0 时客户端会**整行静默丢弃**。
     /// 那个过滤器**只在 186（搜索）路径上被证实存在**（188/189 没有），本方法只用于搜索应答。
     /// </summary>
-    public static byte[] EncodeListing(AuctionListing listing, AuctionSearchRecordProbe? recordProbe = null, long now = 0)
+    public static byte[] EncodeListing(AuctionListing listing, AuctionSearchRecordProbe? recordProbe = null, long now = 0, byte sellerServerIndex = 0)
     {
         var record = new byte[RecordSize];
         WriteInt32(record, ListingIdOffset, listing.ListingId);
         WriteInt32(record, ExpiresOffset, checked((int)listing.ExpiresAtUnix));
+        // 026F05C5/03701B90按姓名及原属大区判断自买；Data+3BC即Actor+3FC，来源为0267F091。
+        // 当前频道目录只有一个大区，全部挂牌与连接使用同一ServerIndex，不写频道号或角色ID。
+        record[SellerServerOffset] = sellerServerIndex;
+        CharacterName.Encoding.GetEncoder().Convert(listing.SellerName.AsSpan(),
+            record.AsSpan(SellerNameOffset, SellerNameBytes - 1), true, out _, out _, out _);
         WriteInt32(record, PriceOffset, BidDisplayPrice(listing));
         // 一口价**总额**（单价 × 数量）：客户端 `cmp [row+0x365], -1` 判「有无一口价」，并把该字段当总额
         // 用于「比一口价高」校验与购买确认框。纯竞拍必须原样写 -1（写 0 会被判成「出价高于一口价」）。

@@ -1,5 +1,6 @@
 using DfoServer.Game.Auction;
 using DfoServer.Game.Characters;
+using DfoServer.Game.Session;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.GameWorld.Items;
@@ -8,6 +9,7 @@ using DfoServer.Network.Builders;
 using DfoServer.Network.Projection.Inventory;
 using DfoServer.Network.Protocol;
 using System.Globalization;
+using System.Collections.Immutable;
 
 namespace DfoServer.Network.Handlers;
 
@@ -19,7 +21,7 @@ namespace DfoServer.Network.Handlers;
 ///   187（20B）：<c>00 | 00000000 | E12E | 07 | 001F | 00×9 | 08</c>
 ///     ⇒ [0]=mode、[1..4]=翻页记录偏移、[5..6]=分类 id、[7]=品质（默认 7=不限）。
 ///   186（26B）：<c>00 | 00000000 | 001F | 01 | B79C | DD0B0000 | 00×11 | 08</c>
-///     ⇒ [8..9]=分类 id、[10..13]=itemId。
+///     ⇒ [5..6]=强化范围、[7]=模板数量、[8..9]=分类 id、[10..]=连续 i32 模板候选。
 ///   182（13B，D95 抓包）：<c>00 | F2550000 | 00×8</c> ⇒ [1..4]=itemId（小端 i32），其余字节忽略但记日志。
 ///     参考实现的同一命令是 8 字节（<c>00 | itemId | 00×3</c>），因此按 [1..4] 取 itemId 对两个版本都成立，
 ///     长度只做「至少 5 字节」的下限校验，不做等长断言。
@@ -61,7 +63,7 @@ namespace DfoServer.Network.Handlers;
 /// </summary>
 internal sealed class AuctionHandler(ItemCatalog items, AuctionService auctions, InventoryProjection inventory,
     Func<AuctionProbeSettings> nextSearch, Func<AuctionProbeSettings> nextAverage,
-    Func<AuctionMyListPanel, AuctionProbeSettings> nextMyList, ServerLog log) : IGameCommandModule
+    Func<AuctionMyListPanel, AuctionProbeSettings> nextMyList, ServerLog log, OnlineSessionDirectory online) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -212,15 +214,23 @@ internal sealed class AuctionHandler(ItemCatalog items, AuctionService auctions,
         var character = context.Session.Selected;
         if (character is null)
         {
-            // 没有选中角色就无法按官方规则排除自己上架的挂牌：保持未处理，不返回可能违反规则的空列表。
+            // 搜索只向已选角会话提供，不把未选角请求当作正常游戏内查询。
             log.Write("auction_search_no_character", new { Connection = context.Id });
             return CommandResult.Unhandled;
         }
         var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-        // 分类搜索不带 itemId；按道具搜索的 itemId 为 0 时同样不过滤，避免用无效模板过滤掉全部挂牌。
+        // 分类搜索不带模板；186完整候选由BuildSearchRequest校验，不以首模板或无效值回退全表。
         int? itemTemplateId = byItemKey && itemId > 0 ? itemId : null;
         var searchRequest = BuildSearchRequest(offset, itemTemplateId, categoryId, byItemKey, packetBody);
-        var page = auctions.Search(searchRequest, character.Id, now, goldWindow);
+        if (searchRequest is null)
+        {
+            log.Write("auction_search_rejected", new { Connection = context.Id, Reason = "invalid_template_candidates" });
+            await context.Reply(CmdPacketType.AUCTION_SEARCH_BY_ITEMKEY,
+                AuctionPackets.SearchReply(replyMode, 0, [], AuctionSearchRecordProbe.Default, now), replyAction);
+            return CommandResult.Handled;
+        }
+        // 可以搜到自己的挂牌；购买资格仍由规划与提交层的 SelfBuy 校验保护。
+        var page = auctions.Search(searchRequest, null, now, goldWindow);
         // Search 一定带回分类过滤说明（仓储不解释分类，由读用例补上），日志与过滤因此共用同一份解析结果：
         // 分类名、是否命中顶层大类、实际下推的维度都来自这里，
         // 「客户端点了哪个节点 / 服务端到底过滤了什么」可以直接对照。
@@ -250,7 +260,7 @@ internal sealed class AuctionHandler(ItemCatalog items, AuctionService auctions,
             Offset = offset,
             CategoryId = categoryId,
             ItemTemplateId = itemTemplateId ?? 0,
-            ExcludeSeller = character.Id,
+            ItemTemplateIds = searchRequest.ItemTemplateIds.IsDefault ? null : searchRequest.ItemTemplateIds.ToArray(),
             Total = page.TotalCount,
             Rows = page.Listings.Length,
             // 搜索记录**逐字段**探针：实机每搜一次换一个候选（每个候选只改记录里的一个字段），
@@ -262,14 +272,35 @@ internal sealed class AuctionHandler(ItemCatalog items, AuctionService auctions,
                 listing.ItemCount, Price = listing.DisplayPrice, listing.BuyoutPrice, listing.ExpiresAtUnix }).ToArray()
         });
         await context.Reply(CmdPacketType.AUCTION_SEARCH_BY_ITEMKEY,
-            AuctionPackets.SearchReply(replyMode, page.TotalCount, page.Listings, probe.SearchRecord, now), replyAction);
+            AuctionPackets.SearchReply(replyMode, page.TotalCount, page.Listings, probe.SearchRecord, now, context.Channel.ServerIndex), replyAction);
         return CommandResult.Handled;
     }
 
-    static AuctionSearchRequest BuildSearchRequest(int offset, int? itemTemplateId, int categoryId, bool byItemKey, byte[]? body)
+    static AuctionSearchRequest? BuildSearchRequest(int offset, int? itemTemplateId, int categoryId, bool byItemKey, byte[]? body)
     {
         if (body is null)
             return new(offset, itemTemplateId, categoryId);
+        if (byItemKey)
+        {
+            // 当前客户端先把关键词解析为模板数组再发 186，不能只取首个，也不能在截断时退回全表。
+            if (body.Length < 10 || body.Length < 10 + body[7] * sizeof(int))
+                return null;
+            var candidates = ImmutableArray.CreateBuilder<int>(body[7]);
+            for (int index = 0; index < body[7]; index++)
+            {
+                int candidate = BitConverter.ToInt32(body, 10 + index * sizeof(int));
+                if (candidate <= 0)
+                    return null;
+                if (!candidates.Contains(candidate))
+                    candidates.Add(candidate);
+            }
+            return new(offset, null, categoryId)
+            {
+                ItemTemplateIds = candidates.ToImmutable(),
+                MinUpgrade = body[5],
+                MaxUpgrade = body[5] == 0 && body[6] == 0 ? (byte)31 : body[6]
+            };
+        }
         if (!byItemKey && body.Length >= 12)
         {
             byte rarityByte = body[7];
@@ -486,7 +517,7 @@ internal sealed class AuctionHandler(ItemCatalog items, AuctionService auctions,
 
     /// <summary>
     /// CMD 188 `AUCTION_MY_REGISTED_ITEM_INFO`（「我的拍卖品 → 上架的物品」）。
-    /// 用户上架成功后必须能在这里看到自己的挂牌：搜索按官方规则**排除自己**，因此「我的上架」是唯一入口，
+    /// 用户上架成功后必须能在这里管理自己的挂牌；普通搜索同样可以看见，但不能购买自己的挂牌，
     /// 不应答时表现上等同于「物品被吞」。
     /// </summary>
     Task<CommandResult> MyRegistedItems(GameConnectionContext context, Packet packet) =>
@@ -860,14 +891,14 @@ internal sealed class AuctionHandler(ItemCatalog items, AuctionService auctions,
                 row.Delivered,
                 row.Note
             }).ToArray(),
-            // 下面两个字段是这次成交的**客户端契约结论**：不发金币/背包刷新，只给买方一次邮件到达提醒。
+            // 不发金币/背包刷新；事务实际投递成功的买卖双方分别收到邮件提醒。
             GoldRefresh = "none",
-            MailAlarm = "buyer"
+            MailAlarm = "delivered_recipients"
         });
-        await context.Reply(CmdPacketType.AUCTION_BIDDING, AuctionPackets.BuySuccess(), "auction_buy");
         // ★ 不补发背包/金币刷新（理由见方法注释）；只把「新邮件到达」交给邮件模块既有入口，
-        //   它自己核对 Ready / 选中角色 / 连接是否仍属于本账号，失败也不会影响已经提交的成交。
-        context.Session.NotifyMailbox(commit.Buy.Character.Id);
+        //   在等待买方应答前发布，买方断线不能阻断已提交的卖方提示。
+        NotifyDeliveredMail(context, commit.Buy);
+        await context.Reply(CmdPacketType.AUCTION_BIDDING, AuctionPackets.BuySuccess(), "auction_buy");
         return CommandResult.Handled;
     }
 
@@ -978,10 +1009,22 @@ internal sealed class AuctionHandler(ItemCatalog items, AuctionService auctions,
             plan.SellerName,
             SettledAtUnix = plan.SettledAtUnix
         });
+        NotifyDeliveredMail(context, commit.Buy);
         await context.Reply(CmdPacketType.AUCTION_BUY_ITEM_APIECE,
             AuctionPackets.BuyApieceSuccess(), "auction_buy_apiece");
-        context.Session.NotifyMailbox(commit.Buy.Character.Id);
         return CommandResult.Handled;
+    }
+
+    void NotifyDeliveredMail(GameConnectionContext context, AuctionListingBuyResult result)
+    {
+        // BuyListing 已退出买方 owner；这里只根据已提交回执定位收件人，不嵌套账号锁，也不等待卖方 socket。
+        foreach (long recipient in result.Custody.Where(mail => mail.Delivered).Select(mail => mail.RecipientCharacterId).Distinct())
+        {
+            if (recipient is <= 0 or > ushort.MaxValue)
+                continue;
+            var session = recipient == result.Character!.Id ? context.Session : online.FindReadyCharacter((ushort)recipient);
+            session?.NotifyMailbox((ushort)recipient);
+        }
     }
 
     /// <summary>
