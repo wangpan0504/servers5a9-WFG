@@ -107,6 +107,9 @@ internal static class PartyProjection
                 Post(NotiPacketType.USER_UDP_IP_PORT, Endpoints(), "party_endpoints");
             }
             if (notice.Kind == PartyNoticeKind.Endpoints) return;
+            // 原生WALKOUT先按旧槽查Actor；清名册后再通知会静默。两帧共用原接收者守卫。
+            if (notice.Kind == PartyNoticeKind.Removed && notice.RemovalReason == PartyRemovalReason.Kicked)
+                Post(NotiPacketType.WALKOUT, PartyPackets.Kicked(notice.Recipient.Slot), "party_kicked");
             Post(NotiPacketType.PARTY_INFO, PartyPackets.Information(party.Id, channel.ServerIndex, checked((byte)channel.Number),
                 party.Members.Select(m => (m.Slot, m.Actor.Character.Id)).ToArray(), party.Leader,
                 notice.Kind == PartyNoticeKind.Removed, party.Settings), "party_info");

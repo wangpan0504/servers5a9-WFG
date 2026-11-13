@@ -23,10 +23,12 @@ internal sealed record PartySnapshot(ushort Id, PartyMember[] Members, byte Lead
     public long PreyBoardingOrder { get; init; }
 }
 internal enum PartyNoticeKind { Invite, Accepted, Refused, Updated, Removed, Endpoints, SceneChanged, LeaderChanged, SettlementCard, FrameChanged }
+internal enum PartyRemovalReason { None, Kicked }
 internal sealed record PartyNotice(PartyNoticeKind Kind, PartyMember Recipient, PartyMember? Peer = null,
     PartySnapshot? Party = null, uint PeerId = 0, Func<bool>? Guard = null, PartyDungeonInstance? Dungeon = null)
 {
     public ImmutableArray<DungeonCardView?> CardEvent { get; init; }
+    public PartyRemovalReason RemovalReason { get; init; }
 }
 internal sealed record PartyResult(ushort Error, PartyNotice[] Notices)
 {
@@ -400,11 +402,11 @@ internal sealed partial class PartyService
                 if (kickSlot is not null && (party.Leader != own.Slot || kickSlot == own.Slot)) return Reject(4);
                 var removed = kickSlot is { } slot ? party.Members.FirstOrDefault(m => m.Slot == slot) : own;
                 if (removed is null) return Reject(19);
-                return new PartyResult(0, Remove(party, [removed]));
+                return new PartyResult(0, Remove(party, [removed], kickSlot is not null ? removed : null));
             }
         });
     }
-    PartyNotice[] Remove(PartySnapshot party, PartyMember[] removed)
+    PartyNotice[] Remove(PartySnapshot party, PartyMember[] removed, PartyMember? kicked = null)
     {
         var remaining = party.Members.Except(removed).ToArray();
         bool boarding = party.PreyBattleId is not null && remaining.All(m =>
@@ -419,7 +421,8 @@ internal sealed partial class PartyService
         {
             long membership = m.Actor.Session.AdvancePartyMembership();
             return new PartyNotice(PartyNoticeKind.Removed, m, Party: party,
-                Guard: () => m.Actor.IsCurrent() && m.Actor.Session.PartyMembershipVersion == membership && Absent(m));
+                Guard: () => m.Actor.IsCurrent() && m.Actor.Session.PartyMembershipVersion == membership && Absent(m))
+            { RemovalReason = ReferenceEquals(m, kicked) ? PartyRemovalReason.Kicked : PartyRemovalReason.None };
         }).ToList();
         if (remaining.Length == 0) parties.Remove(party.Id);
         else

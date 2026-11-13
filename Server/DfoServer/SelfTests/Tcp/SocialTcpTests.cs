@@ -368,7 +368,8 @@ internal static class SocialTcpTests
         alpha.Send(1426); alpha.SendBarrier(); alpha.Batch((0, 23), (0, 24), (0, 2), (0, 3), (0, 23), (0, 22));
         SceneInfo(alpha); alpha.Expect(1, 1347, [1]);
         beta.Batch((0, 2), (0, 3), (0, 23), (0, 22)); beta.Barrier();
-        alpha.Send(14, [1]); alpha.Expect(1, 14, [1]); PartyInfo(alpha, 1); beta.Expect(0, 9, Party(0, true));
+        alpha.Send(14, [1]); alpha.Expect(1, 14, [1]); PartyInfo(alpha, 1);
+        beta.Expect(0, 10, [1, 0]); beta.Expect(0, 9, Party(0, true));
         beta.Expect(0, 9, Party(1));
         alpha.Send(13); alpha.Expect(1, 13, [1]); alpha.Expect(0, 9, Party(0, true));
         beta.Expect(0, 9, Party(0, true));
