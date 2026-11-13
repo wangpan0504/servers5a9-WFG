@@ -230,9 +230,7 @@ internal static class CreatureSkinTcpTests
         { writer.Write((byte)1); writer.Write((byte)7); writer.Write(bag); writer.Write(1); writer.Write((byte)3); writer.Write(worn); }));
         peer.Expect(0, 105);
         if (worn == 26) peer.Expect(0, 14);
-        var delta = peer.Expect(0, 13).Body;
-        That(delta[0] == 7 && delta.Length == 3 + 123 * U16(delta, 1),
-            "幻化沿原CMD19处理Equipment33；宠物背包用NOTI13全量，不发14/1681新物品标记");
+        InventoryDeltaTestChecks.Read(peer, 7, bag, toId);
         CheckActor(peer.Expect(0, 2).Body, real, skin);
         That(peer.Expect(0, 2).Body[0] == 1, "双实体声明之后发布完整穿戴Player");
         peer.Barrier();
