@@ -60,7 +60,8 @@ internal sealed class AntonRaidStart(RaidRegistry registry, PartyService parties
     TownCatalog towns, EpicPieceCatalog pieces, TimeProvider? clock = null, bool phaseProgress = false,
     AntonResourceRewards? rewards = null, LukeRaidClocks? timers = null, PreyGuideRewards? preyRewards = null,
     FiendwarRewards? fiendwarRewards = null, Random? fiendwarMazeRandom = null, PreyGuideRewards? preyTeamRewards = null,
-    DungeonDropControlSettings? dropControl = null, DungeonIncountCatalog? incounts = null)
+    DungeonDropControlSettings? dropControl = null, DungeonIncountCatalog? incounts = null,
+    FiendwarFacilityCatalog? fiendwarFacilities = null)
 {
 #if DEBUG
     internal bool DebugIgnorePreyEntryLimits { get; init; }
@@ -149,6 +150,9 @@ internal sealed class AntonRaidStart(RaidRegistry registry, PartyService parties
             definition = definition with { Resources = teamResources };
         }
         bool fiendwar = definition.Type == 2 && fiendwarRewards is not null && definition.Resources?.Fiendwar is not null;
+        if (fiendwar && !expected.Guide && (fiendwarFacilities is null ||
+            !ReferenceEquals(fiendwarFacilities.Entries, definition.Resources!.EntryCatalog)))
+            return new(19, "fiendwar-facility-definition-unavailable");
         if (fiendwar && expected.Guide)
         {
             if (expected.Capacity != 1 || expected.Members.Length != 1 ||
@@ -246,7 +250,8 @@ internal sealed class AntonRaidStart(RaidRegistry registry, PartyService parties
         var battle = new AntonRaidBattle(definition.Resources.Script, kind: kind, completion: completion,
             antonPhaseProgress: !prey && !fiendwar && phaseProgress, clock: clock, antonRewards: prey || fiendwar ? null : rewards, phaseTimeout: timeout,
             fiendwar: fiendwar ? definition.Resources.Fiendwar : null, memberRewards: memberRewards, fiendwarRoute: guideRoute,
-            fiendwarMazeRandom: fiendwarMazeRandom, preyGuide: preyGuide, epicMultiplier: epicMultiplier, undefeatedSongLimit: songLimit);
+            fiendwarMazeRandom: fiendwarMazeRandom, preyGuide: preyGuide, epicMultiplier: epicMultiplier, undefeatedSongLimit: songLimit,
+            fiendwarFacilities: fiendwar && !definition.Resources.Fiendwar!.Guide ? fiendwarFacilities : null);
         battle.PrepareRaidPayments(reservations);
         var timerLease = timers?.Reserve(battle);
         if (timers is not null && timerLease is null) return new(19, "anton-clock-capacity");

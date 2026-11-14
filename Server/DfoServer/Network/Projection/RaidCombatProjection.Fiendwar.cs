@@ -150,12 +150,16 @@ internal static partial class RaidCombatProjection
     {
         // 原生两套头像表的0分别是敌军/中立怪问号；引导路线不套团队雷达规则。
         bool reveal = guide || view.Symbols.GetValueOrDefault("[radar state]") == 1;
-        return view.Fiendwar!.Areas.Where(row => (enemy ? row.Value.Enemy : row.Value.Monster) is not null)
+        var units = view.Fiendwar!.Areas.Where(row => (enemy ? row.Value.Enemy : row.Value.Monster) is not null)
             .ToImmutableDictionary(row => row.Key, row =>
             {
                 var unit = (enemy ? row.Value.Enemy : row.Value.Monster)!.Value;
                 return reveal ? unit : unit with { Kind = 0 };
             });
+        if (enemy)
+            foreach (var row in view.FiendwarFacilities)
+                units = units.Add(row.Key, new(row.Value.Target.EnemySerial, reveal ? row.Value.Kind : 0));
+        return units;
     }
 
     internal static ImmutableDictionary<(byte Area, byte Kind), FiendwarTimerRow> FiendwarTimerSnapshot(AntonRaidBattleView view)

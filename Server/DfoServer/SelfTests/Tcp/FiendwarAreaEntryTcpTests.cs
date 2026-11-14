@@ -18,7 +18,7 @@ using static DfoServer.Testing.TcpPeer;
 namespace DfoServer.Testing;
 
 // 匹配原生确认窗：只用36进入遭遇，不能靠假客户端补15/16掩盖入口缺失。
-internal static class FiendwarAreaEntryTcpTests
+internal static partial class FiendwarAreaEntryTcpTests
 {
     internal static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
@@ -140,6 +140,11 @@ internal static class FiendwarAreaEntryTcpTests
         peer.Send(36, Area(57, checked((byte)target), position.X, position.Y, 57, checked((ushort)target)));
         That(!Read("duplicate while loading").Any(row => row is { Kind: 0, Opcode: 27 or 28 or 29 or FiendwarKeyLeaseRequests.Opcode }),
             "加载期重复36不能重新准备、重发场景或另建Run");
+        if (!guide)
+        {
+            VerifyTargetGuards(ProbeSessions(), dungeon, resources);
+            VerifyCommitWindows(ProbeSessions(), fixture, clock, resources);
+        }
         }
         finally { foreach (var member in members) member.Dispose(); }
 

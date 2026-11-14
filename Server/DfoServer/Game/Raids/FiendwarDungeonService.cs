@@ -144,13 +144,14 @@ internal sealed class FiendwarDungeonService(RaidRegistry registry, PartyService
             }
             if (!battle.AllowsFiendwarEntry(dungeon) || activeCatalog.Find(dungeon) is not { } definition) return [];
             var mazes = definition.Mazes.Where(maze => maze.QuestConnectionTokens.Count == 0).Select(maze => maze.SourceOrdinal).ToArray();
-            if (battle.FiendwarMaze(dungeon, mazes) is not { } ordinal) { rejection = "fiendwar-maze-unavailable"; return []; }
+            if (battle.FiendwarTarget(dungeon, mazes) is not { } target) { rejection = "fiendwar-maze-unavailable"; return []; }
             byte encounterKey = checked((byte)(raid.Members.Single(member => member.Actor == anchor).Slot + 1));
             var scale = battle.FiendwarEntryScale(dungeon, actors.Select(actor => actor!.Character));
             var fromTown = actors.ToDictionary(actor => actor!.Character, actor => actor!.Session.Phase == SessionPhase.Town);
             var selections = actors.Select(actor => new RaidDungeonSelection(new(start.InstanceId, actor!, 0, encounterKey, activeCatalog,
                 () => actor!.IsCurrent && registry.Find(actor)?.Started?.InstanceId == start.InstanceId,
-                battle.AllowsFiendwarEntry, RaidKind.Fiendwar) { Battle = battle, FiendwarScale = scale }, dungeon, ordinal)).ToArray();
+                battle.AllowsFiendwarEntry, RaidKind.Fiendwar) { Battle = battle, FiendwarScale = scale }, dungeon, target.MazeOrdinal)
+                { FiendwarTarget = target }).ToArray();
             if (selections.Any(selection => !selection.Admission.Actor.Session.CanBeginRaidDungeonSelection(selection.Admission))) return [];
             return selections.Select(selection => new PartyDungeonNotice(PartyDungeonNoticeKind.RaidSelection,
                 party.Members.Single(member => member.Actor.Session == selection.Admission.Actor.Session), party.Members,

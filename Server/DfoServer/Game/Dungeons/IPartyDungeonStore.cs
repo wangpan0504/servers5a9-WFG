@@ -11,6 +11,9 @@ internal sealed record PartyDungeonReservation(AccountOwners.Lease Owner, Charac
     uint NextObjectKey, DungeonEntryCharge Charge, PartyDungeonIncount? Incount = null)
 {
     public EvildomWarSeatEntry? EvildomWar { get; init; }
+    // 仅原漩涡Run签发；writer及SQL在实例锁外，最后COMMIT才进入目标身份的原子边界。
+    public Action<Guid, DfoServer.Game.Raids.FiendwarDungeonTarget, Action>? FiendwarCommit { get; init; }
+    public DfoServer.Game.Raids.FiendwarDungeonTarget? FiendwarTarget { get; init; }
 }
 internal sealed record PartyDungeonIncount(int Dungeon, DungeonIncountPeriod Period, DungeonIncountRow? Row,
     ImmutableArray<AccountIncountCharge> Account, bool Increment);

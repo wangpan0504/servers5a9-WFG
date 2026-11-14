@@ -61,6 +61,7 @@ internal sealed partial class AntonRaidBattle
         {
             if (Kind != RaidKind.Fiendwar || TerminalRequested(current) || pendingTransition is not null ||
                 !dungeonRuns.TryGetValue(instance, out var run) || !run.Installed ||
+                !IsFiendwarRunCurrent(run.Id) ||
                 !run.Active.SetEquals(actors) || actors.Any(actor => !actor.IsCurrent) ||
                 !fiendwarEncounters.TryGetValue(instance, out var encounter)) return null;
             var before = current;

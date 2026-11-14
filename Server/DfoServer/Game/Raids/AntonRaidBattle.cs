@@ -15,6 +15,7 @@ internal sealed record AntonRaidBattleView(Guid Instance, long Revision, int Pha
     public long AntonKillAllEvent { get; init; }
     public bool AntonVolcanoBarrierOpen { get; init; }
     public FiendwarFieldState? Fiendwar { get; init; }
+    public ImmutableDictionary<int, FiendwarFacilityEncounter> FiendwarFacilities { get; init; } = ImmutableDictionary<int, FiendwarFacilityEncounter>.Empty;
     public ImmutableDictionary<int, FiendwarTimer> FiendwarDungeonTimers { get; init; } = ImmutableDictionary<int, FiendwarTimer>.Empty;
     public ImmutableDictionary<ushort, int> FiendwarPositions { get; init; } = ImmutableDictionary<ushort, int>.Empty;
     public ImmutableHashSet<Guid> FiendwarExpiredRuns { get; init; } = ImmutableHashSet<Guid>.Empty;
@@ -229,7 +230,7 @@ internal sealed partial class AntonRaidBattle
         ImmutableDictionary<ushort, ImmutableArray<RaidPhaseRewardPolicy>>? memberRewards = null, int fiendwarRoute = 0,
         LukeCardSetCatalog? lukeCards = null, ImmutableArray<LukeRaidMazeChoice> lukeMazes = default,
         Random? fiendwarMazeRandom = null, LukeChannelCardSelection? lukeChannelCards = null, bool preyGuide = true, decimal epicMultiplier = 1,
-        AccountMaterialDefinition? undefeatedSongLimit = null)
+        AccountMaterialDefinition? undefeatedSongLimit = null, FiendwarFacilityCatalog? fiendwarFacilities = null)
     {
         if (pacing is not null && kind != RaidKind.Luke) throw new InvalidDataException("卢克统一节奏不能应用于其它团本");
         script = pacing?.Adapt(script) ?? script;
@@ -306,6 +307,10 @@ internal sealed partial class AntonRaidBattle
         Instance = instance ?? Guid.NewGuid();
         if (Instance == Guid.Empty) throw new InvalidDataException("攻坚实例身份不能为空");
         fiendwarDefinition = fiendwar;
+        fiendwarFacilityCatalog = fiendwarFacilities;
+        if (fiendwarFacilities is not null && (kind != RaidKind.Fiendwar || fiendwar?.Guide != false ||
+            !ReferenceEquals(fiendwarFacilities.Entries.Script, script)))
+            throw new InvalidDataException("漩涡固定设施合同与本次战场不匹配");
         if (kind == RaidKind.Fiendwar && (fiendwar is null || !ReferenceEquals(fiendwar.Script, script)))
             throw new InvalidDataException("漩涡正式实例缺少匹配战场定义");
         fiendwarGuideRoute = fiendwarRoute;
