@@ -1,7 +1,9 @@
 using System.Collections.Immutable;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Caching;
+using DfoServer.Game.Characters;
 using DfoServer.Game.Dungeons;
+using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Session;
 using DfoServer.Game.Social;
 
@@ -24,11 +26,13 @@ internal sealed record PartySnapshot(ushort Id, PartyMember[] Members, byte Lead
 }
 internal enum PartyNoticeKind { Invite, Accepted, Refused, Updated, Removed, Endpoints, SceneChanged, LeaderChanged, SettlementCard, FrameChanged }
 internal enum PartyRemovalReason { None, Kicked }
+internal readonly record struct PartyInviteDisplay(ushort Fatigue, ushort Stamina, ushort AntiEvil);
 internal sealed record PartyNotice(PartyNoticeKind Kind, PartyMember Recipient, PartyMember? Peer = null,
     PartySnapshot? Party = null, uint PeerId = 0, Func<bool>? Guard = null, PartyDungeonInstance? Dungeon = null)
 {
     public ImmutableArray<DungeonCardView?> CardEvent { get; init; }
     public PartyRemovalReason RemovalReason { get; init; }
+    public PartyInviteDisplay? InviteDisplay { get; init; }
 }
 internal sealed record PartyResult(ushort Error, PartyNotice[] Notices)
 {
@@ -48,6 +52,7 @@ internal sealed partial class PartyService
     readonly ISocialStore social;
     readonly TimeProvider timer;
     readonly IEvildomWarGuideStore? guideStore;
+    readonly Func<Character, int>? inviteAntiEvil;
     readonly object gate = new();
     readonly GameCacheIndex<ushort, PartySnapshot> parties;
     readonly GameCacheIndex<ushort, Invitation> invitations;
@@ -55,11 +60,12 @@ internal sealed partial class PartyService
     long revision;
     readonly HashSet<ushort> reservedRaidSquads = [];
     public PartyService(ISocialStore social, TimeProvider? clock = null, GameCache? memory = null,
-        IEvildomWarGuideStore? guideStore = null)
+        IEvildomWarGuideStore? guideStore = null, Func<Character, int>? inviteAntiEvil = null)
     {
         this.social = social;
         timer = clock ?? TimeProvider.System;
         this.guideStore = guideStore;
+        this.inviteAntiEvil = inviteAntiEvil;
         var cache = memory ?? new GameCache();
         parties = cache.CreateIndex<ushort, PartySnapshot>();
         invitations = cache.CreateIndex<ushort, Invitation>();
@@ -282,8 +288,14 @@ internal sealed partial class PartyService
         if (blocked || a is null || b is null || source.StartedRaid is not null || target.StartedRaid is not null ||
             a.Actor.Owner.Account == b.Actor.Owner.Account || a.Identity.Channel != b.Identity.Channel || Blocked(a, b))
             return Reject();
+        if (inviteAntiEvil is null) throw new InvalidOperationException("组队邀请缺少抗魔计算器");
+        // 显示邀请创建时的源角色资料；资源计算不占用双方owner或共享队伍锁。
+        var character = a.Identity.Character;
+        var display = new PartyInviteDisplay(source.FatigueForClient(character).Remaining,
+            StaminaRecoveryService.Percent(character.Inventory, timer.GetUtcNow()), checked((ushort)inviteAntiEvil(character)));
         return Pair(a, b, () =>
         {
+            if (!a.Identity.IsUnchanged() || !b.Identity.IsUnchanged()) return Reject();
             lock (gate)
             {
                 var now = timer.GetUtcNow();
@@ -302,7 +314,7 @@ internal sealed partial class PartyService
                 var invite = new Invitation(a, b, peer, now.AddSeconds(30));
                 invitations.Add(b.Actor.Character.Id, invite);
                 return new PartyResult(0, [new(PartyNoticeKind.Invite, b, a, PeerId: peer,
-                    Guard: () => invite.Current(timer.GetUtcNow()))]);
+                    Guard: () => invite.Current(timer.GetUtcNow())) { InviteDisplay = display }]);
             }
         });
     }

@@ -34,7 +34,7 @@ internal static class LukeRaidStartTests
             var towns = new TownCatalog(new() { [(1,0)] = new(1,0,1,[],[],[],origin,map,[],[]),
                 [(32,4)] = new(32,4,1,[],[],[],null,map with { Links=[new(new(10,6,4,10),1,0,[],[])] },[],[]) }, origin, origin, new(0,[],[]), [], new Dictionary<uint,uint[]>());
             var owners = new AccountOwners(); var raids = new RaidRegistry();
-            var repository = new CharacterRepository(Path.Combine(root, "game.db")); var parties = new PartyService(repository);
+            var repository = new CharacterRepository(Path.Combine(root, "game.db")); var parties = new PartyService(repository, inviteAntiEvil: _ => 0);
             var pieces = new EpicPieceCatalog("[piece list]\n9001 9002\n[/piece list]");
             var script = new RaidScript("synthetic/luke-start.etc", new(32,4), new(100,1), null,
                 ImmutableDictionary<string,int>.Empty, [new("first",[],[],[]),new("second",[],[],[])], [], []);

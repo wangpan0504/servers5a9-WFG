@@ -180,7 +180,7 @@ internal static class SocialTests
             socialService.Refresh(a.Account);
             That(delivered is { ChangedCharacter: null } && delivered.Characters.Single().Online,
                 "上线后的主动刷新仍是静默在线快照，不沿用上一次事件目标");
-            var parties = new DfoServer.Game.Party.PartyService(repo);
+            var parties = new DfoServer.Game.Party.PartyService(repo, inviteAntiEvil: _ => 0);
             var publicIdentity = sa.PublicCharacter(actor.Character.Id)!;
             ushort noPartyId = parties.PartyId(actor.Character.Id);
             That(noPartyId == ushort.MaxValue, "未组队目标的菜单状态为空队伍哨兵");

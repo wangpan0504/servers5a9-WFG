@@ -145,7 +145,6 @@ internal static class ServerRuntime
         var online = new OnlineSessionDirectory(gameCache);
         var social = new Game.Social.SocialService(repository, online);
         var socialProjection = new SocialProjection(social, repository);
-        var parties = new Game.Party.PartyService(repository, clock, gameCache, guideStore: repository);
         var trades = new Game.Trade.TradeRegistry();
         var tradeHandler = new TradeHandler(trades, online, itemResources.Items, itemResources.GoldLimits, log);
         var pvpRatingCatalog = new GameWorld.Pvp.PvpRatingCatalog(pvf);
@@ -178,6 +177,8 @@ internal static class ServerRuntime
             _ = itemResources.Items.Get(reward.ItemId);
         var returningAntiEvil = new Game.Characters.CharacterAntiEvil(itemResources.Items, new(pvf),
             itemResources.RecoveryConsumables, clock, itemResources.Contracts, sets: new(pvf));
+        var parties = new Game.Party.PartyService(repository, clock, gameCache, guideStore: repository,
+            inviteAntiEvil: returningAntiEvil.Compute);
         repository.ConfigureReturningAdventurers(returningCatalog, adventurerBenefits, returningAntiEvil.Compute, clock);
         var debugSettings = new GameDebugSettings(supportStore.Read(), supportStore.Write,
             fatigueStore.Read(), fatigueStore.Write) { PremiumPcRoom = PremiumPcRoomDefault(options.DataDirectory),

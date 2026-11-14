@@ -15,6 +15,7 @@ internal static class SoloPartyTests
 {
     public static void RunCore()
     {
+        PartyInviteDisplayTests.RunCore();
         var (operation, settings) = PartyRequests.Information(Convert.FromHexString("000304000000000500000000000007"));
         That(operation == 0 && settings == new PartySettings(3, "", 4, 0, 5, 0, 0, 0, 0, 7),
             "实收15B创建请求完整保留设置");
@@ -136,7 +137,7 @@ internal static class SoloPartyTests
             var sessions = new[] { Ready(a, "PartyA"), Ready(b, "PartyB"), Ready(c, "PartyC"), Ready(d, "PartyD"), Ready(e, "PartyE") };
             var clock = new PartyClock();
             using var memory = new DfoServer.Game.Caching.GameCache();
-            var parties = new PartyService(repository, clock, memory);
+            var parties = new PartyService(repository, clock, memory, inviteAntiEvil: _ => 0);
             var leader = sessions[0];
             ushort id = leader.Selected!.Id;
             That(!parties.Invite(leader, sessions[1], 1, blocked: true).Accepted, "交互占用不能邀请");

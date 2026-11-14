@@ -79,7 +79,7 @@ internal static class OperationHopePartyTests
                     var session = new GameSession(repository,towns,owner,questCatalog:quests,operationHope:hope,incounts:counts,timeProvider:clock);
                     session.Select(0,resumeTown:true);session.MarkReady();return session;
                 }).ToArray();
-                var parties = new PartyService(repository);
+                var parties = new PartyService(repository, inviteAntiEvil: _ => 0);
                 foreach (var session in sessions)
                 {
                     session.CurrentParty=()=>parties.Current(session);
