@@ -34,14 +34,25 @@ internal sealed class SocialService(ISocialStore store, OnlineSessionDirectory o
             store.AccountRequests(actor.Owner.Account), actor.IsCurrent);
     }
 
-    public void Refresh(string account, ushort? changedCharacter = null)
+    public void Refresh(string account, ushort? changedCharacter = null, bool departed = false, Func<bool>? sourceCurrent = null)
     {
         if (online.Find(account) is { } session && Capture(session) is { } view && view.IsCurrent())
-            session.SocialNoticeArrived?.Invoke(view with { ChangedCharacter = changedCharacter });
+        {
+            var recipientCurrent = view.IsCurrent;
+            bool Current() => recipientCurrent() && (sourceCurrent?.Invoke() ?? true);
+            // 旧连接离开后同角色已由新连接上线时，只恢复列表，不能再制造一次上线事件。
+            if (departed && view.Characters.Any(row => row.Link.Person.Id == changedCharacter && row.Online))
+                changedCharacter = null;
+            if (Current()) session.SocialNoticeArrived?.Invoke(view with { ChangedCharacter = changedCharacter, IsCurrent = Current });
+        }
     }
 
-    public void PresenceChanged(ushort character, string account)
+    public void PresenceChanged(ushort character, string account, bool departed = false)
     {
-        foreach (string observer in store.SocialObservers(character, account)) Refresh(observer, character);
+        // 必须先于Capture固定源身份；离线时也固定目录的空值，防止在途离线覆盖随后上线。
+        var source = online.Find(account);
+        var sourceCurrent = source?.CaptureSocialPresenceGuard();
+        bool Current() => ReferenceEquals(online.Find(account), source) && (sourceCurrent?.Invoke() ?? true);
+        foreach (string observer in store.SocialObservers(character, account)) Refresh(observer, character, departed, Current);
     }
 }

@@ -478,7 +478,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
                 bool directoryChanged = socialCharacter != currentSocial || directoryEpoch != sender.Epoch || directoryPhase != session.Phase;
                 if (socialCharacter != currentSocial)
                 {
-                    if (socialCharacter != 0) social?.PresenceChanged(socialCharacter, login.Owner.Account);
+                    if (socialCharacter != 0) social?.PresenceChanged(socialCharacter, login.Owner.Account, departed: true);
                     socialCharacter = currentSocial;
                 }
                 if (directoryChanged)
@@ -590,7 +590,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
             parties?.Detach(session);
             if (arena is not null) arena.Publish(await arena.DetachAsync(session));
             online.Remove(login.Owner.Account, session);
-            if (socialCharacter != 0) social?.PresenceChanged(socialCharacter, login.Owner.Account);
+            if (socialCharacter != 0) social?.PresenceChanged(socialCharacter, login.Owner.Account, departed: true);
             projection.Remove(context);
             context.Activity?.Reset();
             try
