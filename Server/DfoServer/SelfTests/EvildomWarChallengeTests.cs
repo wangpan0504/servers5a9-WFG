@@ -183,7 +183,7 @@ internal static partial class EvildomWarChallengeTests
         {
             foreach (bool changeParty in new[] { true, false })
             {
-                var parties = new PartyService(repository);
+                var parties = new PartyService(repository, inviteAntiEvil: _ => 0);
                 var service = new PartyDungeonService(parties, repository);
                 var team = Enumerable.Range(0, 4).Select(_ =>
                 {

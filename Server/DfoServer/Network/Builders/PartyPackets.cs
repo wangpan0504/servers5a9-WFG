@@ -27,10 +27,11 @@ internal static class PartyPackets
         w.Write(checked((byte)rows.Length));
         foreach (var row in rows) { w.Write(row.Actor); w.Write((byte)100); w.Write((byte)0); w.Write(row.Slot); }
     });
-    public static byte[] Peer(ushort actor, byte mode, uint peer, bool invite) => SocialPackets.Build(w =>
+    public static byte[] Peer(ushort actor, byte mode, uint peer, PartyInviteDisplay? invite = null) => SocialPackets.Build(w =>
     {
         w.Write(actor); w.Write(mode); w.Write(peer);
-        if (invite) { w.Write((ushort)0); w.Write((ushort)0); w.Write((ushort)0); w.Write(0u); }
+        // 023D1C03/0F/5A读取，03930F10以DSTR31181..31183显示邀请者三项资料。
+        if (invite is { } display) { w.Write(display.Fatigue); w.Write(display.Stamina); w.Write(display.AntiEvil); w.Write(0u); }
     });
     public static byte[] Response(ushort actor, byte mode = 0) => SocialPackets.Build(w =>
     {

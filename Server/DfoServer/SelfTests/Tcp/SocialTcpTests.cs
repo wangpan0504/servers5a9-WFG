@@ -147,7 +147,7 @@ internal static class SocialTcpTests
             That(adventure.AsSpan(19 + 5272, 40).SequenceEqual(new byte[40]) && adventure.AsSpan(19 + 7424, 8).SequenceEqual(new byte[8]),
                 "公开冒险团不泄漏真实商店余额、勇猛经验或胶囊余额");
             alpha.Barrier(); beta.Barrier();
-            PartyInteraction(fixture, alpha, beta);
+            PartyInteraction(fixture, alpha, beta, resources);
             using (var owner = owners.Acquire("socialb", () => { }))
                 repository.Create(owner, CharacterCreation.Prepare("SocialBAlt", resources.Characters.Get(1),
                     resources.Towns.Room, resources.Towns.InitialReturn, resources.Learning.Get));
@@ -262,7 +262,7 @@ internal static class SocialTcpTests
             db.Open(); using var cmd = db.CreateCommand(); cmd.CommandText = sql; cmd.ExecuteNonQuery();
         }
     }
-    static void PartyInteraction(TcpTestFixture fixture, TcpPeer alpha, TcpPeer beta)
+    static void PartyInteraction(TcpTestFixture fixture, TcpPeer alpha, TcpPeer beta, TcpTestResources resources)
     {
         byte[] Peer(ushort id, byte mode, bool invitation, uint value = 0) => Build(w =>
         {
@@ -316,8 +316,21 @@ internal static class SocialTcpTests
         alpha.Send(2, Convert.FromHexString("051A19ACF81A19ACF80075000200000C000000303065303163356130343163"));
         beta.Send(2, Convert.FromHexString("051A19ACF81A19ACF80075000200000C000000303065303163356130343163"));
         alpha.Barrier(); beta.Barrier();
+        var repository = new CharacterRepository(fixture.Database);
+        var owners = new AccountOwners();
+        using var sourceOwner = owners.Acquire("sociala", () => { });
+        var inviteSource = repository.List(sourceOwner).Single(character => character.Id == alpha.Id);
+        That(inviteSource.Fatigue?.Remaining == 156 && inviteSource.Inventory.StaminaUntil == 0,
+            "真实TCP邀请夹具保留源角色156点疲劳和无虚弱状态，非固定零尾部");
+        var antiEvil = new CharacterAntiEvil(resources.ItemResources.Items, new(resources.Archive),
+            resources.ItemResources.RecoveryConsumables, contracts: resources.ItemResources.Contracts, sets: new(resources.Archive));
+        ushort expectedAntiEvil = checked((ushort)antiEvil.Compute(inviteSource));
         alpha.Send(10, Peer(beta.Id, 0, true)); alpha.Expect(1, 10, [1]);
-        beta.Expect(0, 2); beta.Expect(0, 7, Build(w => { w.Write(alpha.Id); w.Write((byte)0); w.Write(new byte[14]); }));
+        beta.Expect(0, 2); beta.Expect(0, 7, Build(w =>
+        {
+            w.Write(alpha.Id); w.Write((byte)0); w.Write(0u);
+            w.Write((ushort)156); w.Write((ushort)100); w.Write(expectedAntiEvil); w.Write(0u);
+        }));
         beta.Send(11, Peer(alpha.Id, 0, false)); beta.Expect(1, 11, [1, ..Build(w => w.Write(alpha.Id)), 0]);
         PartyInfo(alpha, 2); PartyInfo(beta, 2);
         alpha.Expect(0, 2); alpha.Expect(0, 8, Peer(beta.Id, 0, false));

@@ -513,7 +513,7 @@ internal static class Strongway2019MatchingTests
             var map = new TownMap("strongway-fixture.map", [new(new(0, 0, 600, 600), [], [])], [], false, []);
             towns = loadedTowns ?? new(new() { [(65, 1)] = new(65, 1, 1, [], [], [], point, map, [], []) }, point, point,
                 new(0, [], []), [], new Dictionary<uint, uint[]>());
-            Parties = new(repository, Clock);
+            Parties = new(repository, Clock, inviteAntiEvil: _ => 0);
         }
         public GameSession[] Team(byte channel = 49, int reviveCoins = 0, int count = 4,
             Func<Character, int>? antiEvil = null)

@@ -33,7 +33,7 @@ internal static class EvildomWarTransactionTests
             foreach (int failureIndex in new[] { 0, 1, 3, 4 })
             {
                 var clock = new ConsumableUseSessionTests.FakeClock();
-                var parties = new PartyService(repository, clock);
+                var parties = new PartyService(repository, clock, inviteAntiEvil: _ => 0);
                 var store = new EntryStore(repository);
                 var service = new PartyDungeonService(parties, store, hiddenDraw: maximum => maximum - 1);
                 var sessions = Enumerable.Range(0, 4).Select(index =>

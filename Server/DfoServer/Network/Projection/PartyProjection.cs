@@ -38,9 +38,11 @@ internal static class PartyProjection
         }
         if (notice.Kind is PartyNoticeKind.Invite or PartyNoticeKind.Accepted && notice.Peer is { } peer)
         {
+            PartyInviteDisplay? display = notice.Kind == PartyNoticeKind.Invite
+                ? notice.InviteDisplay ?? throw new InvalidOperationException("组队邀请缺少显示资料") : null;
             Actor(peer.Identity);
             Post(notice.Kind == PartyNoticeKind.Invite ? NotiPacketType.REQUEST_PEER : NotiPacketType.RESPONSE_PEER,
-                PartyPackets.Peer(peer.Actor.Character.Id, 0, notice.PeerId, notice.Kind == PartyNoticeKind.Invite), "party_peer");
+                PartyPackets.Peer(peer.Actor.Character.Id, 0, notice.PeerId, display), "party_peer");
         }
         else if (notice.Party is { } party)
         {

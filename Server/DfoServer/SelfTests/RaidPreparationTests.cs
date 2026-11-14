@@ -32,7 +32,7 @@ internal static class RaidPreparationTests
             var repository = new CharacterRepository(Path.Combine(root, "game.db"));
             var raids = new RaidRegistry();
             var social = new ProbeSocialStore(repository);
-            var parties = new PartyService(social);
+            var parties = new PartyService(social, inviteAntiEvil: _ => 0);
             RaidActor Make(int index) => MakeRaid(index,false);
             RaidActor MakeRaid(int index,bool anton)
             {
