@@ -19,6 +19,7 @@ internal sealed partial class AntonRaidBattle
         public int? PreyArea { get; init; }
         public long Generation { get; } = generation;
         public int? MazeOrdinal { get; init; }
+        public FiendwarDungeonTarget? FiendwarTarget { get; init; }
         public HashSet<int> KilledMonitorTargets { get; } = [];
         public (RaidActor Actor, DungeonRunIdentity Identity)[] Actors { get; } = actors;
         public HashSet<RaidActor> Active { get; } = actors.Select(actor => actor.Actor).ToHashSet();
@@ -62,9 +63,24 @@ internal sealed partial class AntonRaidBattle
         readonly PreyLandingCandidate? landing;
         readonly RaidDungeonRun? replacing;
         bool finished;
+        bool fiendwarEntryCommitted;
+        internal bool IsFiendwar => battle.Kind == RaidKind.Fiendwar;
         internal AntonRaidBattleChange? ReleasedChange { get; private set; }
         private DungeonReservation(AntonRaidBattle battle, RaidDungeonRun run, PreyLandingCandidate? landing, RaidDungeonRun? replacing)
         { this.battle = battle; this.run = run; this.landing = landing; this.replacing = replacing; }
+        internal void CommitFiendwarEntry(Guid runId, FiendwarDungeonTarget target, Action commit)
+        {
+            lock (battle.gate)
+            {
+                if (!IsFiendwar || finished || fiendwarEntryCommitted || runId != run.Id || target != run.FiendwarTarget ||
+                    !battle.dungeonRuns.TryGetValue(run.Id, out var current) || !ReferenceEquals(current, run) ||
+                    !battle.IsFiendwarRunCurrent(run.Id))
+                    throw new FiendwarEntryChangedException();
+                // 调用方已持writer并完成SQL；此锁绝不等待writer，不包含SQL语句或网络回调。
+                commit();
+                fiendwarEntryCommitted = true;
+            }
+        }
         internal static DungeonReservation? Prepare(AntonRaidBattle battle, RaidDungeonIdentity identity,
             uint dungeon, (RaidActor Actor, DungeonRunIdentity Identity)[] actors, LukeRaidObjectRegistration? objects, LukeRouteLease? route,
             int? mazeOrdinal, int? coinLimit, PreyLandingCandidate? landing, int? timeLimitSeconds, Guid? replacingAntonRun)
@@ -83,6 +99,7 @@ internal sealed partial class AntonRaidBattle
                         (coinLimit is not null && coinLimit is not (> 0 and <= byte.MaxValue) ||
                          coinLimit is null && battle.fiendwarDefinition?.Guide != true) ||
                     identity.Kind != battle.Kind || identity.InstanceId != battle.Instance ||
+                    !battle.IsFiendwarTargetCurrent(identity.FiendwarTarget, checked((int)dungeon), mazeOrdinal) ||
                     battle.Kind == RaidKind.Prey && (identity.PreyGuide != battle.PreyGuide || battle.PreyGuide && actors.Length != 1 ||
                         !battle.AllowsPreyEntry(checked((int)dungeon))) ||
                     identity.Phase != battle.current.Phase || !identity.HasValidGroup ||
@@ -112,7 +129,7 @@ internal sealed partial class AntonRaidBattle
                     : route is not null) return null;
                 var run = new RaidDungeonRun(actors[0].Identity.InstanceId, identity.Phase, dungeon, identity.Squad,
                     battle.current.DungeonGenerations.GetValueOrDefault(checked((int)dungeon)), actors)
-                    { Objects = objects, Route = route, RevivalLimit = coinLimit, MazeOrdinal = mazeOrdinal,
+                    { Objects = objects, Route = route, RevivalLimit = coinLimit, MazeOrdinal = mazeOrdinal, FiendwarTarget = identity.FiendwarTarget,
                         PreyTimeLimitSeconds = battle.Kind == RaidKind.Prey && !battle.PreyGuide && timeLimitSeconds is > 0 ? timeLimitSeconds : null,
                         PreyPartyId = identity.PreyPartyId, PreySoloCharacter = identity.PreySoloCharacter,
                         PreyArea = landing?.Arrival.FromArea };
@@ -125,7 +142,8 @@ internal sealed partial class AntonRaidBattle
         {
             lock (battle.gate)
             {
-                if (finished || !battle.dungeonRuns.TryGetValue(run.Id, out var current) || !ReferenceEquals(current, run))
+                if (finished || IsFiendwar && !fiendwarEntryCommitted ||
+                    !battle.dungeonRuns.TryGetValue(run.Id, out var current) || !ReferenceEquals(current, run))
                     throw new InvalidOperationException("已提交团本Run失去原入场预留");
                 // 阶段结束候选在活跃/预留Run全部释放前不能替换当前phase；这里无新的业务拒绝。
                 if (replacing is not null)
@@ -305,7 +323,8 @@ internal sealed partial class AntonRaidBattle
 
     bool CurrentObjective(RaidDungeonRun run) => !TerminalRequested(current) && !LukePhaseDueLocked() && run.Phase == current.Phase &&
         current.Dungeons.GetValueOrDefault(checked((int)run.Dungeon)) == RaidDungeonState.Open &&
-        current.DungeonGenerations.GetValueOrDefault(checked((int)run.Dungeon)) == run.Generation;
+        current.DungeonGenerations.GetValueOrDefault(checked((int)run.Dungeon)) == run.Generation &&
+        (Kind != RaidKind.Fiendwar || IsFiendwarRunCurrent(run.Id));
 
     void CommitBattleCandidate(AntonRaidBattleView before, AntonRaidBattleView candidate)
     {

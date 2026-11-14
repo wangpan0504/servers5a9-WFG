@@ -12,6 +12,7 @@ internal sealed partial class AntonRaidBattle
     readonly FiendwarBattlefield? fiendwarEngine;
     readonly FiendwarPacing fiendwarPolicy;
     readonly Random fiendwarMazeRandom;
+    readonly FiendwarFacilityCatalog? fiendwarFacilityCatalog;
     readonly Dictionary<Guid, (int Area, FiendwarCombatScale Scale, DateTimeOffset Started, DateTimeOffset Deadline)> fiendwarEncounters = [];
     readonly Dictionary<int, (long Generation, long Enemy, long Monster, int Ordinal)> fiendwarMazes = [];
     readonly Dictionary<ushort, FiendwarMovement> fiendwarMovements = [];
@@ -65,6 +66,12 @@ internal sealed partial class AntonRaidBattle
 
     AntonRaidBattleView ProjectFiendwar(AntonRaidBattleView before, FiendwarFieldState field)
     {
+        // 原脚本只恢复设施符号；把已证0→1与DGN重新开放放进同一候选。
+        if (!field.Failed && !field.Cleared && fiendwarFacilityCatalog is { } catalog)
+            foreach (var facility in catalog.Areas.Values)
+                if (facility.RestoreSymbol is { } symbol && before.Fiendwar is not null &&
+                    before.Symbols.GetValueOrDefault(symbol) == 0 && field.Symbols.GetValueOrDefault(symbol) == 1)
+                    field = field with { Dungeons = field.Dungeons.SetItem(facility.Dungeon, "open") };
         var dungeons = field.Dungeons.ToImmutableDictionary(row => row.Key, row => row.Value switch
         { "open" => RaidDungeonState.Open, "clear" => RaidDungeonState.Clear, "close" => RaidDungeonState.Close, _ => RaidDungeonState.Hide });
         // 原漩涡以区域及Boss符号控制本体门，不会把初始hide改成普通选图open。
@@ -80,8 +87,42 @@ internal sealed partial class AntonRaidBattle
         foreach (var row in dungeons)
             if (row.Value == RaidDungeonState.Open && before.Dungeons.GetValueOrDefault(row.Key, RaidDungeonState.Hide) != RaidDungeonState.Open)
                 generations = generations.SetItem(row.Key, checked(generations.GetValueOrDefault(row.Key) + 1));
+        var facilities = before.FiendwarFacilities;
+        if (!field.Failed && !field.Cleared && fiendwarFacilityCatalog is { } resource)
+            foreach (var definition in resource.Areas.Values.OrderBy(row => row.Area))
+            {
+                if (dungeons.GetValueOrDefault(definition.Dungeon) != RaidDungeonState.Open)
+                { facilities = facilities.Remove(definition.Area); continue; }
+                long generation = generations.GetValueOrDefault(definition.Dungeon);
+                if (facilities.TryGetValue(definition.Area, out var existing) && existing.Target.Generation == generation) continue;
+                // 本服沿现有每代均匀独立抽取语义；重发/选图/重进不再消耗随机数。
+                var maze = definition.Mazes[fiendwarMazeRandom.Next(definition.Mazes.Length)];
+                long serial = checked((uint)(field.NextUnit + 1));
+                field = field with { NextUnit = serial };
+                facilities = facilities.SetItem(definition.Area, new(new(Instance, definition.Area, definition.Dungeon,
+                    generation, serial, serial, 0, maze.Ordinal), maze.Boss, maze.Kind));
+            }
+        var expired = before.FiendwarExpiredRuns;
+        var bridges = before.FiendwarBridgeReturns;
+        var encounterTimers = before.FiendwarDungeonTimers;
+        if (!field.Failed && !field.Cleared)
+            foreach (var run in dungeonRuns.Values.Where(run => !run.Cleared && run.FiendwarTarget is not null))
+            {
+                var target = run.FiendwarTarget!;
+                var presence = field.Areas[target.Area];
+                bool matches = generations.GetValueOrDefault(target.Dungeon) == target.Generation &&
+                    dungeons.GetValueOrDefault(target.Dungeon) == RaidDungeonState.Open &&
+                    (target.FacilitySerial != 0 ? facilities.TryGetValue(target.Area, out var facility) && facility.Target == target :
+                        target.EnemySerial == (presence.Enemy?.Serial ?? 0) && target.MonsterSerial == (presence.Monster?.Serial ?? 0));
+                if (matches) continue;
+                // 已预留但未SQL提交者由最终guard回滚；已提交者完整安装后沿原Run安全退出。
+                expired = expired.Add(run.Id);
+                encounterTimers = encounterTimers.Remove(target.Area);
+            }
         return before with { Fiendwar = field, Symbols = field.Symbols, Dungeons = dungeons,
-            FiendwarDungeonTimers = field.Failed || field.Cleared ? before.FiendwarDungeonTimers.Clear() : before.FiendwarDungeonTimers,
+            FiendwarFacilities = facilities,
+            FiendwarExpiredRuns = expired, FiendwarBridgeReturns = bridges,
+            FiendwarDungeonTimers = field.Failed || field.Cleared ? encounterTimers.Clear() : encounterTimers,
             DungeonGenerations = generations, PhaseExpired = field.Failed,
             State = field.Cleared ? AntonRaidBattleState.Reward : before.State };
     }
@@ -248,6 +289,8 @@ internal sealed partial class AntonRaidBattle
         {
             if (!AllowsFiendwarEntry(dungeon) || candidates.Count == 0) return null;
             int area = FiendwarAreaForDungeon(dungeon)!.Value;
+            if (current.FiendwarFacilities.TryGetValue(area, out var facility))
+                return candidates.Contains(facility.Target.MazeOrdinal) ? facility.Target.MazeOrdinal : null;
             var presence = current.Fiendwar!.Areas[area];
             long generation = current.DungeonGenerations.GetValueOrDefault(dungeon), enemy = presence.Enemy?.Serial ?? 0,
                 monster = presence.Monster?.Serial ?? 0;
@@ -274,6 +317,43 @@ internal sealed partial class AntonRaidBattle
         }
     }
 
+    internal FiendwarDungeonTarget? FiendwarTarget(int dungeon, IReadOnlyList<int> candidates)
+    {
+        lock (gate)
+        {
+            if (FiendwarMaze(dungeon, candidates) is not { } ordinal || FiendwarAreaForDungeon(dungeon) is not { } area) return null;
+            if (current.FiendwarFacilities.TryGetValue(area, out var facility)) return facility.Target;
+            var presence = current.Fiendwar!.Areas[area];
+            return new(Instance, area, dungeon, current.DungeonGenerations.GetValueOrDefault(dungeon), 0,
+                presence.Enemy?.Serial ?? 0, presence.Monster?.Serial ?? 0, ordinal);
+        }
+    }
+
+    internal bool IsFiendwarTargetCurrent(FiendwarDungeonTarget? target, int dungeon, int? ordinal)
+    {
+        lock (gate)
+        {
+            if (Kind != RaidKind.Fiendwar) return target is null;
+            if (target is null || target.Instance != Instance || target.Dungeon != dungeon || target.MazeOrdinal != ordinal ||
+                !AllowsFiendwarEntry(dungeon) || FiendwarAreaForDungeon(dungeon) != target.Area ||
+                current.DungeonGenerations.GetValueOrDefault(dungeon) != target.Generation) return false;
+            if (current.FiendwarFacilities.TryGetValue(target.Area, out var facility)) return facility.Target == target;
+            var presence = current.Fiendwar!.Areas[target.Area];
+            return target.FacilitySerial == 0 && target.EnemySerial == (presence.Enemy?.Serial ?? 0) &&
+                target.MonsterSerial == (presence.Monster?.Serial ?? 0) &&
+                fiendwarMazes.TryGetValue(dungeon, out var choice) && choice.Generation == target.Generation &&
+                choice.Enemy == target.EnemySerial && choice.Monster == target.MonsterSerial && choice.Ordinal == target.MazeOrdinal;
+        }
+    }
+
+    internal bool IsFiendwarRunCurrent(Guid runId)
+    {
+        lock (gate) return dungeonRuns.TryGetValue(runId, out var run) &&
+            !current.FiendwarExpiredRuns.Contains(runId) && fiendwarEncounters.TryGetValue(runId, out var encounter) &&
+            lukeClock.GetUtcNow() < encounter.Deadline &&
+            IsFiendwarTargetCurrent(run.FiendwarTarget, checked((int)run.Dungeon), run.MazeOrdinal);
+    }
+
     bool ReserveFiendwarEncounter(RaidDungeonRun run)
     {
         if (Kind != RaidKind.Fiendwar) return true;
@@ -297,7 +377,7 @@ internal sealed partial class AntonRaidBattle
         {
             if (Kind != RaidKind.Fiendwar || pendingTransition is not null || TerminalRequested(current) || facts.Length is < 1 or > 4 ||
                 !dungeonRuns.TryGetValue(facts[0].Fact.Identity.InstanceId, out var run) || !run.Installed || run.Cleared ||
-                current.FiendwarExpiredRuns.Contains(run.Id) ||
+                current.FiendwarExpiredRuns.Contains(run.Id) || !IsFiendwarTargetCurrent(run.FiendwarTarget, checked((int)run.Dungeon), run.MazeOrdinal) ||
                 run.Active.Count != facts.Length || facts.Select(row => row.Actor).Distinct().Count() != facts.Length ||
                 !fiendwarEncounters.TryGetValue(run.Id, out var encounter) || lukeClock.GetUtcNow() >= encounter.Deadline) return null;
             foreach (var row in facts)

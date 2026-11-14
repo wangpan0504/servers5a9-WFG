@@ -245,7 +245,10 @@ internal sealed partial class PartyDungeonService(PartyService parties, IPartyDu
                 using var warRun = GameSession.ReserveEvildomWarPartyDungeon(prepared.Select(row => row.Preparation).ToArray(),
                     instance.Id, out bool warRequired);
                 if (warRequired && warRun is null) return [];
-                var committed = store.CommitPartyDungeonEntry(reservations.Select(r => r!).ToArray());
+                var committing = reservations.Select(r => r!).ToArray();
+                if (raidRun?.IsFiendwar == true)
+                    committing = committing.Select(row => row with { FiendwarCommit = raidRun.CommitFiendwarEntry }).ToArray();
+                var committed = store.CommitPartyDungeonEntry(committing);
                 var notices = prepared.Select((p, index) => new PartyDungeonNotice(PartyDungeonNoticeKind.Entry, p.Member, party.Members,
                     p.Member.Actor.Session.InstallPartyDungeon(p.Preparation, committed[index], reservations[index]!, instance))).ToArray();
                 previousInstance?.ClearCards();
@@ -258,6 +261,11 @@ internal sealed partial class PartyDungeonService(PartyService parties, IPartyDu
         catch (DungeonEventAdmissionRejectedException)
         {
             onRejected?.Invoke("epic-road-event-closed", party.Members.Single(member => ReferenceEquals(member.Actor.Session, leader)).Slot);
+            return [];
+        }
+        catch (DfoServer.Game.Raids.FiendwarEntryChangedException)
+        {
+            onRejected?.Invoke("fiendwar-entry-changed", party.Members.Single(member => ReferenceEquals(member.Actor.Session, leader)).Slot);
             return [];
         }
         catch (DfoServer.Game.Guild.GuildDungeonAdmissionRejectedException)

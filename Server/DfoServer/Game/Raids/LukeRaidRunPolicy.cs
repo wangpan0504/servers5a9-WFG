@@ -54,5 +54,6 @@ internal sealed record LukeRaidRunPolicy(string Source, ImmutableArray<LukeRaidM
 // 归原Session选图上下文，替换选择或清理上下文即失效；尚未扣费或占用地下城。
 internal sealed record RaidDungeonSelection(RaidDungeonAdmission Admission, int Dungeon, int MazeOrdinal)
 {
+    public FiendwarDungeonTarget? FiendwarTarget { get; init; }
     public LukeRouteLease? Route { get; init; }
 }

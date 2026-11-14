@@ -83,7 +83,8 @@ internal static partial class PrivilegeServiceTests
                 var rewards = new FiendwarRewards(definition.Resources!.Fiendwar!, resources.Items, resources.Boosters,
                     definition.Resources.FiendwarGuide!.Fiendwar);
                 var start = new AntonRaidStart(registry, parties, repository, towns, resources.EpicPieces, clock,
-                    fiendwarRewards: rewards);
+                    fiendwarRewards: rewards, fiendwarFacilities: new(definition.Resources.Fiendwar!,
+                        definition.Resources.EntryCatalog!, SelfTestCatalogs.Rooms(archive)));
                 var started = start.Start(leader, registry.Find(leader)!, definition);
                 That(started.Error == 0, "礼遇用例沿真实开团事务扣票并建立共享Battle：" + started.Reason);
                 var battle = leader.Session.CurrentRaidBattle(leader)!;

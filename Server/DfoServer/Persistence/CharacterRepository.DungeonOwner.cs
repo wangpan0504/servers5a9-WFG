@@ -251,6 +251,11 @@ internal sealed partial class CharacterRepository : IPartyDungeonStore
 
     public PartyDungeonEntryCommit[] CommitPartyDungeonEntry(IReadOnlyList<PartyDungeonReservation> reservations)
     {
+        var fiendwarCommit = reservations.FirstOrDefault()?.FiendwarCommit;
+        var fiendwarTarget = reservations.FirstOrDefault()?.FiendwarTarget;
+        if ((fiendwarCommit is null) != (fiendwarTarget is null) ||
+            reservations.Any(row => row.FiendwarCommit != fiendwarCommit || row.FiendwarTarget != fiendwarTarget))
+            throw new InvalidDataException("漩涡组队入场提交能力不属于同一原Run");
         if (reservations.Count is < 1 or > 4 || reservations.Select(r => r.Charge.Identity.InstanceId).Distinct().Count() != 1)
             throw new InvalidDataException("组队入场需要同一实例的一至四个当前成员");
         return AccountOwners.Lease.ExecuteGroup(reservations.Select(r => (r.Owner, r.Expected.Id)).ToArray(), () =>
@@ -294,7 +299,8 @@ internal sealed partial class CharacterRepository : IPartyDungeonStore
             var frozenMemberships = System.Collections.Immutable.ImmutableArray.CreateRange(memberships);
             CommitEvildomWarEntryInTransaction(db, tx, reservations, result);
             for (int i = 0; i < result.Length; i++) result[i] = result[i] with { GuildMemberships = frozenMemberships };
-            tx.Commit();
+            if (fiendwarCommit is null) tx.Commit();
+            else fiendwarCommit(reservations[0].Charge.Identity.InstanceId, fiendwarTarget!, tx.Commit);
             for (int i = 0; i < reservations.Count; i++)
                 InstallEntryFatigue(reservations[i].Owner, reservations[i].Charge, fatigue[i]);
             return result;

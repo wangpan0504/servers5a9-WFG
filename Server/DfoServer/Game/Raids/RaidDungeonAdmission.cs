@@ -35,6 +35,7 @@ internal sealed record RaidDungeonAdmission(Guid InstanceId, RaidActor Actor, in
 // 仅保存本次实际准入身份；COMBAT可据此关联原攻坚实例，不能用普通副本回执代替团本奖励资格。
 internal sealed record RaidDungeonIdentity(Guid InstanceId, int Phase, byte Squad, RaidKind Kind = RaidKind.Anton)
 {
+    public FiendwarDungeonTarget? FiendwarTarget { get; init; }
     public bool PreyGuide { get; init; } = true;
     // 普通普雷的战斗队伍来自左右空间，不能用名册上的分队标记作为实例身份。
     public ushort? PreyPartyId { get; init; }

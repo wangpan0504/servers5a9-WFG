@@ -210,6 +210,7 @@ internal sealed partial class GameSession
                 FatigueAccelerationPercent = accelerationPercent,
                 RequiredEvent = plan.RequiredEvent ?? Strongway2019RequiredEvent(dungeon.Strongway2019Admission) }, incount)
         {
+            FiendwarTarget = dungeon.Entry.RaidEntry?.FiendwarTarget,
             EvildomWar = dungeon.EvildomWarEntry is { Store: not null } activeWar
                 ? new(activeWar.Battle.View, activeWar.BindingToken,
                     activeWar.Party.Members.Single(member => ReferenceEquals(member.Actor.Session, this)).Slot,
