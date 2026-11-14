@@ -27,6 +27,9 @@ internal sealed record ServerOptions
     public int PacketHttpPort { get; init; }
     public string PvfPath { get; init; } = Path.Combine(AppContext.BaseDirectory, "Data", "Pvf", "Script.pvf");
     public string DataDirectory { get; init; } = Path.Combine(AppContext.BaseDirectory, "Data");
+    // 显示几何资源独立于存档；未指定时沿用既有Data目录布局。
+    public string? DisplayWorldPath { get; init; }
+    public string EffectiveDisplayWorldPath => DisplayWorldPath ?? Path.Combine(DataDirectory, "DisplayCompat.world.json");
     public string LogDirectory { get; init; } = Path.Combine(AppContext.BaseDirectory, "Logs");
     public bool FileLogsEnabled { get; init; }
     public string ResourcesDirectory { get; init; } = Path.Combine(AppContext.BaseDirectory, "Resources");
@@ -96,6 +99,7 @@ internal sealed record ServerOptions
                     "--packet-http-port" => value with { PacketHttpPort = Number(argument, name) },
                     "--pvf-path" => value with { PvfPath = StoragePath(argument, name) },
                     "--data-dir" => value with { DataDirectory = StoragePath(argument, name) },
+                    "--display-world-path" => value with { DisplayWorldPath = StoragePath(argument, name) },
                     "--session-ttl" => value with { SessionTtlSeconds = Number(argument, name) },
                     "--battle-pass-start" => value with { BattlePassSeasonStart = BattlePassStart(argument, name) },
                     "--battle-pass-season" => value with { BattlePassSeasonKey = !string.IsNullOrWhiteSpace(argument) && argument == argument.Trim()

@@ -36,6 +36,17 @@ internal static class CommandLineTests
             "宿主日志、外置资源、逻辑根和启动代次均显式传递");
         Reject(["--log-dir"]);
         Reject(["--resources-dir", "a", "--resources-dir", "b"]);
+        Reject(["--display-world-path"]);
+        Reject(["--display-world-path", "a", "--display-world-path", "b"]);
+        var selectedWorld = ServerOptions.Load(ServerCommand.Parse(["--display-world-path", "profiles/wide/DisplayCompat.world.json",
+            "--data-dir", "player saves"]).Options);
+        That(selectedWorld.DisplayWorldPath == Path.GetFullPath("profiles/wide/DisplayCompat.world.json", AppContext.BaseDirectory) &&
+            selectedWorld.EffectiveDisplayWorldPath == selectedWorld.DisplayWorldPath &&
+            selectedWorld.DataDirectory == Path.GetFullPath("player saves", AppContext.BaseDirectory),
+            "显示几何独立选择，不将玩家存档切换到资源目录");
+        var defaultWorld = ServerOptions.Load(ServerCommand.Parse(["--data-dir", "player saves"]).Options);
+        That(defaultWorld.DisplayWorldPath is null && defaultWorld.EffectiveDisplayWorldPath == Path.Combine(defaultWorld.DataDirectory, "DisplayCompat.world.json"),
+            "未指定显示资源时兼容既有Data布局");
         Reject(["--launcher-session", hostSession]);
         Reject(["--logical-root", "root"]);
         Reject(["--launcher-session", "invalid", "--logical-root", "root"]);
