@@ -72,7 +72,7 @@ internal sealed partial class GameSession
 
     DungeonSelectionReceipt InstallRaidSelection(RaidDungeonAdmission admission, RaidDungeonSelection? selection) => owner.Execute(() =>
     {
-        if (!CanBeginRaidDungeonSelection(admission))
+        if (!CanBeginRaidDungeonSelection(admission) || selection is not null && !FiendwarSelectionCurrent(selection))
             throw new InvalidOperationException("团本选图安装前身份已变化");
         InvalidateFiendwarKeyPreparation(preserveScene: true);
         raidDungeonAdmission = admission;
@@ -90,7 +90,9 @@ internal sealed partial class GameSession
         run.Entry.StartMap == run.Run.Snapshot.CurrentMap &&
         run.Entry.RaidEntry is { Kind: RaidKind.Anton or RaidKind.Prey or RaidKind.Fiendwar } identity &&
         StartedRaid?.InstanceId == identity.InstanceId && IsCurrentRaidDungeon(run.Entry) &&
-        raidDungeonAdmission!.Allows(dungeon) ? FormalReceipt() : null);
+        raidDungeonAdmission!.Allows(dungeon) && FiendwarEntryCurrent(run.Entry) &&
+        (identity.Kind != RaidKind.Fiendwar || raidDungeonAdmission.Battle?.IsFiendwarRunCurrent(run.Run.Snapshot.Identity.InstanceId) == true)
+            ? FormalReceipt() : null);
 
     internal void CancelRaidDungeonSelection(PartyDungeonNotice[] selections)
     {
@@ -131,7 +133,15 @@ internal sealed partial class GameSession
         (raid.Kind != RaidKind.Prey || admission.PreyGuide == raid.PreyGuide) && admission.Current;
 
     bool CanInstallRaidDungeon(DungeonEntryPlan entry) => IsCurrentRaidDungeon(entry) &&
-        (entry.RaidEntry is null || raidDungeonAdmission!.Allows(checked((int)entry.DungeonId)));
+        (entry.RaidEntry is null || raidDungeonAdmission!.Allows(checked((int)entry.DungeonId)) && FiendwarEntryCurrent(entry));
+
+    static bool FiendwarSelectionCurrent(RaidDungeonSelection selection) => selection.Admission.Kind != RaidKind.Fiendwar
+        ? selection.FiendwarTarget is null
+        : selection.Admission.Battle?.IsFiendwarTargetCurrent(selection.FiendwarTarget, selection.Dungeon, selection.MazeOrdinal) == true;
+
+    bool FiendwarEntryCurrent(DungeonEntryPlan entry) => entry.RaidEntry is not { Kind: RaidKind.Fiendwar } raid ||
+        raidDungeonAdmission?.Battle?.IsFiendwarTargetCurrent(raid.FiendwarTarget, checked((int)entry.DungeonId),
+            entry.Maze.SourceOrdinal) == true;
 
     DungeonSelectionReceipt? BeginRaidDungeonSelection(bool partyAdmission)
     {
@@ -162,12 +172,14 @@ internal sealed partial class GameSession
         var selected = captured.CurrentDungeonSelection.Raid;
         bool controlled = admission.Kind == RaidKind.Luke || admission.Battle is not null;
         if (controlled && (selected is null || !ReferenceEquals(selected.Admission, admission) || selected.Dungeon != dungeonId ||
+            !FiendwarSelectionCurrent(selected) ||
             admission.Kind == RaidKind.Luke && (selected.Route is { } route
                 ? admission.Battle?.IsLukeRouteCurrent(route) != true || route.Dungeon != selected.Dungeon || route.MazeOrdinal != selected.MazeOrdinal
                 : admission.Battle?.UsesLukeRoute(admission.Phase) == true || admission.LukePolicy?.Maze(admission.Phase, selected.Dungeon) != selected.MazeOrdinal)))
             return RejectFormal(prefix + "-entry-selection-changed");
         var identity = new RaidDungeonIdentity(admission.InstanceId, admission.Phase, admission.Squad, admission.Kind)
-            { PreyGuide = admission.PreyGuide, PreyPartyId = admission.PreyPartyId, PreySoloCharacter = admission.PreySoloCharacter };
+            { PreyGuide = admission.PreyGuide, PreyPartyId = admission.PreyPartyId, PreySoloCharacter = admission.PreySoloCharacter,
+                FiendwarTarget = selected?.FiendwarTarget };
         var sharedEntry = shared?.Session.PreparedParty(shared).Dungeon.Entry;
         if (sharedEntry is not null && sharedEntry.RaidEntry != identity)
             return RejectFormal(prefix + "-entry-squad-mismatch");
@@ -198,6 +210,7 @@ internal sealed partial class GameSession
         if (catalog.StackableLimits.Dungeons.TryGetValue(checked((int)dungeonId), out int potionMaximum))
             prepared = prepared with { Dungeon = prepared.Dungeon with { PotionUses = new(catalog.StackableLimits, potionMaximum) } };
         return owner.Execute(() => ReferenceEquals(raidDungeonAdmission, admission) && admission.Allows((int)dungeonId) &&
+            (selected is null || FiendwarSelectionCurrent(selected)) &&
             ReferenceEquals(Selected, character) && ReferenceEquals(CurrentDungeonSelection, captured.CurrentDungeonSelection) &&
             SelectionEpoch == captured.SelectionEpoch ? prepared : RejectFormal(prefix + "-entry-authorization-changed"));
     }

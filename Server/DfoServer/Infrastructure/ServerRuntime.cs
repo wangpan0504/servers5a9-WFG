@@ -526,6 +526,10 @@ internal static class ServerRuntime
         log.Write("startup", new { Stage = "Prey raid modes", Guide = preyReady, Team = preyTeamReady,
             TeamIssues = raidCatalog.Find(3)?.Resources?.PreyTeam?.Issues.Select(issue => new { issue.Code, issue.Path, issue.TokenIndex, issue.Detail }).ToArray() });
         bool fiendwarReady = raidCatalog.Find(2)?.Resources is { ResourcesReady: true, EntryCatalog.Ready: true, Fiendwar: not null };
+        var fiendwarRooms = lukeObjectRooms ?? (fiendwarReady ? DungeonRoomCatalog.Load(pvf, towns.Geometry) : null);
+        var fiendwarFacilities = fiendwarReady ? StartupStage.Run(log, "Fiendwar facility catalog", () =>
+            new GameWorld.Raids.FiendwarFacilityCatalog(raidCatalog.Find(2)!.Resources!.Fiendwar!,
+                raidCatalog.Find(2)!.Resources!.EntryCatalog!, fiendwarRooms!)) : null;
         var fiendwarRun = fiendwarReady ? new Game.Raids.FiendwarDungeonService(raidRegistry, parties, raidCatalog.Find(2)!.Resources!.EntryCatalog!, raidCatalog.Find(2)!.Resources!.FiendwarGuide?.EntryCatalog) : null;
         var fiendwarRewards = fiendwarReady ? new Game.Raids.FiendwarRewards(raidCatalog.Find(2)!.Resources!.Fiendwar!, itemResources.Items, itemResources.Boosters, raidCatalog.Find(2)!.Resources!.FiendwarGuide?.Fiendwar) : null;
         if (fiendwarRewards is not null) _ = fiendwarRewards.Create(false);
@@ -574,7 +578,7 @@ internal static class ServerRuntime
         var pvpRecords = new Game.Pvp.PvpRecordQuery(repository, repository);
         var raidStart = new Game.Raids.AntonRaidStart(raidRegistry, parties, repository, towns, itemResources.EpicPieces, clock, raidSettings.AntonPhaseProgressEnabled, antonRewards,
             raidSettings.AntonPhaseProgressEnabled || preyReady || preyTeamReady || fiendwarReady ? lukeTimers : null,
-            preyRewards, fiendwarRewards, fiendwarMazeRandom, preyTeamRewards, dropControl.Settings, incounts)
+            preyRewards, fiendwarRewards, fiendwarMazeRandom, preyTeamRewards, dropControl.Settings, incounts, fiendwarFacilities)
 #if DEBUG
             { DebugIgnorePreyEntryLimits = true, DebugIgnorePreyRewardLimits = true }
 #endif
@@ -650,7 +654,7 @@ internal static class ServerRuntime
         {
             selectionDungeons = dungeonCatalog;
             assaultMode = StartupStage.Run(log, "Assault mode catalog", () => AssaultModeCatalog.Load(pvf, dungeonCatalog));
-            var rooms = StartupStage.Run(log, "Dungeon room catalog", () => lukeObjectRooms ?? DungeonRoomCatalog.Load(pvf, towns.Geometry));
+            var rooms = StartupStage.Run(log, "Dungeon room catalog", () => fiendwarRooms ?? DungeonRoomCatalog.Load(pvf, towns.Geometry));
             operationHope = StartupStage.Run(log, "Operation Hope catalog", () => OperationHopeCatalog.Load(pvf,dungeonCatalog,quests,rooms));
             tutorialScenes ??= new TutorialScenes(pvf, tutorials, dungeonCatalog);
             questRooms = rooms;

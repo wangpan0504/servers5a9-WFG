@@ -43,7 +43,8 @@ internal static partial class FiendwarRecoveryTests
         // 与正式Runtime一致注入有界Luke时钟；没有timer lease时Start虽能扣票，结算锚点不会激活。
         var timers = new LukeRaidClocks(clock, repository, static (_, _) => { });
         var start = new AntonRaidStart(registry, parties, repository, resources.Towns, items.EpicPieces, clock,
-            timers: timers, fiendwarRewards: rewards);
+            timers: timers, fiendwarRewards: rewards, fiendwarFacilities: new(resource, definition.Resources.EntryCatalog!,
+                DfoServer.GameWorld.Dungeons.DungeonRoomCatalog.Load(resources.Archive)));
         Guid instance = Guid.Empty;
         bool ended = false;
         try

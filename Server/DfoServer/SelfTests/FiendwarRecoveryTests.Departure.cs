@@ -28,7 +28,9 @@ internal static partial class FiendwarRecoveryTests
         var actor = session.CaptureRaidActor(registry)!;
         var items = resources.ItemResources;
         var rewards = new FiendwarRewards(definition.Resources.Fiendwar!, items.Items, items.Boosters, definition.Resources.FiendwarGuide!.Fiendwar);
-        var start = new AntonRaidStart(registry, parties, repository, resources.Towns, items.EpicPieces, clock, fiendwarRewards: rewards);
+        var start = new AntonRaidStart(registry, parties, repository, resources.Towns, items.EpicPieces, clock, fiendwarRewards: rewards,
+            fiendwarFacilities: new(definition.Resources.Fiendwar!, definition.Resources.EntryCatalog!,
+                DfoServer.GameWorld.Dungeons.DungeonRoomCatalog.Load(resources.Archive)));
         try
         {
             That(registry.Create(actor, 2, "Departure", "Departure"u8.ToArray(), 8) is not null,
