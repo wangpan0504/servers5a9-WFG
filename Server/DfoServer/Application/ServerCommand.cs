@@ -46,6 +46,7 @@ internal sealed record ServerCommand(ServerCommandKind Kind, string[] Arguments,
           --packet-http-port <端口>  本机只读包记录 HTTP 端口，默认 0（关闭）
           --pvf-path <文件>          资源文件，默认 Data/Pvf/Script.pvf
           --data-dir <目录>          存档目录，默认 Data，数据库名为 game.db
+          --display-world-path <文件> 独立显示几何资源；默认 Data/DisplayCompat.world.json，不改变存档目录
           --log-dir <目录>           日志及就绪/停止文件目录，默认 Logs
           --file-logs <Off|On>       服务与GM文件日志，默认 Off；保留就绪/停止会话文件
           --resources-dir <目录>     频道等外置资源目录，默认 Resources
@@ -113,7 +114,7 @@ internal sealed record ServerCommand(ServerCommandKind Kind, string[] Arguments,
         int index = 0;
         var options = new Dictionary<string, string>(StringComparer.Ordinal);
         while (index < args.Length && args[index] is "--server-ip" or "--listen-ip" or
-            "--channel-port" or "--game-port" or "--native-port" or "--channel-entry-port-base" or "--gm-port" or "--gm-web-port" or "--packet-http-port" or "--session-ttl" or "--log-dir" or "--file-logs" or "--resources-dir" or "--launcher-session" or "--logical-root" or
+            "--channel-port" or "--game-port" or "--native-port" or "--channel-entry-port-base" or "--gm-port" or "--gm-web-port" or "--packet-http-port" or "--session-ttl" or "--log-dir" or "--file-logs" or "--resources-dir" or "--launcher-session" or "--logical-root" or "--display-world-path" or
             "--dungeon-entry-probe" or "--auction-probe" or "--auction-seed" or "--teleport-potion-gates" or "--adventure-weekly" or "--promotion-page" or "--epic-road-2019" or "--epic-road-2019-simulated-drops" or "--hosted-dungeon-eligibility" or "--hosted-dungeon-eligibility-host" or "--battle-pass-season" or "--battle-pass-start" or "--recharge-web-port" or "--pvf-path" or "--data-dir")
         {
             string name = args[index++];
