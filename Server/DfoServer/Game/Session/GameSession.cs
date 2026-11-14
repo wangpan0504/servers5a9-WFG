@@ -253,6 +253,8 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
             var fatigueNow = (timeProvider ?? TimeProvider.System).GetUtcNow();
             character = repository.ResetDailyFatigue(owner, character,
                 FatigueDailyReset.Day(fatigueNow, (timeProvider ?? TimeProvider.System).LocalTimeZone), fatigueNow);
+            character = repository.ResetPracticeDay(owner, character,
+                DfoServer.GameWorld.Time.ServiceDay.Number(fatigueNow, (timeProvider ?? TimeProvider.System).LocalTimeZone));
             character = repository.GrantBlackDiamondFatigue(owner, character, fatigueNow);
             if (questCatalog is not null)
             {

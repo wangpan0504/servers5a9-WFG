@@ -17,6 +17,7 @@ internal sealed record DungeonEntryIncount(int Dungeon, DungeonIncountPeriod Per
 
 internal sealed record DungeonEntryCommit(Character Character, DungeonIncountUsage? IncountUsage)
 {
+    public DungeonPracticeTransition? Practice { get; init; }
     public DfoServer.Game.Guild.GuildDungeonMembership? GuildMembership { get; init; }
 }
 
@@ -48,6 +49,7 @@ internal sealed record DungeonEntryCharge(InventoryPlan? Items, ushort Fatigue, 
     public OperationHopeAdmission? Hope { get; init; }
     public MarriageDungeonAdmission? Marriage { get; init; }
     public DungeonEntryIncount? Incount { get; init; }
+    public DungeonPracticeAdmission? Practice { get; init; }
     public DfoServer.Game.TagEvildom.TagEvildomAdmission? TagEvildom { get; init; }
     public DfoServer.Game.Guild.GuildDungeonAdmission? GuildDungeon { get; init; }
     public DfoServer.Game.ImperialArena.ImperialArenaAdmission? ImperialArena { get; init; }
@@ -56,7 +58,7 @@ internal sealed record DungeonEntryCharge(InventoryPlan? Items, ushort Fatigue, 
     public int FatigueAccelerationPercent { get; init; }
     public InventoryItem? QuickSlotEnergySource { get; init; }
     public DfoServer.Game.MonsterMockBattle.MockBattleAdmission? MockBattle { get; init; }
-    public bool IsEmpty => SingleBinding is null && MockBattle is null && RequiredEvent is null && Items is null && GuildTraining is null && Fatigue == 0 && Special is null && Dazzlement is null && Grief is null && Hope is null && Marriage is null && Incount is null && TagEvildom is null && OrdinaryLukeEntry is null && PreyNormalEntry is null && AntonNormalEntry is null && GuildDungeon is null && ImperialArena is null && Dimension is null;
+    public bool IsEmpty => Practice is null && SingleBinding is null && MockBattle is null && RequiredEvent is null && Items is null && GuildTraining is null && Fatigue == 0 && Special is null && Dazzlement is null && Grief is null && Hope is null && Marriage is null && Incount is null && TagEvildom is null && OrdinaryLukeEntry is null && PreyNormalEntry is null && AntonNormalEntry is null && GuildDungeon is null && ImperialArena is null && Dimension is null;
 }
 
 internal sealed class DungeonEventAdmissionRejectedException() : InvalidOperationException("副本活动已关闭、到期或版本变化");

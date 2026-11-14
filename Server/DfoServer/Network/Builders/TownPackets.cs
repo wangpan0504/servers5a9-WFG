@@ -224,7 +224,22 @@ internal static partial class TownPackets
     }
 
     public static byte[] Player(Character character, CharacterStats attributes, int adventureLevel,
-        ChannelIdentity channel = default, DateTimeOffset? utcNow = null)
+        ChannelIdentity channel = default, DateTimeOffset? utcNow = null) =>
+        PlayerBody(character, attributes, adventureLevel, channel, utcNow, character.DungeonState?.PracticeUsed ?? 0);
+
+    // 只用于已提交练习入场的28前展示；角色快照和revision始终是最终提交结果。
+    public static byte[] PlayerBeforePracticeEntry(Character character, CharacterStats attributes, int adventureLevel,
+        DungeonPracticeTransition transition, ChannelIdentity channel = default, DateTimeOffset? utcNow = null)
+    {
+        if (character.DungeonState is not { } state || state.PracticeDay != transition.Day ||
+            state.PracticeUsed != transition.AfterUsed || transition.AfterUsed != transition.BeforeUsed + 1 ||
+            transition.AfterUsed > DungeonPracticeAdmission.Maximum)
+            throw new InvalidDataException("练习入场显示必须绑定本次实际提交结果");
+        return PlayerBody(character, attributes, adventureLevel, channel, utcNow, transition.BeforeUsed);
+    }
+
+    static byte[] PlayerBody(Character character, CharacterStats attributes, int adventureLevel,
+        ChannelIdentity channel, DateTimeOffset? utcNow, byte practiceUsed)
     {
         using (var stream = new MemoryStream())
         using (var writer = new BinaryWriter(stream))
@@ -277,7 +292,9 @@ internal static partial class TownPackets
             }
 
             writer.Write((byte)0);
-            writer.Write(new byte[4]); // Direct byte, then 02676300 count plus three bytes.
+            writer.Write((byte)0); // 02676300的空列表数量。
+            writer.Write(practiceUsed); // 02676398读独立u8，026763A7写Actor+6BCC。
+            writer.Write((ushort)0); // 其余两个独立尾字段保持原布局。
             writer.Write((byte)0);
             writer.Write(0u); // 02676410 / 02676510 empty lists.
             // tail[10..13]：0267C8B6读u32后交02B644B0安装本人冒险团等级，02BE4710据等级重建常驻效果；

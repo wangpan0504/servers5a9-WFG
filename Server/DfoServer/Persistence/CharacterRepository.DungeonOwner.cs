@@ -14,7 +14,7 @@ internal sealed partial class CharacterRepository : IPartyDungeonStore
         command.Transaction = tx;
         command.CommandText = """
             SELECT s.account,s.next_object_key,s.last_attempt,s.capsule_experience,s.proficiency_level,
-              s.proficiency_experience,c.account FROM character_dungeon_state s
+              s.proficiency_experience,c.account,s.practice_day,s.practice_used FROM character_dungeon_state s
             JOIN characters c ON c.id=s.character_id WHERE s.character_id=$id
             """;
         command.Parameters.AddWithValue("$id", id);
@@ -23,7 +23,8 @@ internal sealed partial class CharacterRepository : IPartyDungeonStore
         if (reader.GetString(0) != reader.GetString(6))
             throw new InvalidDataException("副本owner账号归属损坏");
         var state = new CharacterDungeonState(checked((uint)reader.GetInt64(1)), reader.GetInt64(2),
-            checked((uint)reader.GetInt64(3)), checked((uint)reader.GetInt64(4)), checked((ulong)reader.GetInt64(5)));
+            checked((uint)reader.GetInt64(3)), checked((uint)reader.GetInt64(4)), checked((ulong)reader.GetInt64(5)))
+        { PracticeDay = reader.GetInt32(7), PracticeUsed = checked((byte)reader.GetInt32(8)) };
         state.Validate();
         return state;
     }
@@ -36,8 +37,8 @@ internal sealed partial class CharacterRepository : IPartyDungeonStore
         command.Transaction = tx;
         command.CommandText = """
             INSERT INTO character_dungeon_state(character_id,account,next_object_key,last_attempt,
-              capsule_experience,proficiency_level,proficiency_experience)
-            VALUES($id,$account,$key,$attempt,$capsule,$level,$experience)
+              capsule_experience,proficiency_level,proficiency_experience,practice_day,practice_used)
+            VALUES($id,$account,$key,$attempt,$capsule,$level,$experience,$practiceDay,$practiceUsed)
             """;
         command.Parameters.AddWithValue("$id", id);
         command.Parameters.AddWithValue("$account", account);
@@ -46,6 +47,8 @@ internal sealed partial class CharacterRepository : IPartyDungeonStore
         command.Parameters.AddWithValue("$capsule", state.GrowthCapsuleExperience);
         command.Parameters.AddWithValue("$level", state.ProficiencyLevel);
         command.Parameters.AddWithValue("$experience", checked((long)state.ProficiencyExperience));
+        command.Parameters.AddWithValue("$practiceDay", state.PracticeDay);
+        command.Parameters.AddWithValue("$practiceUsed", state.PracticeUsed);
         command.ExecuteNonQuery();
     }
 
@@ -127,6 +130,8 @@ internal sealed partial class CharacterRepository : IPartyDungeonStore
         using var write = db.BeginWrite("CharacterRepository.CommitDungeonEntry");
         using var tx = write.Transaction;
         var committed = CommitDungeonEntryInTransaction(db, tx, owner, expected, nextObjectKey, charge, out var cachedFatigue);
+        // SQL等待也可能跨06:00，真正提交前再次检查，旧日整笔回滚。
+        charge.Practice?.RequireCurrentDay();
         tx.Commit();
         InstallEntryFatigue(owner, charge, cachedFatigue);
         return committed;
@@ -136,6 +141,7 @@ internal sealed partial class CharacterRepository : IPartyDungeonStore
         AccountOwners.Lease owner, Character expected, uint nextObjectKey, DungeonEntryCharge charge, out DungeonTransientFatigue? cachedFatigue,
         DungeonIncountUsage? partyCounted = null)
     {
+        charge.Practice?.RequireCurrentDay();
         var requiredEvent = charge.RequiredEvent;
         bool epicRoad = charge.DungeonId is 400000097 or 400000098;
         if (epicRoad && requiredEvent?.Schedule.EventId != Game.Events.ServerEventService.EpicRoadId)
@@ -212,6 +218,7 @@ internal sealed partial class CharacterRepository : IPartyDungeonStore
         if (energy is not null) payment = payment is null ? energy : payment.WithAfter(energy.After);
         long revision = payment is { } items ? CommitInventoryInTransaction(db, tx, owner, expected, items).Revision : expected.Revision;
         ReserveInTransaction(db, tx, owner, expected, revision, state, nextObjectKey, fatigueBefore, charge.Weekly);
+        var practice = charge.Practice is { } admission ? CommitPracticeEntry(db, tx, owner, expected, admission) : null;
         CommitTagEvildomAdmission(db, tx, owner, expected, charge, checked(revision + 1));
         CommitImperialArenaAdmission(db, tx, owner, expected, charge, checked(revision + 1));
         CommitMockBattleAdmission(db, tx, owner, expected, charge);
@@ -236,7 +243,7 @@ internal sealed partial class CharacterRepository : IPartyDungeonStore
         cachedFatigue = fatigueBefore is not null && fatigueAfter is not null
             ? new(charge.Hope is null ? CharacterFatigueState.StartDungeonRuleId : "operation-hope-first-area-v1", revision, fatigueBefore, fatigueAfter) : null;
         return new DungeonEntryCommit(committed, charge.Incount?.Row is not null ? counted?.Usage : null)
-            { GuildMembership = ReadDungeonGuildMembership(db, tx, expected.Id) };
+            { GuildMembership = ReadDungeonGuildMembership(db, tx, expected.Id), Practice = practice };
     }
 
     static DfoServer.Game.Guild.GuildDungeonMembership ReadDungeonGuildMembership(SqliteConnection db, SqliteTransaction tx, ushort id)
@@ -256,6 +263,8 @@ internal sealed partial class CharacterRepository : IPartyDungeonStore
         if ((fiendwarCommit is null) != (fiendwarTarget is null) ||
             reservations.Any(row => row.FiendwarCommit != fiendwarCommit || row.FiendwarTarget != fiendwarTarget))
             throw new InvalidDataException("漩涡组队入场提交能力不属于同一原Run");
+        if (reservations.Any(r => r.Charge.Practice is not null))
+            throw new InvalidOperationException("组队入场不支持练习模式");
         if (reservations.Count is < 1 or > 4 || reservations.Select(r => r.Charge.Identity.InstanceId).Distinct().Count() != 1)
             throw new InvalidDataException("组队入场需要同一实例的一至四个当前成员");
         return AccountOwners.Lease.ExecuteGroup(reservations.Select(r => (r.Owner, r.Expected.Id)).ToArray(), () =>

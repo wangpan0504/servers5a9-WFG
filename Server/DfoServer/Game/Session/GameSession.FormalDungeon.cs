@@ -26,6 +26,7 @@ internal sealed partial class GameSession
     {
         public uint NextObjectKey { get; set; }
         public GuildTrainingSnapshot? GuildTraining { get; init; }
+        public DungeonPracticeTransition? Practice { get; init; }
         public ImmutableArray<ushort> PartyActors { get; init; } = [];
         public ImmutableArray<DfoServer.Game.Guild.GuildDungeonMembership> GuildMemberships { get; init; } = [];
         public byte PartySlot { get; init; }
@@ -148,6 +149,7 @@ internal sealed partial class GameSession
     sealed record PreparedFormalDungeon(Character Character, long SelectionEpoch, FormalDungeon Dungeon, uint NextKey)
     {
         public FormalDungeonReceipt? AntonHatcherySource { get; init; }
+        public DungeonPracticeAdmission? Practice { get; init; }
         public InventoryItem? QuickSlotEnergySource { get; init; }
         public InventoryEventPrecondition? RequiredEvent { get; init; }
         public DungeonSelectionContext? ClassExperienceSelection { get; init; }
@@ -398,6 +400,8 @@ internal sealed partial class GameSession
         if (practice && retry is null && (selection is null || selection.IsClassExperience || selection.IsTutorial ||
             selection.SelectionEpoch != epoch || selection.CharacterId != expected.Id || selection.OriginPosition != expected.Position))
             return RejectFormal("practice-selection-missing");
+        var practiceAdmission = practice ? DungeonPracticeAdmission.Prepare(expected.DungeonState, timeProvider ?? TimeProvider.System) : null;
+        if (practice && practiceAdmission is null) return RejectFormal("practice-entry-limit");
         var approvedPartyRoute = shared?.Session.PreparedParty(shared).Dungeon.Entry.PartyRoute;
         DimensionDungeonAdmission? dimension = null;
         if (!practice && dungeonId <= int.MaxValue && incounts?.Dimension is { } dimensionCatalog && dimensionCatalog.Contains((int)dungeonId))
@@ -689,7 +693,7 @@ internal sealed partial class GameSession
         if (tagEntry is null && imperialEntry is null && war?.Charged != true && !entry.IsPractice && !entry.IsTutorial && !entry.IsClassExperience && !entry.IsTournament && !entry.IsTrainingRoom &&
             WeeklyDungeonPolicy.SlotOf(catalog.Get(checked((int)dungeonId))) is { } weeklySlot)
             weekly = new(WeeklyDungeonPolicy.WeekKey((timeProvider ?? TimeProvider.System).GetUtcNow()), weeklySlot);
-        return prepared is null ? null : prepared with { RequiredEvent = requiredEvent, ClassExperienceSelection = classExperience ? selection : null, Weekly = weekly,
+        return prepared is null ? null : prepared with { Practice = practiceAdmission, RequiredEvent = requiredEvent, ClassExperienceSelection = classExperience ? selection : null, Weekly = weekly,
             // 普通入场票已覆盖相同物品时，频道代价只保留次数；超星空通行证规划字段仍完整传入提交阶段。
             Dungeon = (assault is null ? prepared.Dungeon : prepared.Dungeon with { Assault = assault.Selection, AssaultRewards = assault.Rewards }) with { EvildomWarEntry = war, TagEvildomEntry = tagEntry, ImperialArenaEntry = imperialEntry, HellTicket = hellTicket, LegendTicket = legendTicket, HellPieces = pieces, CosmoPasses = cosmoPasses,
                 CosmoInvitationCount = cosmoDefinitionForCost?.CosmoInvitationCount ?? 0, CosmoStoneCount = cosmoDefinitionForCost?.CosmoStoneCount ?? 0, EntryPieces = pieces, SpecialEntry = specialEntry, Dazzlement = dazzlement,
@@ -1261,7 +1265,7 @@ internal sealed partial class GameSession
             installing = installing with { GuildTraining = training.Snapshot };
         }
         Character committed;
-        if (singleBinding is not null || prepared.RequiredEvent is not null || installing.Entry.MockBattle is not null || installing.Strongway2019Admission is not null || training is not null || entryItems is not null || entryIncount is not null || entryFatigue > 0 || installing.Entry.OrdinaryLukeDay is not null || installing.Entry.PreyNormal is not null || installing.GriefAdmission is not null || installing.SpecialEntry is not null || installing.Dazzlement is not null || installing.Entry.Hope is not null || installing.TagEvildomEntry is not null || installing.ImperialArenaEntry is not null || guildAdmission is not null)
+        if (prepared.Practice is not null || singleBinding is not null || prepared.RequiredEvent is not null || installing.Entry.MockBattle is not null || installing.Strongway2019Admission is not null || training is not null || entryItems is not null || entryIncount is not null || entryFatigue > 0 || installing.Entry.OrdinaryLukeDay is not null || installing.Entry.PreyNormal is not null || installing.GriefAdmission is not null || installing.SpecialEntry is not null || installing.Dazzlement is not null || installing.Entry.Hope is not null || installing.TagEvildomEntry is not null || installing.ImperialArenaEntry is not null || guildAdmission is not null)
         {
             // 入场票、入场一次性疲劳、每周地下城计数与尝试号预留同一写事务：重复请求或提交失败都不会只扣一半。
             DungeonEntryCommit entryCommit;
@@ -1269,11 +1273,16 @@ internal sealed partial class GameSession
             {
                 entryCommit = repository.CommitDungeonEntry(owner, character, prepared.NextKey,
                     new DungeonEntryCharge(entryItems, entryFatigue, installing.Run.Snapshot.Identity, installing.Entry.StartMap.Id,
-                        prepared.Weekly,installing.GriefAdmission) { QuickSlotEnergySource = prepared.QuickSlotEnergySource, BattlePassMissionClock = timeProvider ?? TimeProvider.System, GuildTraining = training?.Inventory, OrdinaryLukeEntry = installing.Entry.OrdinaryLukeDay is null ? null : installing.Entry, PreyNormalEntry = installing.Entry.PreyNormal is null ? null : installing.Entry,
+                        prepared.Weekly,installing.GriefAdmission) { Practice = prepared.Practice, QuickSlotEnergySource = prepared.QuickSlotEnergySource, BattlePassMissionClock = timeProvider ?? TimeProvider.System, GuildTraining = training?.Inventory, OrdinaryLukeEntry = installing.Entry.OrdinaryLukeDay is null ? null : installing.Entry, PreyNormalEntry = installing.Entry.PreyNormal is null ? null : installing.Entry,
                 AntonNormalEntry = installing.Entry.AntonNormal is null ? null : installing.Entry, Special = installing.SpecialEntry, Dazzlement = installing.Dazzlement, DungeonId = checked((int)installing.Entry.DungeonId), Hope = installing.Entry.Hope, Incount = entryIncount, TagEvildom = installing.TagEvildomEntry?.Admission, GuildDungeon = guildAdmission, ImperialArena = installing.ImperialArenaEntry?.Admission, Dimension = installing.Entry.Dimension,
                 MockBattle = installing.Entry.MockBattle, SingleBinding = singleBinding,
                 RequiredEvent = prepared.RequiredEvent ?? (installing.Entry.MockBattle is { } mockEntry ? new(mockEntry.Schedule, timeProvider ?? TimeProvider.System) :
                     Strongway2019RequiredEvent(installing.Strongway2019Admission)) });
+            }
+            catch (DungeonPracticeRejectedException error)
+            {
+                LastFormalDungeonRejection = error.Message;
+                return null;
             }
             catch (DungeonEventAdmissionRejectedException)
             {
@@ -1291,7 +1300,7 @@ internal sealed partial class GameSession
                 return null;
             }
             committed = entryCommit.Character;
-            installing = installing with { GuildMemberships = entryCommit.GuildMembership is { } membership ? [membership] : [] };
+            installing = installing with { Practice = entryCommit.Practice, GuildMemberships = entryCommit.GuildMembership is { } membership ? [membership] : [] };
             // 异界共用次数由专用入口投影下发，不再混入通用入场次数通知。
             if (installing.Entry.Dimension is null && entryIncount is { Row: { } countRow, Increment: true } && entryCommit.IncountUsage is { } actualUsage)
                 enterCounts = [.. DungeonIncountPolicy.Views(countRow, actualUsage)];
@@ -1412,6 +1421,7 @@ internal sealed partial class GameSession
             pendingQuestReplay = null;
             SetState(dungeon.Run.Phase == SinglePlayerDungeonPhase.Settlement ? SessionPhase.Settlement : SessionPhase.Dungeon);
             return FormalReceipt() with { LostLandStarted = lostLandStarted,
+                PracticeInitialLoaded = dungeon.Entry.IsPractice && dungeon.Run.LastLoadingFact is { IsInitialLoading: true },
                 BossRushStart = dungeon.BossRush is { } rush && dungeon.Run.LastLoadingFact is { IsInitialLoading: true }
                     ? rush.Hud(dungeon.StartedTimestamp) : null,
                 FatigueEnergySlots = QuickSlotEquipmentEnergy.ChangedSlots(expected.Inventory, Selected!.Inventory),
@@ -1976,6 +1986,7 @@ internal sealed partial class GameSession
             PassiveItems = dungeon.Ground.CurrentPassiveItems(),
             MonsterAi = dungeon.Run.CurrentMonsterAi,
             HelperLanding = dungeon.Run.InitialHelperLanding,
+            Practice = dungeon.Practice,
             PartyActors = dungeon.PartyActors,
             GuildMemberships = dungeon.GuildMemberships,
             PartySlot = dungeon.PartySlot,
