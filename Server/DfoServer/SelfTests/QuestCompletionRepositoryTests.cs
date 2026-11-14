@@ -275,6 +275,8 @@ internal static class QuestCompletionRepositoryTests
     internal sealed class LostResultRepository(ICharacterRepository inner) : ICharacterRepository
     {
         public Action<DfoServer.Game.Dungeons.DungeonEntryCharge>? BeforeDungeonEntryCommit { get; set; }
+        public Character ResetPracticeDay(AccountOwners.Lease owner, Character expected, int day) =>
+            inner.ResetPracticeDay(owner, expected, day);
         public Character ResetDailyFatigue(AccountOwners.Lease owner, Character expected, int day, DateTimeOffset now) =>
             inner.ResetDailyFatigue(owner, expected, day, now);
         public System.Collections.Immutable.ImmutableDictionary<int,AccountItemRefillState> ReadAccountItemRefills(AccountOwners.Lease owner) => inner.ReadAccountItemRefills(owner);

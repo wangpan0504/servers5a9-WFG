@@ -396,6 +396,7 @@ internal static class SqliteMigrations
             if (!KnownTable(db, tx, "account_seen_notices", SeenNoticesSchema))
                 Execute(db, tx, SeenNoticesSchema);
         }),
+        new(212, "角色共用每日练习次数", DungeonPracticeSchema.Upgrade),
     ];
 
     static void UpgradeFatigueBattery209(SqliteConnection db, SqliteTransaction tx)
@@ -2677,6 +2678,7 @@ internal static class SqliteMigrations
         }
         ValidateTeleportCooldownColumn(db, tx, "privilege_until");
         InventoryItemRevisionSchema.Validate(db, tx);
+        DungeonPracticeSchema.Validate(db, tx);
         ValidateAccountCommon45(db, tx);
         BeastDungeonReservationSchema.Validate(db, tx);
         BeastStageRewardSchema.Validate(db, tx);
@@ -2981,7 +2983,7 @@ internal static class SqliteMigrations
         "SELECT character_id,account,event_id,instance_id,quest_id,task_attempt,epoch,dungeon_id,map_id,death_events,report_body,generation,base_experience,rank_experience,total_experience,rank_bonus_index,rule_id,resource_source,before_level,after_level,before_experience,after_experience,revision,potion_experience,adventure_experience,other_bonus_experience,bonus_json,proficiency_gain FROM character_dungeon_settlement_receipts LIMIT 0",
         "SELECT character_id,account,event_id,instance_id,task_attempt,epoch,map_id,monster_key,rule_id,resource_source,ground_key,core,x,y,record_slot FROM character_dungeon_loot_receipts LIMIT 0",
         "SELECT character_id,account,event_id,ground_key,instance_id,task_attempt,epoch,destination_list,destination_slot,item_uid,after_core,revision FROM character_dungeon_pickup_receipts LIMIT 0",
-        "SELECT character_id,account,next_object_key,last_attempt,capsule_experience,proficiency_level,proficiency_experience,recommended_dungeon_clears FROM character_dungeon_state LIMIT 0",
+        "SELECT character_id,account,next_object_key,last_attempt,capsule_experience,proficiency_level,proficiency_experience,recommended_dungeon_clears,practice_day,practice_used FROM character_dungeon_state LIMIT 0",
         "SELECT character_id,account,instance_id,task_attempt,service_day,kind,dungeon_id,layer,gold,revision FROM dungeon_special_entry_receipts LIMIT 0",
         "SELECT character_id,account,instance_id,event_id,task_attempt,epoch,dungeon_id,completed_rounds,maximum_rounds,play_milliseconds,cleared,death_events,reward_json,gained_experience,proficiency_gained FROM dungeon_altar_clear_receipts LIMIT 0",
         "SELECT character_id,account,next_layer,last_clear_day,clear_count FROM dungeon_despair_progress LIMIT 0",

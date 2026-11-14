@@ -484,6 +484,7 @@ internal static class SelfTestRunner
         GriefTowerPersistenceTests.RunCore();
         DungeonClassExperienceTests.RunCore();
         DungeonPracticeTests.RunCore();
+        DungeonPracticeCounterTests.RunCore();
         DungeonResourceSurveyTests.RunCore();
         DungeonMonsterPlanTests.RunCore();
         DungeonMonsterPacketsTests.RunCore();

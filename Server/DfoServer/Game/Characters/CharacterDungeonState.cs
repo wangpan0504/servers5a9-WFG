@@ -5,10 +5,13 @@ internal sealed record CharacterDungeonState(uint NextObjectKey, long LastAttemp
     uint GrowthCapsuleExperience, uint ProficiencyLevel, ulong ProficiencyExperience)
 {
     public const uint FirstObjectKey = 256;
+    public int PracticeDay { get; init; }
+    public byte PracticeUsed { get; init; }
     public static CharacterDungeonState NewOrdinary => new(FirstObjectKey, 0, 0, 0, 0);
     public void Validate()
     {
-        if (NextObjectKey is < 1 or > 65536 || LastAttempt < 0 || ProficiencyExperience > long.MaxValue)
+        if (NextObjectKey is < 1 or > 65536 || LastAttempt < 0 || ProficiencyExperience > long.MaxValue ||
+            PracticeDay is < 0 or > 3652058 || PracticeUsed > 3 || PracticeDay == 0 && PracticeUsed != 0)
             throw new InvalidDataException("无效角色副本owner状态");
     }
 }

@@ -663,9 +663,11 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
                     await town.ReturnFromFormalDungeonAsync(context, returning, "formal_altar_retry_town");
                     return CommandResult.Handled;
                 }
-                if (ordinaryRetry)
+                if (ordinaryRetry || current.Entry.IsPractice)
                 {
-                    log.Write("formal_dungeon_return", new { Connection = context.Id, Reason = "ordinary-retry-rejected",
+                    // 练习额度耗尽沿已证的结果页回城ACK释放等待，不向CMD72塞入CMD16错误布局。
+                    log.Write("formal_dungeon_return", new { Connection = context.Id,
+                        Reason = current.Entry.IsPractice ? "practice-retry-rejected" : "ordinary-retry-rejected",
                         current.Snapshot.Identity, RejectReason = context.Session.LastFormalDungeonRejection });
                     var returning = context.Session.ReturnFromFormalDungeon();
                     if (returning is null) return CommandResult.Unhandled;
@@ -674,7 +676,8 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
                         "formal_ordinary_retry_return", RejectedGuard);
                     await town.ReturnFromFormalDungeonAsync(context, returning, "formal_result_town");
                     // F10 用尽时客户端仍可能亮着（上次成功没收到 550）；回城前补发当前剩余，含 0。
-                    await PublishRetryEnterCountsAsync(context, current.Entry.DungeonId, null, RejectedGuard);
+                    if (!current.Entry.IsPractice)
+                        await PublishRetryEnterCountsAsync(context, current.Entry.DungeonId, null, RejectedGuard);
                     return CommandResult.Handled;
                 }
                 if (current.Entry.HellParty is null && !current.Entry.IsCosmo && !current.Entry.IsInfernoParty) return CommandResult.Unhandled;
@@ -716,6 +719,7 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
             }
             else
             {
+                if (retry.Practice is not null) await town.PracticeEntryAsync(context, retry, beforeInformation: true);
                 await context.Notify(NotiPacketType.DUNGEON_INFO, DungeonPackets.Information(retry.Entry, retry.Snapshot.BossPosition), "formal_retry_information", RetryGuard);
                 if (OrdinaryLukeProgress.Applies(retry.Entry)) await OrdinaryLukeSequenceProjection.RefreshAsync(context, RetryGuard);
                 if (PreyNormalProgress.Applies(retry.Entry)) await PreyNormalSequenceProjection.RefreshAsync(context, RetryGuard);

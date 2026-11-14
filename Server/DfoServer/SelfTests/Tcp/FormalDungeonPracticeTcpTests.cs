@@ -3,6 +3,7 @@ using DfoServer.Game.Accounts;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Persistence;
 using DfoServer.Network.Management;
+using DfoServer.GameWorld.Dungeons;
 using static DfoServer.Testing.TestCheck;
 using static DfoServer.Testing.TcpPeer;
 
@@ -74,7 +75,7 @@ internal static partial class FormalDungeonTcpTests
         peer.Expect(1, 18, Convert.FromHexString("010D0000000800120708E602100018021800"));
         peer.Barrier();
         That(Stable() == stable && fixture.Snapshot() == entered, "练习加载阶段仍属本次免耗Run，脚本材料不提前扣费");
-        Load(peer);
+        LoadPractice(1);
         peer.Barrier();
         peer.Send(44, Build(w => { w.Write((ushort)potion); w.Write((byte)0); w.Write(0u); w.Write(1065); w.Write(0); }));
         peer.Expect(1, 44, Build(w => { w.Write((byte)0); w.Write((ushort)0); w.Write((byte)0); w.Write(0u); w.Write(1065); }));
@@ -169,9 +170,10 @@ internal static partial class FormalDungeonTcpTests
                 peer.Send(72, [1, 0]);
                 peer.Expect(1, 72, [1, 1, 0]);
                 peer.Expect(0, 27, new byte[42]);
+                PracticePlayer(1);
                 That(peer.Expect(0, 28).Body[12] == 1, "再练习保留模式，不能转为普通奖励副本");
                 map = peer.Expect(0, 29).Body;
-                Load(peer);
+                LoadPractice(2);
                 peer.Barrier();
                 entered = fixture.Snapshot();
             }
@@ -191,17 +193,36 @@ internal static partial class FormalDungeonTcpTests
             }
         }
         That(Stable() == stable && fixture.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0", peer.Id) is [[2L]],
-            "零疲劳和零门票可反复练习，不扣金币/材料或占玩法次数；attempt仅预留新身份，退出无虚弱，不完成主线");
+            "零疲劳和零门票可练习两次，不扣金币/材料或占普通玩法次数；退出无虚弱，不完成主线");
         // 用户实际请求：普通副本1000、offset8=1、任务0；不借当前主线路线入场。
         SelectMap(peer);
         BinaryPrimitives.WriteUInt32LittleEndian(request, 1000);
         peer.Send(16, request);
+        PracticePlayer(2);
         byte[] actualInfo = peer.Expect(0, 28).Body;
-        That(U32(actualInfo) == 1000 && actualInfo[12] == 1 && actualInfo[7] == 0 && U32(peer.Expect(0, 29).Body, 14) == 58590,
+        byte[] actualMap = peer.Expect(0, 29).Body;
+        That(U32(actualInfo) == 1000 && actualInfo[12] == 1 && actualInfo[7] == 0 && U32(actualMap, 14) == 58590,
             "1000练习请求携活动尾字段进入暗黑雷鸣废墟普通迷宫，不误走剧情回放");
-        Load(peer);
+        LoadPractice(3);
         peer.Barrier();
-        Return();
+        ClearLastPractice();
+        peer.Send(72, [1, 0]);
+        peer.Expect(1, 72, [1, 1, 2]);
+        peer.Expect(0, 3, [1, key[0], key[1], 0]);
+        peer.Expect(0, 24);
+        RefreshedQuests(peer);
+        peer.Barrier();
+        That(Stable() == stable && EmptyLedgers(), "三次练习耗尽后再练习明确ACK回城，不留结果页等待或普通奖励");
+        peer.Send(72, [1, 0]);
+        peer.Barrier();
+        SelectMap(peer);
+        string exhausted = fixture.Snapshot();
+        peer.Send(16, request);
+        peer.Expect(1, 16, [0, 173, 0, 0]);
+        peer.Barrier();
+        That(fixture.Snapshot() == exhausted &&
+            fixture.Query("SELECT practice_used,last_attempt FROM character_dungeon_state WHERE character_id=$p0", peer.Id) is [[3L,3L]],
+            "跨DGN第三次共用角色额度，第四次按173拒绝且不预留新attempt或扣资产");
         peer.Send(3, [0]);
         peer.Expect(1, 3, [1]);
         Console.WriteLine("PASS 副本练习实际请求、零疲劳、逐房回访、免消耗、无奖励、重放、再练习与回城TCP");
@@ -209,18 +230,75 @@ internal static partial class FormalDungeonTcpTests
         byte[] EnterPractice()
         {
             peer.Send(16, request);
+            PracticePlayer(0);
             byte[] info = peer.Expect(0, 28).Body;
             That(info.Length == 36 && info[12] == 1 && info[7] == 0, "练习发布普通maze0和本版模式位");
             return peer.Expect(0, 29).Body;
         }
-        void Return()
+        void LoadPractice(byte used)
         {
-            peer.Send(42);
-            peer.Expect(1, 42, [1]);
-            peer.Expect(0, 3, [1, key[0], key[1], 0]);
-            peer.Expect(0, 24);
-            RefreshedQuests(peer);
-            peer.Barrier();
+            peer.Send(37, new byte[8]);
+            peer.Expect(1, 37, [1]);
+            peer.Expect(0, 30, new byte[5]);
+            peer.Expect(0, 3, [1, (byte)peer.Id, (byte)(peer.Id >> 8), 1]);
+            PracticePlayer(used);
+            peer.ExpectOptionalFatigue();
+            That(fixture.Query("SELECT practice_used FROM character_dungeon_state WHERE character_id=$p0", peer.Id) is [[var stored]] &&
+                Convert.ToInt64(stored) == used, "37后Player恢复本次已提交计数，存储始终保持After");
+        }
+        void PracticePlayer(byte used)
+        {
+            byte[] body = peer.Expect(0, 2).Body;
+            // 本夹具不授予皮肤且技能后附表为空，原生尾部恰21B；非空时明确拒绝该简化解析。
+            That(body.Length > 21 && body[0] == 1 && U16(body,22) == peer.Id && body[^1] == 0 &&
+                body[^21] == 0 && body[^20] == 0 && body[^18] == 0 && body[^17] == 0,
+                "练习Player属于本人且保留空附表的21字节尾部");
+            That(body[^19] == used, "练习Player独立u8计数严格匹配包序");
+        }
+        void ClearLastPractice()
+        {
+            // 复用本轮只读目录，沿实际1000迷宫最短路逐房战斗，不能伪造结算状态来触发72。
+            var maze = resources.Dungeons.Get(1000).Mazes.Single(value => value.SourceOrdinal == actualInfo[7]);
+            var start = new DungeonPoint(actualMap[0], actualMap[1]);
+            var boss = new DungeonPoint(actualInfo[8], actualInfo[9]);
+            var from = new Dictionary<DungeonPoint, DungeonPoint?> { [start] = null };
+            var queue = new Queue<DungeonPoint>();
+            queue.Enqueue(start);
+            while (queue.TryDequeue(out var point) && !from.ContainsKey(boss))
+            foreach (var link in maze.StaticTopology.Links!)
+            {
+                DungeonPoint? next = link.First == point ? link.Second : link.Second == point ? link.First : null;
+                if (next is not { } adjacent || from.ContainsKey(adjacent)) continue;
+                from.Add(adjacent, point);
+                queue.Enqueue(adjacent);
+            }
+            That(from.ContainsKey(boss), "实际1000练习Boss可沿资源连接抵达");
+            var path = new Stack<DungeonPoint>();
+            for (var point = boss; from[point] is { } parent; point = parent) path.Push(point);
+            bool cleared = false;
+            while (true)
+            {
+                foreach (int at in Enumerable.Range(0, actualMap[18]).Select(row => 19 + row * 22)
+                    .Where(at => actualMap[at + 13] != 9 && actualMap[at + 14] == 0).OrderBy(at => actualMap[at + 13] == 3))
+                {
+                    byte[] report = Death(U16(actualMap, at + 6), peer.Id, actualMap[at + 12]);
+                    bool isBoss = actualMap[at + 13] == 3;
+                    if (isBoss) { report[55] = 1; SealDeath(report); }
+                    peer.Send(39, report);
+                    That(peer.Expect(0, 38).Body.Length == 9, "第三次练习沿真实死亡通道免奖励");
+                    if (isBoss) { That(peer.Expect(0, 255).Body is { Length: 5 }, "第三次练习真实清图"); cleared = true; }
+                    peer.Barrier();
+                }
+                if (!path.TryPop(out var next)) break;
+                byte[] move = new byte[100];
+                move[0] = checked((byte)next.X);
+                move[1] = checked((byte)next.Y);
+                peer.Send(45, move);
+                peer.Expect(1, 45, [1]);
+                actualMap = peer.Expect(0, 29).Body;
+                Load(peer);
+            }
+            That(cleared, "先有真实Boss清图事实，再请求耗尽额度的72");
         }
         bool EmptyLedgers() => new[] { "character_dungeon_growth_receipts","character_dungeon_loot_receipts",
             "character_dungeon_fatigue_receipts","character_dungeon_settlement_receipts" }
