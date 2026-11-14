@@ -321,6 +321,8 @@ CREATE TABLE character_dungeon_state(
     proficiency_level INTEGER NOT NULL CHECK(proficiency_level BETWEEN 0 AND 4294967295),
     proficiency_experience INTEGER NOT NULL CHECK(proficiency_experience>=0),
     recommended_dungeon_clears INTEGER NOT NULL DEFAULT 0 CHECK(recommended_dungeon_clears BETWEEN 0 AND 65535),
+    practice_day INTEGER NOT NULL DEFAULT 0 CHECK(practice_day BETWEEN 0 AND 3652058),
+    practice_used INTEGER NOT NULL DEFAULT 0 CHECK(practice_used BETWEEN 0 AND 3 AND (practice_day>0 OR practice_used=0)),
     FOREIGN KEY(character_id,account) REFERENCES characters(id,account)
 );
 

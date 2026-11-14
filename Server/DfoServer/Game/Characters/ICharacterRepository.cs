@@ -61,6 +61,7 @@ internal interface ICharacterRepository
         DfoServer.Game.Inventory.Models.InventoryItem? energySource = null);
     Character GrantBlackDiamondFatigue(AccountOwners.Lease owner, Character expected, DateTimeOffset now);
     Character ResetDailyFatigue(AccountOwners.Lease owner, Character expected, int day, DateTimeOffset now);
+    Character ResetPracticeDay(AccountOwners.Lease owner, Character expected, int day);
     System.Collections.Immutable.ImmutableDictionary<int, AccountItemRefillState> ReadAccountItemRefills(AccountOwners.Lease owner);
     ServerItemCycleCommit CommitServerItemCycle(AccountOwners.Lease owner, Character expected, InventoryPlan plan);
     CardMembership LoadCardMembership(AccountOwners.Lease owner,ushort characterId,DateTimeOffset now);

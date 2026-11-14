@@ -10,6 +10,8 @@ internal sealed record FormalDungeonReceipt(Character Character, long Generation
 {
     // 房间加载前的身份在本次访问内保持不变；业务Epoch仍随加载、死亡等提交推进。
     public DungeonRunIdentity? RoomLoadingIdentity { get; init; }
+    public DungeonPracticeTransition? Practice { get; init; }
+    public bool PracticeInitialLoaded { get; init; }
     public TimeProvider? BattlePassMissionClock { get; init; }
     public ImmutableArray<InventorySlot> FatigueEnergySlots { get; init; } = [];
     public bool LostLandStarted { get; init; }

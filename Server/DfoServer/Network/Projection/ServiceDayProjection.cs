@@ -34,6 +34,12 @@ internal sealed class ServiceDayProjection(GameConnectionContext context, Server
                 Day = receipt.Character.Fatigue!.ResetDay, PreviousRemaining = receipt.Before.Fatigue!.Remaining,
                 Remaining = receipt.Character.Fatigue.Remaining, receipt.Character.Fatigue.Maximum, receipt.Character.Revision });
         }
+        if (context.Session.AdvancePracticeDay(clock.GetUtcNow()) is { } practice)
+        {
+            await town.PracticeDayAsync(context, practice);
+            log.Write("practice_daily_reset", new { Connection = context.Id, Character = practice.Character.Id,
+                Day = practice.Character.DungeonState!.PracticeDay, practice.Character.Revision });
+        }
         if (missions is not null)
         {
             if (missionEpoch == context.Session.SelectionEpoch && missionDay != missions.Period.Day && missionProjection is not null)
