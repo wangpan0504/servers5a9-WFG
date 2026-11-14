@@ -42,7 +42,7 @@ internal static class PartyFramePublicationTests
                     Skins = SkinStorageState.Empty with { PartyFrames = [new(420000001, 0)], SelectedPartyFrame = 420000001 }
                 }, "frame_test_grant", new(character, null))));
             TestCheck.That(granted.Accepted, "延迟边框夹具通过创建后的库存事务取得所有权");
-            var parties = new PartyService(repository);
+            var parties = new PartyService(repository, inviteAntiEvil: _ => 0);
             TestCheck.That(parties.Invite(source, target, 1).Accepted &&
                 parties.Respond(target, source.Selected!.Id, 2, true).Accepted, "延迟边框回归使用真实双人队伍");
             using var stop = new CancellationTokenSource();
@@ -73,11 +73,62 @@ internal static class PartyFramePublicationTests
             parties.Leave(target);
             TestCheck.That(!obsolete.Guard!(), "接收者离队使排队中的边框与名册一并失效");
             await CheckRemovalAsync(repository, towns);
+            await CheckInviteDisplayAsync(repository, towns);
         }
         finally
         {
             Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
             if (Directory.Exists(root)) TestFiles.DeleteDirectory(root, true);
+        }
+    }
+
+    static async Task CheckInviteDisplayAsync(CharacterRepository repository, TownCatalog towns)
+    {
+        int index = 0;
+        foreach (string mode in new[] { "current", "source-epoch", "source-owner", "target-epoch" })
+        {
+            var owners = new AccountOwners();
+            using var sourceOwner = owners.Acquire("invite-wire-source-" + mode, () => { });
+            using var targetOwner = owners.Acquire("invite-wire-target-" + mode, () => { });
+            var point = new Location(1, 0, 10, 10);
+            repository.Create(sourceOwner, new("InvWireSrc" + index, point, point));
+            repository.Create(targetOwner, new("InvWireTgt" + index++, point, point));
+            var source = new GameSession(repository, towns, sourceOwner);
+            var target = new GameSession(repository, towns, targetOwner);
+            source.Select(0); source.MarkReady(); target.Select(0); target.MarkReady();
+            var parties = new PartyService(repository, inviteAntiEvil: _ => 1234);
+            var notice = parties.Invite(source, target, 0x01020304).Notices.Single();
+            using var stop = new CancellationTokenSource();
+            using var stream = new GameSenderBudgetTests.HeldStream();
+            await using var sender = new GameConnectionSender(targetOwner, stream, stop, 0, (_, _, _, _, _) => { });
+            var context = new GameConnectionContext(new(1, System.Net.IPAddress.Loopback, stream, stop), targetOwner, target, sender);
+            var held = sender.Send(0, 2, [1], "held");
+            await stream.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            PartyProjection.Notice(context, notice);
+            var drained = sender.DrainAsync();
+            if (mode == "current")
+                TestCheck.That(source.Move(new(11, 10, 0, 0, 0, 0)), "已创建邀请排队期间邀请者可以正常移动");
+            else if (mode == "source-epoch")
+            {
+                source.ReturnToRoster(); source.Select(0); source.MarkReady();
+            }
+            else if (mode == "target-epoch")
+            {
+                target.ReturnToRoster(); target.Select(0); target.MarkReady();
+            }
+            using var replacement = mode == "source-owner" ? owners.Acquire(sourceOwner.Account, () => { }) : null;
+            TestCheck.That(notice.Guard?.Invoke() == (mode == "current"), "邀请创建后只按原双方身份及有效期判断在途通知");
+            stream.Release.TrySetResult();
+            await Task.WhenAll(held, drained).WaitAsync(TimeSpan.FromSeconds(5));
+            TestCheck.That(sender.PendingBytes == 0 && stream.Frames.Count == (mode == "current" ? 3 : 1),
+                "真实发送泵保留移动后的邀请，源选角/接管或接收者换角同时拦截旧Actor和NOTI7");
+            if (mode == "current")
+            {
+                ushort id = source.Selected!.Id;
+                byte[] expected = [(byte)id, (byte)(id >> 8), 0, 4, 3, 2, 1, 156, 0, 100, 0, 0xD2, 4, 0, 0, 0, 0];
+                TestCheck.Bytes(stream.Frames[2], GameFrame.Build(0, 7, 2, expected),
+                    "实际PartyProjection和sender发出17B邀请者显示资料，完整帧/序号独立编码");
+            }
         }
     }
 
@@ -95,7 +146,7 @@ internal static class PartyFramePublicationTests
             var source = new GameSession(repository, towns, sourceOwner);
             var target = new GameSession(repository, towns, targetOwner);
             source.Select(0); source.MarkReady(); target.Select(0); target.MarkReady();
-            var parties = new PartyService(repository);
+            var parties = new PartyService(repository, inviteAntiEvil: _ => 0);
             TestCheck.That(parties.Invite(source, target, 1).Accepted &&
                 parties.Respond(target, source.Selected!.Id, 2, true).Accepted, "踢人队列用例使用真实双人队伍");
             using var stop = new CancellationTokenSource();

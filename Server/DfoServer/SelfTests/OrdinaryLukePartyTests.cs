@@ -66,7 +66,7 @@ internal static class OrdinaryLukePartyTests
                 session.Select(0,resumeTown:true); session.MarkReady(); return session;
             }).ToArray();
             var energyStart = sessions.Select(session => session.Selected!).ToArray();
-            var parties = new PartyService(repository);
+            var parties = new PartyService(repository, inviteAntiEvil: _ => 0);
             foreach (var session in sessions) session.CurrentParty = () => parties.Current(session);
             That(parties.Invite(sessions[0],sessions[1],sessions[1].Selected!.Id).Accepted &&
                 parties.Respond(sessions[1],sessions[0].Selected!.Id,0,true).Accepted,"卢克领域夹具经原邀请/接受建立两名真实owner队伍");

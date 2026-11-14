@@ -872,6 +872,8 @@ internal static class FormalDungeonPublicationTests
             if (loseTournament) { loseTournament = false; throw new IOException("test tournament committed result lost"); }
             return result;
         }
+        public Character ResetPracticeDay(AccountOwners.Lease owner, Character expected, int day) =>
+            inner.ResetPracticeDay(owner, expected, day);
         public Character ResetDailyFatigue(AccountOwners.Lease owner, Character expected, int day, DateTimeOffset now) =>
             inner.ResetDailyFatigue(owner, expected, day, now);
         public System.Collections.Immutable.ImmutableDictionary<int,AccountItemRefillState> ReadAccountItemRefills(AccountOwners.Lease owner) => inner.ReadAccountItemRefills(owner);

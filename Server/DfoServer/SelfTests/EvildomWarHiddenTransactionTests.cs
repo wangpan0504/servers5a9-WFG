@@ -32,7 +32,7 @@ internal static class EvildomWarHiddenTransactionTests
             var leases = new List<AccountOwners.Lease>();
             var all = new List<GameSession>();
             var clock = new ConsumableUseSessionTests.FakeClock();
-            var parties = new PartyService(repository, clock);
+            var parties = new PartyService(repository, clock, inviteAntiEvil: _ => 0);
             int draws = 0;
             var service = new PartyDungeonService(parties, repository, repository, hiddenDraw: _ => { draws++; return 0; });
             var sessions = Enumerable.Range(0, count).Select(index =>
@@ -66,7 +66,7 @@ internal static class EvildomWarHiddenTransactionTests
                 Sql("DROP TRIGGER reject_hidden_entry");
                 CheckEntry(Enter());
                 foreach (var session in sessions) { parties.Detach(session); session.End(); }
-                parties = new PartyService(repository, clock);
+                parties = new PartyService(repository, clock, inviteAntiEvil: _ => 0);
                 service = new PartyDungeonService(parties, repository, repository,
                     hiddenDraw: _ => throw new InvalidOperationException("Recovery must not draw"));
                 sessions = leases.Take(count).ToArray().Select(previous =>

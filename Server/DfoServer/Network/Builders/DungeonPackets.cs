@@ -250,7 +250,7 @@ internal static class DungeonPackets
         if (error is not (DungeonSelectionError.SilentDefault or DungeonSelectionError.NoAvailableDifficulty or
             DungeonSelectionError.Silent or DungeonSelectionError.InsufficientGold or DungeonSelectionError.RequiredMaterials or
             DungeonSelectionError.MemberFatigueOrClearCondition or DungeonSelectionError.GroupMaterials or
-            DungeonSelectionError.DungeonLimitOrStorageReward))
+            DungeonSelectionError.DungeonLimitOrStorageReward or DungeonSelectionError.MemberEntryLimit))
             throw new ArgumentOutOfRangeException(nameof(error));
         return [0, (byte)error, (byte)((ushort)error >> 8), memberSlot];
     }

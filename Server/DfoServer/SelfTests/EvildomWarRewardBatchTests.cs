@@ -27,7 +27,7 @@ internal static class EvildomWarRewardBatchTests
         var leases = new List<AccountOwners.Lease>();
         var sessions = new List<GameSession>();
         var clock = new ConsumableUseSessionTests.FakeClock();
-        var parties = new PartyService(repository, clock);
+        var parties = new PartyService(repository, clock, inviteAntiEvil: _ => 0);
         var service = new PartyDungeonService(parties, repository, repository, hiddenDraw: maximum => maximum - 1);
         var dungeons = SelfTestCatalogs.Dungeons(resources.Archive);
         var rooms = SelfTestCatalogs.Rooms(resources.Archive);

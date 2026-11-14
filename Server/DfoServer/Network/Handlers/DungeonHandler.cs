@@ -47,6 +47,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
     // 进入次数耗尽必须走客户端已核对的 ACK16 246 提示分支。
     // EntryCost 统一返回 exhausted 原因，日/周及账号/角色账本都不能退化为静默 ACK。
     internal static DungeonSelectionError SelectionErrorForReason(string? entryReason, bool party = false) =>
+        entryReason == "practice-entry-limit" ? DungeonSelectionError.MemberEntryLimit :
         entryReason is "dungeon-incount-exhausted" or "dungeon-account-incount-exhausted"
             ? DungeonSelectionError.DungeonLimitOrStorageReward
             : entryReason == "fatigue-exhausted" || entryReason?.StartsWith("start-fatigue-insufficient:", StringComparison.Ordinal) == true
@@ -428,6 +429,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         if (receipt.SpecialEntry is { Kind: DungeonSpecialEntryKind.Despair, Layer: >= 10 and <= 90 } despair && despair.Layer % 10 == 0)
             await context.Notify(NotiPacketType.USER_APC_INFO_TOD, DungeonDespairPackets.LocalPlayerOpponent(despair.Layer),
                 "formal_despair_local_opponent", Guard);
+        if (receipt.Practice is not null) await town.PracticeEntryAsync(context, receipt, beforeInformation: true);
         if (receipt.Monsters.Altar is not null)
             await context.Notify(NotiPacketType.BLOOD_INFO, DungeonAltarPackets.Information(receipt.Entry), "formal_altar_information", Guard);
         else
@@ -559,6 +561,8 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
                 "formal_boss_rush_timeout", Guard);
         await DungeonPotionProjection.LoadedAsync(context, Guard);
         await context.Notify(NotiPacketType.USER_STATE, DungeonPackets.DungeonPlayerState(receipt.Character.Id), "formal_player_state", Guard);
+        // 真实首房37已安装Actor；先恢复权威计数，再沿原特权/属性刷新链。重复或过房37不重扣。
+        if (receipt.PracticeInitialLoaded) await town.PracticeEntryAsync(context, receipt, beforeInformation: false);
         RaidCombatProjection.PostPreyDungeonTime(context, receipt);
         // 进入副本重建Actor后补发网吧特权buff，否则buff栏在副本内是空的。
         await PcRoomBuffProjection.PostAsync(context, Guard);

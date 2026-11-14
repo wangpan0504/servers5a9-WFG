@@ -221,7 +221,7 @@ internal static class DungeonSelectionReturnTests
             repository.Create(peerOwner, new("TrainMember", point, point));
             var session = new GameSession(repository, towns, owner);
             var member = new GameSession(repository, towns, peerOwner);
-            var parties = new PartyService(repository);
+            var parties = new PartyService(repository, inviteAntiEvil: _ => 0);
             foreach (var current in new[] { session, member })
             {
                 current.Select(0, resumeTown: true);

@@ -170,7 +170,7 @@ internal static class GuildTeleportTests
                 INSERT INTO guild_members(guild_id,character_id,grade,joined_at_unix) VALUES(1,{roles[0].Id},1,1000);
                 INSERT INTO guild_benefits(guild_id,type,value,expires_unix) VALUES(1,7,3,0);
                 """);
-            Parties = new(Repository);
+            Parties = new(Repository, inviteAntiEvil: _ => 0);
             Sessions = Owners.Select(owner => new GameSession(Repository, towns, owner)).ToArray();
             foreach (var session in Sessions)
             {

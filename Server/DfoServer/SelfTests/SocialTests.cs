@@ -20,6 +20,7 @@ internal static class SocialTests
     {
         AccountFriendGroupTests.RunCore();
         int before = Count;
+        RunPresenceOwnership();
         var friend = new SocialRow(new(new("b", 42, "RoleB", 75, 1, 2, "TeamB", 8), DateTimeOffset.UnixEpoch, "memo", 3),
             2, 10, true);
         Bytes(SocialPackets.AccountFriends([friend]),
@@ -179,7 +180,7 @@ internal static class SocialTests
             socialService.Refresh(a.Account);
             That(delivered is { ChangedCharacter: null } && delivered.Characters.Single().Online,
                 "上线后的主动刷新仍是静默在线快照，不沿用上一次事件目标");
-            var parties = new DfoServer.Game.Party.PartyService(repo);
+            var parties = new DfoServer.Game.Party.PartyService(repo, inviteAntiEvil: _ => 0);
             var publicIdentity = sa.PublicCharacter(actor.Character.Id)!;
             ushort noPartyId = parties.PartyId(actor.Character.Id);
             That(noPartyId == ushort.MaxValue, "未组队目标的菜单状态为空队伍哨兵");
@@ -336,6 +337,77 @@ internal static class SocialTests
         }
         finally { TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"PASS {Count - before} 社交协议、持久化、屏蔽、原子回滚及迁移断言");
+    }
+
+    static void RunPresenceOwnership()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "s5a9-social-presence-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            string path = Path.Combine(root, "game.db");
+            var repo = new CharacterRepository(path);
+            var auth = new AuthenticationService(new AuthenticationRepository(path));
+            auth.Create("presenceobserver", "fixture-password"); auth.Create("presencesource", "fixture-password");
+            var owners = new AccountOwners();
+            using var observerOwner = owners.Acquire("presenceobserver", () => { });
+            using var oldOwner = owners.Acquire("presencesource", () => { });
+            var point = new Location(1, 0, 10, 10);
+            var map = new TownMap("presence.map", [new(new(0, 0, 20, 20), [], [])], [], false, []);
+            var towns = new TownCatalog(new() { [(1, 0)] = new(1, 0, 1, [], [], [], point, map, [], []) },
+                point, point, new TownDock(0, [], []), [], new Dictionary<uint, uint[]>());
+            repo.Create(observerOwner, new("PresenceA", towns.Room, towns.InitialReturn));
+            repo.Create(oldOwner, new("PresenceB", towns.Room, towns.InitialReturn));
+            repo.Create(oldOwner, new("PresenceC", towns.Room, towns.InitialReturn));
+            GameSession Session(AccountOwners.Lease owner, ushort slot)
+            {
+                var session = new GameSession(repo, towns, owner);
+                session.Select(slot); session.MarkReady(); return session;
+            }
+            var observer = Session(observerOwner, 0); var old = Session(oldOwner, 0);
+            ushort oldId = old.Selected!.Id;
+            foreach (string name in new[] { "PresenceB", "PresenceC" })
+                That(repo.ChangeCharacterLink(observer.CaptureSocialActor()!, name, false, false, "", DateTimeOffset.UtcNow).Accepted,
+                    "接管回归建立真实单向角色好友");
+            var online = new OnlineSessionDirectory(); online.Register(observerOwner, observer); online.Register(oldOwner, old);
+            var service = new SocialService(repo, online);
+            SocialView? delivered = null; observer.SocialNoticeArrived = view => delivered = view;
+            online.Remove(oldOwner.Account, old);
+            service.PresenceChanged(oldId, oldOwner.Account, departed: true);
+            var offline = delivered!;
+            That(offline.ChangedCharacter == oldId && !offline.Characters.Single(row => row.Link.Person.Id == oldId).Online &&
+                observerOwner.Execute(offline.IsCurrent), "普通退出保留真离线且发送守卫可在接收者账号锁内调用");
+            using var sameOwner = owners.Acquire(oldOwner.Account, () => { });
+            var same = Session(sameOwner, 0); online.Register(sameOwner, same);
+            That(!observerOwner.Execute(offline.IsCurrent), "离线Capture后同角色重新上线使在途旧离线快照失效");
+            service.PresenceChanged(oldId, sameOwner.Account);
+            That(delivered is { ChangedCharacter: var changed } && changed == oldId &&
+                delivered.Characters.Single(row => row.Link.Person.Id == oldId).Online, "新owner真实上线仍有一次角色事件");
+            online.Remove(oldOwner.Account, old);
+            service.PresenceChanged(oldId, oldOwner.Account, departed: true);
+            That(ReferenceEquals(online.Find(sameOwner.Account), same) && delivered is { ChangedCharacter: null } &&
+                observerOwner.Execute(delivered.IsCurrent), "同角接管旧finally只刷新列表，不能重复上线或删除新连接");
+            var beforeTakeover = delivered!;
+            using var differentOwner = owners.Acquire(oldOwner.Account, () => { });
+            var different = Session(differentOwner, 1); online.Register(differentOwner, different);
+            That(!observerOwner.Execute(beforeTakeover.IsCurrent), "源owner接管使既有在途事件快照失效");
+            service.PresenceChanged(oldId, oldOwner.Account, departed: true);
+            That(delivered!.ChangedCharacter == oldId && !delivered.Characters.Single(row => row.Link.Person.Id == oldId).Online &&
+                observerOwner.Execute(delivered.IsCurrent), "异角接管保留旧角色真离线，不能按旧owner失效一律吞掉");
+            different.ReturnToRoster(); service.PresenceChanged(oldId, oldOwner.Account, departed: true);
+            var unready = delivered!;
+            different.Select(0); different.MarkReady();
+            That(!observerOwner.Execute(unready.IsCurrent), "已有源会话从未就绪进入同角色，使在途旧离线失效");
+            service.PresenceChanged(oldId, differentOwner.Account);
+            var beforeSelection = delivered!;
+            different.ReturnToRoster(); different.Select(1); different.MarkReady();
+            That(!observerOwner.Execute(beforeSelection.IsCurrent), "同一源会话换角使在途旧上线失效");
+            service.PresenceChanged(oldId, differentOwner.Account, departed: true);
+            var beforeRecipientSelection = delivered!;
+            observer.ReturnToRoster(); observer.Select(0); observer.MarkReady();
+            That(!observerOwner.Execute(beforeRecipientSelection.IsCurrent), "接收者重选同角色仍不能接收旧epoch事件");
+        }
+        finally { TestFiles.DeleteDirectory(root, true); }
     }
 
     sealed class FixedClock(DateTimeOffset now) : TimeProvider
