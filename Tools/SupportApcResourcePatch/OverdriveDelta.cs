@@ -4,7 +4,7 @@ using PvfLib;
 // 只改当前已注册支援兵，外观、AI、KEY 与无关资源继续使用累计输入。
 internal static class OverdriveDelta
 {
-    internal static void Write(PvfArchive source, string configurationPath, string outputPath, bool graduation = false)
+    internal static void Write(PvfArchive source, string configurationPath, string outputPath, bool graduation = false, bool balanceOnly = false)
     {
         using var configuration = JsonDocument.Parse(File.ReadAllBytes(configurationPath));
         string output = Path.GetFullPath(outputPath);
@@ -48,7 +48,7 @@ internal static class OverdriveDelta
         {
             SupportGraduationDelta.Write(source, output, aicIndex, registry, profileRows, ValidateKit,
                 (wear, job, grow, skills, eligible, priest) => EquipmentBonuses(wear, job, grow,
-                    skills.ToDictionary(id => id, id => ReadSkill(job, id)), eligible, priest));
+                    skills.ToDictionary(id => id, id => ReadSkill(job, id)), eligible, priest), balanceOnly);
             return;
         }
         foreach (var definition in definitions)

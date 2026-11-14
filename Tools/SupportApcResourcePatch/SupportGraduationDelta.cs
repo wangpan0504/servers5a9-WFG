@@ -7,7 +7,7 @@ internal static class SupportGraduationDelta
 {
     internal static void Write(PvfArchive source, string output, Dictionary<int, string> actors,
         IReadOnlyDictionary<int, string> equipment, PvfTokenSection[] profiles, Action<int[], string> validateKit,
-        Func<List<ScriptToken>, string, int, int[], bool, bool, Dictionary<int, int>> bonuses)
+        Func<List<ScriptToken>, string, int, int[], bool, bool, Dictionary<int, int>> bonuses, bool balanceOnly = false)
     {
         var reference = TemplateDelta.Read(source, actors[20905]);
         var combat = Combat(reference);
@@ -33,11 +33,24 @@ internal static class SupportGraduationDelta
                 throw new InvalidDataException("Duplicate support profile");
         var entries = new List<object>();
         var report = new List<object>();
+        double retained = balanceOnly ? 0.74 * 0.8 : 0.74;
+        double favoredMultiplier = 1;
+        if (balanceOnly)
+        {
+            var favoredSkills = Section(TemplateDelta.Read(source, "skill/mage/favoritismamplificationskilllist.etc"), "static data");
+            var favoredRates = Section(TemplateDelta.Read(source, "skill/mage/favoritismamplificationratelist.etc"), "static data");
+            if (!favoredSkills.Select(t => t.Value).SequenceEqual(new[] { 330, 332, 335 }) ||
+                !favoredRates.Select(t => t.Value).SequenceEqual(new[] { 20, 20, 15 }))
+                throw new InvalidDataException("Native favoritism amplification chain changed");
+            // 原生偏爱只增强禁忌诅咒，不增强343一觉；必须分别反算。
+            favoredMultiplier = 1 + favoredRates[2].Value / 100.0;
+        }
         foreach (var (id, identity) in identities.OrderBy(row => row.Key))
         {
             int tier = identity.Tier switch { "entry" => 0, "graduate" => 1, "huge" => 2,
                 _ => throw new InvalidDataException("Unknown support tier") };
             bool father = identity.Base == 20900, female = identity.Base == 74990, enchantress = identity.Base == 19973;
+            if (balanceOnly && (tier != 2 || !father && !female && !enchantress)) continue;
             if (father && tier != 2) continue;
             string job = father ? "priest" : female ? "atpriest" : enchantress ? "mage" : "fighter";
             var tokens = TemplateDelta.Read(source, actors[id]);
@@ -46,7 +59,7 @@ internal static class SupportGraduationDelta
             if (minimum.Count < 6 || minimum[1].Value != jobId || minimum[2].Value != (enchantress ? 5 : 1) || minimum[5].Value != 95)
                 throw new InvalidDataException("Support identity changed");
             var wear = Section(tokens, "equipment");
-            if (!father)
+            if (!father && !balanceOnly)
             {
                 var replacement = new List<ScriptToken>();
                 for (int at = 0; at < wear.Count; at += 3)
@@ -92,12 +105,13 @@ internal static class SupportGraduationDelta
                 if (tier == 2)
                 {
                     var modifiers = Section(tokens, "skill data up");
-                    int expected = father ? 35 : 49;
-                    if (modifiers.Count != expected) throw new InvalidDataException("Unexpected existing dedicated modifiers");
+                    int expected = modifiers.Count;
+                    if (father ? expected is not (35 or 49) : expected != 49)
+                        throw new InvalidDataException("Unexpected existing dedicated modifiers");
                     for (int i = 0; i < expected / 7; i++)
                     {
                         int oldSkill = i < 5 ? main : awakening;
-                        int oldColumn = i < 5 ? i + (father || female ? 1 : 2) : i - 5 + (female ? 4 : 3);
+                        int oldColumn = i < 5 ? i + (father || female ? 1 : 2) : i - 5 + (father ? 0 : female ? 4 : 3);
                         if (modifiers[7 * i].Text != "[" + (female ? "at priest" : job) + "]" ||
                             modifiers[7 * i + 1].Value != oldSkill || modifiers[7 * i + 2].Text != "[dungeon]" ||
                             modifiers[7 * i + 3].Text != "[level]" || modifiers[7 * i + 4].Value != oldColumn ||
@@ -115,7 +129,7 @@ internal static class SupportGraduationDelta
                         if (mainTable.Constants[(father ? 2 : 1) + i].Value != mainDivisor)
                             throw new InvalidDataException("Main buff scaling denominator changed");
                         Add(main, column, mainTable.Values[1 + (mainLevel - 1) * 8 + column].Value,
-                            (strength ? 14750 : 2350) * 0.74, mainDivisor);
+                            (strength ? 14750 : 2350) * retained * (balanceOnly && enchantress ? 1.05 / favoredMultiplier : 1), mainDivisor);
                     }
                     for (int i = 0; i < 2; i++)
                     {
@@ -123,7 +137,7 @@ internal static class SupportGraduationDelta
                         if (wakeTable.Constants[(father ? 6 : female ? 3 : 1) + i].Value != 750)
                             throw new InvalidDataException("Awakening scaling denominator changed");
                         Add(awakening, column, wakeTable.Values[1 + 39 * (father ? 14 : female ? 12 : 10) + column].Value,
-                            1668 * (1.0 + 8650 / 750.0) * 0.74, 750);
+                            1668 * (1.0 + 8650 / 750.0) * retained * (balanceOnly && enchantress ? 1.05 : 1), 750);
                     }
                     // 旧百分比是同一组列的归一参数，整体替换，禁止在旧值上追加叠乘。
                     Set(tokens, "skill data up", revised);
@@ -148,7 +162,10 @@ internal static class SupportGraduationDelta
         var options = new JsonSerializerOptions { WriteIndented = true };
         File.WriteAllText(Path.Combine(output, "delta.json"), JsonSerializer.Serialize(new { schema = "support-profile-delta-v1", entries }, options));
         File.WriteAllText(Path.Combine(output, "graduation-report.json"), JsonSerializer.Serialize(new { templates = report,
-            policy = "Native dedicated skill-column inverse formula; huge tier only; preserve song and favoritism; combat triples copied from Wang20905, avatars unchanged",
+            retained, favoredMultiplier,
+            policy = balanceOnly
+                ? "Huge dedicated templates only; retain 0.74*0.8; enchantress main after native favoritism and awakening independently at 105 percent; equipment, other tiers and shared skills unchanged"
+                : "Native dedicated skill-column inverse formula; huge tier only; preserve song and favoritism; combat triples copied from Wang20905, avatars unchanged",
             game_QA = "pending" }, options));
         Console.WriteLine($"SUPPORT_GRADUATION resources={entries.Count} read_only_source=true");
 

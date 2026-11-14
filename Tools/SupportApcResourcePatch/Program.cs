@@ -3,6 +3,12 @@ using System.Text.Json;
 using PvfLib;
 
 Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+if (args is ["prepare-support-graduation-balance", var balancePvf, var balanceConfig, var balanceOutput])
+{
+    using var source = PvfArchive.Open(balancePvf);
+    OverdriveDelta.Write(source, balanceConfig, balanceOutput, graduation: true, balanceOnly: true);
+    return;
+}
 if (args is ["prepare-support-graduation", var graduationPvf, var graduationConfig, var graduationOutput])
 {
     using var source = PvfArchive.Open(graduationPvf);
