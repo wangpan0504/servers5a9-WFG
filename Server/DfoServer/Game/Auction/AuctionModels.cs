@@ -34,6 +34,8 @@ internal enum AuctionSortOrder : byte
 /// </summary>
 internal sealed record AuctionSearchRequest(int Offset, int? ItemTemplateId, int CategoryId)
 {
+    /// <summary>CMD 186 的完整候选模板；default 沿用单模板入口，空数组表示没有命中候选。</summary>
+    public ImmutableArray<int> ItemTemplateIds { get; init; }
     public AuctionSortOrder SortOrder { get; init; }
     public byte? Rarity { get; init; }
     public byte MinLevel { get; init; }
@@ -53,10 +55,10 @@ internal sealed record AuctionSearchRequest(int Offset, int? ItemTemplateId, int
 /// 分类过滤必须**同时**作用在计数与本页数据上：客户端按「匹配总数」算总页数并直接显示「搜索出 N 个」，
 /// 只过滤本页会让总数偏大、页数虚高。因此内存过滤在分页**之前**完成，匹配总数取过滤后的条数。
 ///
-/// 排除自己按卖家角色 id：机器人挂牌的 seller 为 NULL，不属于任何玩家，因此不会被排除。
+/// 可选排除按卖家角色id；正式搜索保留自己的挂牌，底层排除入口仍保留，NULL机器人不被排除。
 /// </summary>
 internal readonly record struct AuctionSearchFilter(int? ItemTemplateId, long? ExcludeSellerCharacterId,
-    ImmutableArray<byte> Kinds = default, bool? Gold = null);
+    ImmutableArray<byte> Kinds = default, bool? Gold = null, ImmutableArray<int> ItemTemplateIds = default);
 
 /// <summary>分类 id 的解析结果。不过滤不等于失败，日志必须能区分下面三种情形。</summary>
 internal enum AuctionCategoryStatus
@@ -1049,17 +1051,18 @@ internal sealed class AuctionCategoryResolver(ItemCatalog items)
                 ? Resolve(request.CategoryId)
                 : new AuctionCategoryResolution(request.CategoryId, AuctionCategoryStatus.Gold, 0, "金币寄售", new(0, 0),
                     "mode=1 金币寄售窗口：只检索金币券挂牌，不套用普通分类维度");
-            int? template = request.ItemTemplateId;
+            int? template = request.ItemTemplateIds.IsDefault ? request.ItemTemplateId : null;
             if (template is int itemId && !AuctionGoldTickets.IsTicket(itemId))
                 template = AuctionGoldTickets.EmptyTemplateId;
-            return new(new(template, excludeSellerCharacterId, Gold: true), category, null, 0, 0);
+            return new(new(template, excludeSellerCharacterId, Gold: true, ItemTemplateIds: request.ItemTemplateIds), category, null, 0, 0);
         }
         var normal = Resolve(request.CategoryId);
         if (normal.Status != AuctionCategoryStatus.Mapped)
-            return new(new(request.ItemTemplateId, excludeSellerCharacterId, Gold: false), normal, null, 0, 0);
+            return new(new(request.ItemTemplateId, excludeSellerCharacterId, Gold: false, ItemTemplateIds: request.ItemTemplateIds), normal, null, 0, 0);
         var dimensions = normal.Dimensions;
         var kinds = AuctionCategoryFilter.Kinds(dimensions);
-        var filter = new AuctionSearchFilter(request.ItemTemplateId, excludeSellerCharacterId, kinds, Gold: false);
+        var filter = new AuctionSearchFilter(request.ItemTemplateId, excludeSellerCharacterId, kinds, Gold: false,
+            ItemTemplateIds: request.ItemTemplateIds);
         bool inMemory = dimensions.Slots != 0 || dimensions.Groups != 0;
         return new(filter, normal, inMemory ? dimensions : null, kinds.Length, dimensions.Groups);
     }

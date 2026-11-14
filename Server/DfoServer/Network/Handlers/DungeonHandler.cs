@@ -44,6 +44,20 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
     DfoServer.Game.Raids.AntonRaidStart? raidStart = null,
     Func<Exception,bool>? altarProjectionBusy = null, SecretShopService? secretShop = null) : IGameCommandModule
 {
+    // 进入次数耗尽必须走客户端已核对的 ACK16 246 提示分支。
+    // EntryCost 统一返回 exhausted 原因，日/周及账号/角色账本都不能退化为静默 ACK。
+    internal static DungeonSelectionError SelectionErrorForReason(string? entryReason, bool party = false) =>
+        entryReason is "dungeon-incount-exhausted" or "dungeon-account-incount-exhausted"
+            ? DungeonSelectionError.DungeonLimitOrStorageReward
+            : entryReason == "fatigue-exhausted" || entryReason?.StartsWith("start-fatigue-insufficient:", StringComparison.Ordinal) == true
+                ? DungeonSelectionError.MemberFatigueOrClearCondition
+                : entryReason?.StartsWith("entry-item-required:", StringComparison.Ordinal) == true ||
+                  entryReason?.StartsWith("dungeon-required-item:", StringComparison.Ordinal) == true ||
+                  entryReason?.StartsWith("channel-town-required-item:", StringComparison.Ordinal) == true ||
+                  entryReason == "ancient-required-items-insufficient"
+                    ? party ? DungeonSelectionError.GroupMaterials : DungeonSelectionError.RequiredMaterials
+                    : DungeonSelectionError.Silent;
+
     public void Register(GameCommandRegistry commands)
     {
         commands.RegisterPrivate(FiendwarKeyLeaseRequests.Opcode, FiendwarKeysAsync, nameof(DungeonHandler),
@@ -492,14 +506,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
                 hellReason is { } why && why.StartsWith("hell-party-", StringComparison.Ordinal)
                 ? DungeonPackets.HellPartyRejected(why.StartsWith("hell-party-quest-required:", StringComparison.Ordinal) ? DungeonSelectionError.Silent :
                     why == "hell-party-item-required" ? DungeonSelectionError.GroupMaterials : DungeonSelectionError.NoAvailableDifficulty)
-                : entryReason == "fatigue-exhausted" || entryReason?.StartsWith("start-fatigue-insufficient:", StringComparison.Ordinal) == true
-                ? DungeonPackets.SelectionRejected(DungeonSelectionError.MemberFatigueOrClearCondition, memberSlot ?? 0)
-                : entryReason?.StartsWith("entry-item-required:", StringComparison.Ordinal) == true ||
-                  entryReason?.StartsWith("dungeon-required-item:", StringComparison.Ordinal) == true ||
-                  entryReason?.StartsWith("channel-town-required-item:", StringComparison.Ordinal) == true ||
-                  entryReason == "ancient-required-items-insufficient"
-                ? DungeonPackets.SelectionRejected(party ? DungeonSelectionError.GroupMaterials : DungeonSelectionError.RequiredMaterials, memberSlot ?? 0)
-                : DungeonPackets.SelectionRejected();
+                : DungeonPackets.SelectionRejected(SelectionErrorForReason(entryReason, party), memberSlot ?? 0);
             await context.Reply(CmdPacketType.SELECT_DUNGEON, rejection, hell ? "formal_hell_party_rejected" : "formal_dungeon_rejected", CanSend);
             if (!party && selection.DungeonIndex is 5359 or 5363 &&
                 entryReason?.StartsWith("strongway2019-", StringComparison.Ordinal) == true)

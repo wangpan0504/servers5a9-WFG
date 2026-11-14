@@ -150,6 +150,7 @@ internal static class AmplifyUpgradeTests
         var request = new EnhancementRequest(EnhancementMode.Amplify, MainSlot(9), 31440, 121, -1, ReadOnlyMemory<byte>.Empty, -1, -1);
         var rng = new FixedRandom(99999);
         var service = new InventoryAmplifyUpgradeService(r.Items, r.AmplifyUpgrades, r.Enhancements, r.Disjoint, r.GoldLimits, r.EpicPieces, rng);
+        NpcMaximumLevel(resources, role, request, service, rng);
         var luckySource = new InventoryItem(3, MainSlot(65), InventoryRewardGrantService.Create(r.Items.Get(10007406), 2) with { ExpireTime = 0 });
         var reinforcement = target with { Core = core with { Attr = 0xEE, AmplifyType = 0, AmplifyValue = 0 } };
         var luckyRole = role with { Inventory = new([reinforcement, luckySource], Gold: 0) };
@@ -314,6 +315,70 @@ internal static class AmplifyUpgradeTests
         PortableReinforcement(resources, role, request);
         NpcReinforcement(resources, role, request);
         Console.WriteLine($"PASS {Count - before} 当前PVF普通增幅、便携、幸运、金币及完整销毁规划断言");
+    }
+
+    static void NpcMaximumLevel(TcpTestResources resources, Character seed, EnhancementRequest request,
+        InventoryAmplifyUpgradeService upgrading, FixedRandom random)
+    {
+        var r = resources.ItemResources;
+        var service = new InventoryEnhancementService(r.Items, r.Enhancements, r.MedalUpgrades, random, amplification: upgrading);
+        var target = seed.Inventory.Find(request.Target)!;
+        var source = seed.Inventory.Find(MainSlot(request.MaterialSlot))!;
+        var maximum = target with { Core = target.Core with { Attr = 0xFF } };
+        var capped = seed with { Inventory = seed.Inventory with { Items = [maximum, source], Gold = 0 } };
+        int calls = random.Calls;
+        foreach (var position in new[] { request.Target, new InventorySlot(InventoryListType.Equipment, 12) })
+        {
+            var current = capped with { Inventory = capped.Inventory with { Items = [maximum with { Position = position }, source] } };
+            var rejected = service.Plan(current, request with { Target = position }, out var receipt);
+            That(rejected is { Accepted: false, Error: 13, Plan: null } && receipt is null && random.Calls == calls &&
+                EnhancementPackets.Ack(rejected, receipt).SequenceEqual(new byte[] { 0, 13, 0 }),
+                "普通NPC增幅+31在Main与穿戴栏均回原生上限错误13，不读取下一档费用、不规划或随机");
+        }
+        foreach (var invalid in new[]
+        {
+            maximum with { Core = maximum.Core with { EquipmentLockId = 1 } },
+            maximum with { Core = maximum.Core with { IsRental = true } },
+            maximum with { Core = maximum.Core with { ExpireTime = 1 } },
+            maximum with { Core = maximum.Core with { AmplifyType = 0x83 } },
+            maximum with { Core = maximum.Core with { Durability = 1 } }
+        })
+            Check(capped with { Inventory = capped.Inventory with { Items = [invalid, source] } }, request, 23,
+                "+31无效目标仍返回原资格错误23，不被上限提示覆盖");
+        foreach (var invalid in new[] { request with { TargetItemId = request.TargetItemId + 1 },
+            request with { AuxiliarySlot0 = 1 }, request with { Mode = EnhancementMode.Reinforce },
+            request with { Mode = EnhancementMode.LuckyAmplify }, request with { MaterialSlot = 122 } })
+            Check(capped, invalid, 23, "+31错误请求、模式与缺失源保持原拒绝，不抽随机");
+        foreach (var invalid in new[] { source with { Core = source.Core with { EquipmentLockId = 1 } },
+            source with { Core = source.Core with { ExpireTime = 1 } } })
+            Check(capped with { Inventory = capped.Inventory with { Items = [maximum, invalid] } }, request, 23,
+                "+31源安全锁与期限仍优先拒绝23");
+        foreach (int id in new[] { 10005313, 10007839, 10007407 })
+        {
+            var consumable = source with { Position = MainSlot(65), Core = InventoryRewardGrantService.Create(r.Items.Get(id), 2) with { ExpireTime = 0 } };
+            Check(capped with { Inventory = capped.Inventory with { Items = [maximum, consumable] } },
+                request with { MaterialSlot = 65, Mode = id == 10007407 ? EnhancementMode.LuckyAmplify : EnhancementMode.Amplify }, 23,
+                "+31便携、成功之兆与幸运券保留各自拒绝23，不扩大NPC提示到其它来源");
+        }
+        var protection = new InventoryItem(3, MainSlot(122), InventoryRewardGrantService.Create(r.Items.Get(490705433), 1) with { ExpireTime = 0 });
+        var previous = seed with { Inventory = seed.Inventory with { Items =
+            [target with { Core = target.Core with { Attr = 0xFE } }, source, protection] } };
+        var planned = service.Plan(previous, request, out var previousReceipt);
+        That(planned.Accepted && previousReceipt is { OldLevel: 30 } && random.Calls == calls + 1,
+            "普通NPC+30仍按原资源概率和保护规则规划，不提前当作+31上限拒绝");
+        var coupon = source with { Position = MainSlot(65), Core = InventoryRewardGrantService.Create(r.Items.Get(10007133), 1) with { ExpireTime = 0 } };
+        planned = service.Plan(capped with { Inventory = capped.Inventory with { Items = [maximum, coupon] } },
+            request with { MaterialSlot = 65 }, out var couponReceipt);
+        That(planned.Accepted && couponReceipt is { OldLevel: 31, NewLevel: 10, Succeeded: true } &&
+            planned.Plan!.After.Find(coupon.Position) is null &&
+            planned.Plan.After.Find(maximum.Position) == maximum with { Core = maximum.Core with { Attr = 0xEA } },
+            "固定增幅券仍可对+31目标按原覆盖合同消费，不经过普通NPC上限拒绝");
+
+        void Check(Character current, EnhancementRequest use, ushort error, string message)
+        {
+            var rejected = service.Plan(current, use, out var receipt);
+            That(rejected is { Accepted: false, Plan: null } && rejected.Error == error && receipt is null && random.Calls == calls, message);
+        }
     }
 
     static void PortableReinforcement(TcpTestResources resources, Character seed, EnhancementRequest request)

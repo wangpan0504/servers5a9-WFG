@@ -21,7 +21,7 @@ internal static class AmplifyUpgradeTcpTests
         var exchange = r.Items.Get(10007110);
         var range = ItemSlotBoundService.Range(exchange.Kind, 0);
         short exchangeSlot = checked((short)Enumerable.Range(range.Start, range.End - range.Start + 1)
-            .First(slot => slot is not (19 or 20 or 21 or 65 or 66 or 67 or 68 or 69 or 70 or 121)));
+            .First(slot => slot is not (19 or 20 or 21 or 22 or 65 or 66 or 67 or 68 or 69 or 70 or 121)));
         var exchangeCore = InventoryRewardGrantService.Create(exchange, 7) with { ExpireTime = 0 };
         await using var fixture = new TcpTestFixture(options, Path.Combine(root, "amplification-upgrade"), resources: resources);
         var repository = new CharacterRepository(fixture.Database);
@@ -38,6 +38,7 @@ internal static class AmplifyUpgradeTcpTests
                     new(0, Bag(68), InventoryRewardGrantService.Create(r.Items.Get(10007839), 2) with { ExpireTime = 0 }),
                     new(0, Bag(20), core with { AmplifyType=0, AmplifyValue=0 }),
                     new(0, Bag(21), core with { AmplifyType=0, AmplifyValue=0 }),
+                    new(0, Bag(22), core with { Attr = 0xFF }),
                     new(0, Bag(69), InventoryRewardGrantService.Create(r.Items.Get(10005312), 2) with { ExpireTime=0 }),
                     new(0, Bag(70), InventoryRewardGrantService.Create(r.Items.Get(10007838), 1) with { ExpireTime=0 }),
                     new(0, Bag(exchangeSlot), exchangeCore), new(0, new(InventoryListType.Equipment, 13),
@@ -53,6 +54,14 @@ internal static class AmplifyUpgradeTcpTests
         using (var peer = Open(fixture))
         {
             peer.Select();
+            peer.Barrier();
+            string cappedBefore = Snapshot() + fixture.Snapshot("SELECT * FROM account_currency_balances ORDER BY currency_kind");
+            peer.Send(80, EnhancementTests.Request(1, 0, 22, 31440, 121, []));
+            peer.Expect(1, 80, [0, 13, 0]);
+            peer.Barrier();
+            That(Snapshot() + fixture.Snapshot("SELECT * FROM account_currency_balances ORDER BY currency_kind") == cappedBefore,
+                "真实NPC+31返回上限错误13，完整装备、材料、钱包、金币、revision及审计均不变");
+            // 同一连接接续原有合法NPC增幅，拒绝不能中断后续请求或消耗唯一材料。
             peer.Send(80, EnhancementTests.Request(1, 0, 19, 31440, 121, new byte[17]));
             var first = peer.Expect(1, 80).Body;
             Check(first, 121, 0, 0, 1, 0, 19, 0);

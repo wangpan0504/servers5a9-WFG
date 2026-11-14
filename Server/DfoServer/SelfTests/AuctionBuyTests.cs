@@ -280,6 +280,10 @@ internal static class AuctionBuyTests
         That(goldMail.RecipientId == f.Seller.Id && goldMail.Gold == 22_800 && goldMail.Attachments == 0 &&
             goldMail.SenderName == AuctionService.SystemSender,
             "★ 卖方所得托管邮件：收件人是卖方、金币 22800（成交价 × 95%）、无附件、发件人是拍卖行");
+        That(itemMail.Text == "您在拍卖行以24000金币购买了残缺的牛皮背心（1个），请领取附件。" &&
+            goldMail.Text == "您在拍卖行上架的残缺的牛皮背心（1个）已售出。成交价24000金币，扣除5%手续费1200金币，实收22800金币，请领取。" &&
+            !goldMail.Text.Contains("保证金", StringComparison.Ordinal),
+            "持久化买卖正文区分购买与出售，使用真实模板名、数量、成交总价及实际税后托管金额，不虚报返保证金");
         That(mails.All(mail => mail.State == 1 && mail.Expires is null),
             "两封托管都是未读、无期限（托管 ≠ 入账：不受邮箱容量与期限限制）");
         That(f.QueryLong("SELECT count(*) FROM mailbox_audit_log") == 2,
@@ -456,9 +460,10 @@ internal static class AuctionBuyTests
             var projection = new InventoryProjection(stats, new TownProjection(towns, stats, null, pieces), pieces);
             string logDirectory = Path.Combine(root, "Logs");
             using var log = new ServerLog(logDirectory);
+            var online = new OnlineSessionDirectory();
             var handler = new AuctionHandler(catalog, service, projection,
                 static () => AuctionProbeSettings.Disabled, static () => AuctionProbeSettings.Disabled,
-                static _ => AuctionProbeSettings.Disabled, log);
+                static _ => AuctionProbeSettings.Disabled, log, online);
             var commands = new GameCommandRegistry();
             handler.Register(commands);
             commands.Seal();
@@ -466,9 +471,21 @@ internal static class AuctionBuyTests
             var session = new GameSession(repository, towns, buyerOwner);
             session.Select(buyer.Slot);
             session.MarkReady();
+            var sellerSession = new GameSession(repository, towns, sellerOwner);
+            sellerSession.Select(seller.Slot);
+            sellerSession.MarkReady();
+            online.Register(sellerOwner, sellerSession);
+            int buyerAlarms = 0, sellerAlarms = 0;
+            session.MailboxArrived = _ => buyerAlarms++;
+            sellerSession.MailboxArrived = _ =>
+            {
+                That(Query(path, "SELECT count(*) FROM mailbox_messages") == 2,
+                    "卖方提醒发生在两封托管邮件已经提交后");
+                sellerAlarms++;
+            };
             var planned = session.Selected!;
             using var stop = new CancellationTokenSource();
-            using var stream = new MemoryStream();
+            using var stream = new AuctionOutput();
             var sent = new List<(ushort Opcode, byte[] Body, string Action)>();
             await using var sender = new GameConnectionSender(buyerOwner, stream, stop, 0,
                 (_, opcode, _, body, action) => sent.Add((opcode, body.ToArray(), action)));
@@ -485,6 +502,8 @@ internal static class AuctionBuyTests
                 "★ 提交后的快照安装回会话：在线金币与 revision 都前进了（下一笔操作不会被判成陈旧）");
             That(repository.LoadCharacter(buyerOwner, buyer.Slot).Inventory.Gold == planned.Inventory.Gold - 24_000,
                 "独立读库与会话内的金币一致");
+            That(buyerAlarms == 1 && sellerAlarms == 1,
+                "185 成交立即分别通知在线买卖双方，卖方不需要回城或打开邮箱");
 
             // ② 再点一次同一条挂牌：规划期就看出「已不在售」⇒ 静默 0x7e，且零副作用。
             sent.Clear();
@@ -514,6 +533,7 @@ internal static class AuctionBuyTests
             That(sent.Count == 1 && sent[0].Body.SequenceEqual<byte>([0x00, 0xd2, 0]), "★ 请求体不足 30 字节 ⇒ 0xd2（读不到 [26..29] 就拒绝）");
             That(Dump(path) == afterFirst,
                 "★★ 买自己的挂牌 / 金币不足 / 金额不符 / 短包这几次拒绝全部零副作用（整库 dump 仍与成交后一致）");
+            That(buyerAlarms == 1 && sellerAlarms == 1, "重复购买和自买等拒绝不发布邮件到达提醒");
 
             // ⑥ 陈旧计划（换角/接管）：会话在进锁后复核「计划所依据的角色仍是当前在线角色」。
             var stalePlan = service.PlanBuy(session.Selected!, service.FindListing(later),
@@ -548,6 +568,25 @@ internal static class AuctionBuyTests
                 "★ 成交日志记下口径读数（UnitEqualsTotal）、成交价、卖方实收，并写明不发金币刷新");
             That(bought[0].GetProperty("Custody").GetArrayLength() == 2,
                 "★ 成交日志同时记下两封托管行各自的结果（含是否被跳过及原因）");
+
+            // 已提交资产独立于买方应答：买方在邮件回调中换角，ACK再失败，在线卖方仍收到一次。
+            session.MailboxArrived = _ => { buyerAlarms++; session.ReturnToRoster(); };
+            sellerSession.MailboxArrived = _ =>
+            {
+                That(Query(path, "SELECT count(*) FROM mailbox_messages") == 4,
+                    "买方失效时卖方回调仍在完整提交之后");
+                sellerAlarms++;
+            };
+            stream.FailWrites = true;
+            bool ackFailed = false;
+            try
+            {
+                await commands.DispatchAsync(context, new Packet(1, 185, Body(later, 30_000, SampleTemplate, now + 86_400)));
+            }
+            catch (IOException) { ackFailed = true; }
+            That(ackFailed && session.Selected is null && buyerAlarms == 2 && sellerAlarms == 2 &&
+                Query(path, $"SELECT state FROM auction_listings WHERE listing_id={later}") == AuctionListingState.Sold,
+                "买方提交后失效且ACK失败，卖方仍收到一次提示，成交不回滚或重投");
         }
         finally
         {
@@ -575,6 +614,9 @@ internal static class AuctionBuyTests
         That(firstPlan.EffectivePurchaseCount == 2 && firstPlan.RemainingCount == 3 &&
             firstPlan.TotalPrice == 2_000 && firstPlan.SellerProceeds == 1_900,
             "拆分购买 2/5：总价 2000、卖方实收 1900、挂牌余量 3");
+        That(firstPlan.Custody.Single(mail => mail.Gold == 0).Text.Contains("2000金币购买了粗布腰带随机礼盒（2个）", StringComparison.Ordinal) &&
+            firstPlan.Custody.Single(mail => mail.Gold > 0).Text.Contains("手续费100金币，实收1900金币", StringComparison.Ordinal),
+            "拆分购买正文只描述本次2件和2000成交额，手续费及实收与托管一致，不使用挂牌原5件");
         var firstCommit = f.Service.Buy(f.BuyerOwner, f.Buyer, firstPlan);
         That(firstCommit.Error == AuctionBuyError.None && firstCommit.Character is not null, "第一笔拆分购买提交成功");
         var afterFirstListing = f.Service.FindListing(listingId)!;
@@ -592,15 +634,22 @@ internal static class AuctionBuyTests
         var stats = new CharacterStatComputer(new CharacterCatalog(new Dictionary<byte, CharacterProfile>()));
         var projection = new InventoryProjection(stats, new TownProjection(towns, stats, null, f.Pieces), f.Pieces);
         using var log = new ServerLog(Path.Combine(Path.GetTempPath(), "S5A9-apiece-log-" + Guid.NewGuid().ToString("N")));
+        var online = new OnlineSessionDirectory();
         var handler = new AuctionHandler(f.Catalog, f.Service, projection,
             static () => AuctionProbeSettings.Disabled, static () => AuctionProbeSettings.Disabled,
-            static _ => AuctionProbeSettings.Disabled, log);
+            static _ => AuctionProbeSettings.Disabled, log, online);
         var commands = new GameCommandRegistry();
         handler.Register(commands);
         commands.Seal();
         var session = new GameSession(f.Repository, towns, f.BuyerOwner);
         session.Select(f.Buyer.Slot);
         session.MarkReady();
+        var sellerSession = new GameSession(f.Repository, towns, f.SellerOwner);
+        sellerSession.Select(f.Seller.Slot);
+        sellerSession.MarkReady();
+        online.Register(f.SellerOwner, sellerSession);
+        int sellerAlarms = 0;
+        sellerSession.MailboxArrived = _ => sellerAlarms++;
         using var stop = new CancellationTokenSource();
         using var stream = new MemoryStream();
         var sent = new List<(ushort Opcode, byte[] Body)>();
@@ -609,7 +658,7 @@ internal static class AuctionBuyTests
         var context = new GameConnectionContext(new(1, IPAddress.Loopback, stream, stop), f.BuyerOwner, session, sender);
         await commands.DispatchAsync(context, new Packet(1, 334, ApieceBody(listingId, 3_000, 3, StackTemplate, f.Now + 86_400)));
         That(sent.Any(pkt => pkt.Opcode == 334 && pkt.Body.SequenceEqual<byte>([0x01])) &&
-            f.ListingState(listingId) == (int)AuctionListingState.Sold && f.Mails().Length == 4,
+            f.ListingState(listingId) == (int)AuctionListingState.Sold && f.Mails().Length == 4 && sellerAlarms == 1,
             "★ 会话派发 CMD 334 买空剩余 3 个：回 [0x01]，挂牌变为 state=1，前后两笔共生成 4 封托管邮件（无唯一键冲突）");
     }
 
@@ -622,6 +671,13 @@ internal static class AuctionBuyTests
         BitConverter.GetBytes((int)expiresAtUnix).CopyTo(body, AuctionBuyApieceRequest.ExpiresEchoOffset);
         BitConverter.GetBytes(templateId).CopyTo(body, AuctionBuyApieceRequest.ItemTemplateIdOffset);
         return body;
+    }
+
+    sealed class AuctionOutput : MemoryStream
+    {
+        public bool FailWrites { get; set; }
+        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default) =>
+            FailWrites ? ValueTask.FromException(new IOException("fixture auction ACK failure")) : base.WriteAsync(buffer, cancellationToken);
     }
 
     /// <summary>购买请求体（前导 0 + 一口价 + 挂牌 id + 到期回显 + 13B 保留 + 模板 id）。</summary>
@@ -719,6 +775,7 @@ internal static class AuctionBuyTests
         long? Expires, int State, bool System, int Attachments)
     {
         public uint AttachmentId { get; init; }
+        public required string Text { get; init; }
     }
 
     /// <summary>托管道具行的只读投影。</summary>
@@ -801,7 +858,7 @@ internal static class AuctionBuyTests
             command.CommandText = """
                 SELECT m.mail_id,m.delivery_key,m.recipient_id,m.sender_name,m.gold,m.expires_at,m.state,m.system_mail,
                        (SELECT count(*) FROM mailbox_attachments a WHERE a.mail_id=m.mail_id),
-                       (SELECT coalesce(max(a.attachment_id),0) FROM mailbox_attachments a WHERE a.mail_id=m.mail_id)
+                       (SELECT coalesce(max(a.attachment_id),0) FROM mailbox_attachments a WHERE a.mail_id=m.mail_id), m.body
                 FROM mailbox_messages m ORDER BY m.mail_id;
                 """;
             var rows = new List<MailRow>();
@@ -809,7 +866,7 @@ internal static class AuctionBuyTests
             while (reader.Read())
                 rows.Add(new(checked((uint)reader.GetInt64(0)), reader.GetString(1), reader.GetInt64(2), reader.GetString(3),
                     reader.GetInt64(4), reader.IsDBNull(5) ? null : reader.GetInt64(5), reader.GetInt32(6),
-                    reader.GetInt32(7) != 0, reader.GetInt32(8)) { AttachmentId = checked((uint)reader.GetInt64(9)) });
+                    reader.GetInt32(7) != 0, reader.GetInt32(8)) { AttachmentId = checked((uint)reader.GetInt64(9)), Text = reader.GetString(10) });
             return [.. rows];
         }
 

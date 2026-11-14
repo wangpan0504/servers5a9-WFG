@@ -74,13 +74,14 @@ internal sealed class ExpertJobEnchanting(ExpertJobScriptCatalog scripts, ItemCa
             var paidInventory = inventory;
             int chance = rules.EnchantSuccessPercent ?? scripts.CardSuccessPercent(scripts.Level(1, character.ExpertJobExperience), recipe.Rarity);
             bool success = next(100) < chance;
-            int experience = character.ExpertJobExperience;
+            int experience = scripts.ClampExperience(1, character.ExpertJobExperience);
             if (success)
             {
                 var changed = target with { Core = target.Core with { EnchantCardId = source.Core.ItemId, EnchantUpgrade = level } };
                 inventory = inventory with { Items = inventory.Items.Replace(target, changed) };
                 var gain = scripts.MonsterCardExp(1, scripts.Level(1, character.ExpertJobExperience));
-                experience = checked(experience + gain.Min + (gain.Max > gain.Min ? next(gain.Max - gain.Min + 1) : 0));
+                experience = scripts.AddExperience(1, experience,
+                    (long)gain.Min + (gain.Max > gain.Min ? next(gain.Max - gain.Min + 1) : 0));
             }
             inventory.Validate();
             var plan = new InventoryPlan(character.Inventory, inventory, "expert_job_card_enchant", new(character, deadline, time))

@@ -13,6 +13,7 @@ internal sealed class SettingsHandler(ClientSettingsService settings, ServerLog 
 {
     public void Register(GameCommandRegistry commands)
     {
+        commands.Register(CmdPacketType.INFORM_NOTICE_2ND, SeenNoticeAsync, nameof(SettingsHandler));
         commands.Register(CmdPacketType.SAVE_GAME_OPTION_1, SaveGameAsync, nameof(SettingsHandler));
         commands.Register(CmdPacketType.SAVE_CHARACTER_OPTION, SaveCharacterAsync, nameof(SettingsHandler));
         commands.Register(CmdPacketType.SAVE_GAME_OPTION_2, SaveHotkeysAsync, nameof(SettingsHandler));
@@ -22,6 +23,13 @@ internal sealed class SettingsHandler(ClientSettingsService settings, ServerLog 
         commands.Register(CmdPacketType.CHANGE_EMOTION, ChangeEmotionAsync, nameof(SettingsHandler));
         commands.Register(CmdPacketType.SAVE_QUEST_NOTIFY, SaveQuestNotifyAsync, nameof(SettingsHandler));
         commands.Register(CmdPacketType.UPDATE_NPC_BOOKMARK_INFO, BookmarkAsync, nameof(SettingsHandler));
+    }
+
+    Task<CommandResult> SeenNoticeAsync(GameConnectionContext context, Packet packet)
+    {
+        context.Session.SaveSeenNotice(settings, SettingsRequests.SeenNotice(packet.Body));
+        // 02642740在发送前已更新本地集合；503没有ACK消费者，不再伪造确认包。
+        return Task.FromResult(CommandResult.Handled);
     }
 
     async Task<CommandResult> BookmarkAsync(GameConnectionContext context, Packet packet)

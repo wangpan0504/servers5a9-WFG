@@ -771,7 +771,7 @@ internal sealed partial class GameSession
             entry.IsTutorial ? tutorialReturn : entry.IsOrdinary ? towns.SelectionReturn(expected.Position, expected.CompletedQuests.ToHashSet()) : null;
         if (entry.IsOrdinary && ordinaryReturn is null) return RejectFormal("ordinary-return-location-missing");
         QuestDropResources? questDrops = null;
-        if (!entry.IsTagSystem && !entry.IsTutorial && !entry.IsClassExperience && !entry.IsPractice && questCatalog is not null && items is not null && pieces is not null)
+        if (!entry.IsQuestReplay && !entry.IsTagSystem && !entry.IsTutorial && !entry.IsClassExperience && !entry.IsPractice && questCatalog is not null && items is not null && pieces is not null)
         {
             try { questDrops = QuestDropResources.Create(expected,entry,questCatalog,items,pieces,contracts?.Growth); }
             catch (Exception error) when (error is InvalidDataException or NotSupportedException or FileNotFoundException) { return RejectFormal("quest-drop-resources-unsupported"); }

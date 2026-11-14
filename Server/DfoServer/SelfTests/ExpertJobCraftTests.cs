@@ -57,6 +57,9 @@ internal static class ExpertJobCraftTests
                 !Plan(current, 0, out _) && !Plan(current, 4, out _) && !Plan(current, 101, out _),
                 "未学习、零次数、材料不足与越界批量均不规划");
             var material = current.Inventory.Items.Single(item => item.Core.ItemId == 2610030);
+            That(Plan(current with { ExpertJobExperience = int.MaxValue }, 3, out var capped) &&
+                capped.Experience == scripts.ClampExperience(1, int.MaxValue) && capped.SuccessCount == 3 && capped.Products.Length > 0,
+                "已溢出角色批量制作仍扣料出成品，熟练度收敛到实际上限");
             foreach (var core in new[] { material.Core with { EquipmentLockId = 1 }, material.Core with { ExpireTime = 1 } })
                 That(!Plan(current with { Inventory = current.Inventory with { Items = current.Inventory.Items.Replace(material, material with { Core = core }) } }, 1, out _),
                     "锁定和到期的魔力结晶不参与合成");
@@ -121,6 +124,9 @@ internal static class ExpertJobCraftTests
                 beadPlan.Inventory.After.Items.All(item => item.Core.ItemId is not (3619 or 3227 or 3166 or 2610039)) &&
                 beadPlan.Inventory.After.Items.Single(item => item.Core.ItemId == 2600313).Core == InventoryRewardGrantService.Create(items.Get(2600313), 2),
                 "两次制作精确扣两卡、两份普通材料和六份额外精髓，真正发放完整PVF宝珠实例");
+            That(Bead(beadSource with { ExpertJobExperience = int.MaxValue }, 10015129, 2, out var cappedBeads) &&
+                cappedBeads.Experience == scripts.ClampExperience(1, int.MaxValue) && cappedBeads.SuccessCount == 2 &&
+                cappedBeads.Products.Length > 0, "满级制珠保留扣卡和产物，熟练度不再溢出");
             Sql("CREATE TRIGGER fail_bead BEFORE UPDATE OF expertness ON character_expert_job BEGIN SELECT RAISE(ABORT,'bead failure'); END");
             Reject<SqliteException>(() => repository.CommitExpertJobCraft(owner, beadSource, beadPlan.Inventory, beadPlan.Experience),
                 "宝珠经验失败使全部源卡、材料和成品回滚");

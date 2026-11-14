@@ -652,11 +652,15 @@ internal sealed record DungeonEntryPlan(
         bool bossMapCell = bossCellFromBossMap && layoutQuest is null && questId == 0 && !hellParty && !maps.Any(map => map.Kind == "boss");
         // 02A17ABB..02A17AE4：Boss坐标的boss候选为空时使用该格map候选。普通路线按资源声明的坐标投影，
         // 不能要求DGN重复写boss种类；只改本次计划，地图与怪物身份仍由原资源及Run复验。
-        // 任务路线继续要求明确的清图目标，叠层、条件和多阶段路线保留原合同。
+        // 非回放任务路线继续要求明确的清图目标，叠层、条件和多阶段路线保留原合同。
         bool ordinaryBossCell = !definition.IsTutorial && !definition.IsClassExperience && !definition.IsTournament && dungeonId != 5000 &&
             routeQuest == 0 && (questId == 0 || ordinaryHunt) && layoutQuest is null &&
             maze.QuestConnectionTokens.Count == 0 && maze.LayeredMaps.Count == 0 && maze.ConditionalMaps.Count == 0 && maze.DummyStages.Count == 0;
-        if (maze.StoryStages.Count == 0 && bosses.Length == 1 && bosses[0].Kind == "map" && (bossMapCell || ordinaryBossCell || layoutQuest is not null &&
+        // 显式单格回放（如3158/7159）也沿原生Boss坐标的map候选回退；只投影本次计划，不放宽普通任务或多阶段路线。
+        bool replayBossCell = isReplay && questId > 0 && routeQuest == questId && layoutQuest?.Id == questId &&
+            maze.ConnectsQuest(routeQuest,difficulty) && maps.Count == 1 && start == boss &&
+            maze.LayeredMaps.Count == 0 && maze.ConditionalMaps.Count == 0 && maze.DummyStages.Count == 0;
+        if (maze.StoryStages.Count == 0 && bosses.Length == 1 && bosses[0].Kind == "map" && (bossMapCell || ordinaryBossCell || replayBossCell || layoutQuest is not null &&
             QuestClearEligibility.IsSingleMap(layoutQuest) && (bosses[0].Id == layoutQuest.IntData[0] ||
                 maze.LayeredMaps.Any(map => map.Position == boss && map.Id == layoutQuest.IntData[0]))))
         {
@@ -665,7 +669,8 @@ internal sealed record DungeonEntryPlan(
             {
                 MapSpecification = maze.MapSpecification!.Select(map => map == bosses[0] ? promoted : map).ToArray(),
                 ConditionalMaps = maze.ConditionalMaps.Select(map => map.Position == promoted.Position && map.Kind == bosses[0].Kind
-                    ? map with { Kind = promoted.Kind } : map).ToArray()
+                    ? map with { Kind = promoted.Kind } : map).ToArray(),
+                QuestReplayRoom = replayBossCell ? new DungeonQuestReplayRoom(routeQuest, promoted) : maze.QuestReplayRoom
             };
             starts = starts.Select(map => map == bosses[0] ? promoted : map).ToArray();
             bosses = [promoted];
@@ -800,7 +805,8 @@ internal sealed record DungeonEntryPlan(
             QuestCinematicMapId = layoutQuest?.CinematicMapId,
             QuestCinematicChangesLayer = layoutQuest?.CinematicChangesLayer == true,
             IsOrdinaryHunt = ordinaryHunt,
-            QuestAcceptances = definition.IsClassExperience || practice || tagEvildom is not null || imperialArena is not null ? [] : character.ActiveMainQuests.ToImmutableArray(),
+            // 任务回放只消费已完成路线，不冻结活动任务作为清理/奖励资格。
+            QuestAcceptances = isReplay || definition.IsClassExperience || practice || tagEvildom is not null || imperialArena is not null ? [] : character.ActiveMainQuests.ToImmutableArray(),
             BypassedQuestTerrain = bypassedTerrain,
             ExperienceEquipmentModule = definition.RawSections.Any(row => row.Tag == "tower of despair") ? "despair tower" :
                 definition.RawSections.Any(row => row.Tag == "tower of scream") ? "scream tower" :

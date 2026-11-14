@@ -9,6 +9,7 @@ using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Session;
 using DfoServer.GameWorld.Characters;
+using DfoServer.GameWorld.Channels;
 using DfoServer.GameWorld.Items;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Infrastructure;
@@ -64,7 +65,7 @@ internal static class AuctionWindowModeTests
                 AuctionPackets.ItemEntrySnapshot, AuctionPackets.ItemCoreFromEntry);
             long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
             var me = repository.Create(owner, new("ModeTester", Room, null) { Level = 95, Inventory = new([], Gold: 1_000_000) });
-            // 两条挂牌：**自己的**（188 的数据源）与**机器人的**（186/187 搜索能看到，搜索会排除自己上架的）。
+            // 两条挂牌：自己的与机器人的都能搜索，188 仍只显示自己的。
             long mine = Seed(path, repository, me.Id, me.Name, 17_000, now);
             long other = Seed(path, repository, null, "拍卖机器人甲", 20_000, now);
             That(mine > 0 && other > mine, "夹具备好两条挂牌：自己的 + 机器人的（缺任一条都会让断言失去意义）");
@@ -79,7 +80,7 @@ internal static class AuctionWindowModeTests
             var off = AuctionProbe.Parse("off");
             AuctionProbe myLists = off;
             var handler = new AuctionHandler(catalog, service, projection,
-                () => off.NextSearch(), () => off.NextAverage(), panel => myLists.NextMyList(panel), log);
+                () => off.NextSearch(), () => off.NextAverage(), panel => myLists.NextMyList(panel), log, new OnlineSessionDirectory());
             var commands = new GameCommandRegistry();
             handler.Register(commands);
             commands.Seal();
@@ -92,7 +93,8 @@ internal static class AuctionWindowModeTests
             var sent = new List<(ushort Opcode, byte[] Body, string Action)>();
             await using var sender = new GameConnectionSender(owner, stream, stop, 0,
                 (_, opcode, _, body, action) => sent.Add((opcode, body.ToArray(), action)));
-            var context = new GameConnectionContext(new(1, IPAddress.Loopback, stream, stop), owner, session, sender);
+            var context = new GameConnectionContext(new(1, IPAddress.Loopback, stream, stop), owner, session, sender,
+                channel: new ChannelIdentity(7, 10));
 
             // ① 188（我的上架）mode=0（普通拍卖行窗口）：真发记录，作为「门闸没有误伤正常路径」的对照。
             sent.Clear();
@@ -132,14 +134,19 @@ internal static class AuctionWindowModeTests
             That(sent[0].Body.SequenceEqual<byte>([0x01, 0x00, 0x00]),
                 "再点一次才轮到第二个候选 head-only（轮换本身没坏）");
 
-            // ⑤ 186（按道具搜索）mode=0：真发记录，且搜索排除自己上架的挂牌（只剩机器人的那条）。
+            // ⑤ 186（按道具搜索）mode=0：自己的与机器人的挂牌均可见。
             sent.Clear();
             await commands.DispatchAsync(context, new Packet(1, 186, ItemSearchBody(0x00)));
             That(sent.Count == 1 && sent[0].Opcode == 186 && sent[0].Action == "auction_search_reply",
                 "186 mode=0 走真实挂牌读路径");
-            That(BitConverter.ToInt32(sent[0].Body, 2) == 1 && BitConverter.ToUInt16(sent[0].Body, 6) == 1 &&
-                sent[0].Body.Length == 8 + 168,
-                "★ 186 mode=0 = flag + mode(00) + total(=1) + count(u16=1) + 1×168B（自己的那条被排除，机器人的那条在内）");
+            That(BitConverter.ToInt32(sent[0].Body, 2) == 2 && BitConverter.ToUInt16(sent[0].Body, 6) == 2 &&
+                sent[0].Body.Length == 8 + 2 * 168 && BitConverter.ToInt32(sent[0].Body, 8) == mine &&
+                BitConverter.ToInt32(sent[0].Body, 8 + 168) == other,
+                "186 搜索同时返回自己的与机器人的挂牌，数量和记录一致");
+            That(sent[0].Body[8 + 8] == 7 && sent[0].Body[8 + 168 + 8] == 7 &&
+                CharacterName.Encoding.GetString(sent[0].Body, 8 + 21, me.Name.Length) == me.Name &&
+                sent[0].Body[8 + 21 + me.Name.Length] == 0,
+                "正式186输出卖家姓名与原属大区7，不能误写频道10或角色ID，客户端据此识别自买");
 
             // ⑥ 186 mode=1（金币寄售窗口的「金币搜索」）：同样只回空列表。
             sent.Clear();
@@ -197,16 +204,36 @@ internal static class AuctionWindowModeTests
             That(sent[0].Body[1] == 0x00 && sent[0].Body[2] == 1 && BitConverter.ToInt32(sent[0].Body, 3) == mine,
                 "188 mode=0 仍然只有原来那件装备，金币券不混进普通「我的拍卖品」");
             sent.Clear();
-            var goldSearch = new byte[14];
-            goldSearch[0] = 0x01;
+            var goldSearch = ItemSearchBody(0x01, goldTicket);
             await commands.DispatchAsync(context, new Packet(1, 186, goldSearch));
             That(sent[0].Action == "auction_search_consignment_reply" && sent[0].Body[1] == 0x01 &&
-                BitConverter.ToInt32(sent[0].Body, 2) == 1 && BitConverter.ToUInt16(sent[0].Body, 6) == 1 &&
-                sent[0].Body.Length == 8 + 168,
-                "186 mode=1 只返回别人的金币券（自己的被排除），应答仍是 168B 搜索记录");
+                BitConverter.ToInt32(sent[0].Body, 2) == 2 && BitConverter.ToUInt16(sent[0].Body, 6) == 2 &&
+                sent[0].Body.Length == 8 + 2 * 168,
+                "186 mode=1 同时返回自己和别人的金币券，应答仍是 168B 搜索记录");
             That(BodyContains(sent[0].Body, goldTicket) && !BodyContains(sent[0].Body, SampleTemplate),
                 "金币搜索记录里是金币券模板，不是装备模板");
             That(goldOther > goldMine, "机器人金币券挂牌已写入，搜索才有可返回的一行");
+
+            // 关键词候选首项没有挂牌时，后续命中的模板仍要返回；重复候选不能复制记录。
+            before = Dump(path);
+            sent.Clear();
+            await commands.DispatchAsync(context, new Packet(1, 186, ItemSearchBody(0, 999_999, SampleTemplate, SampleTemplate, goldTicket)));
+            That(BitConverter.ToInt32(sent[0].Body, 2) == 2 && BitConverter.ToUInt16(sent[0].Body, 6) == 2,
+                "186 匹配全部模板候选并去重，普通窗口仍排除金币券");
+            var truncated = ItemSearchBody(0, SampleTemplate);
+            truncated[7] = 2;
+            foreach (var invalid in new[] { truncated, ItemSearchBody(0, 0), ItemSearchBody(0, -1), new byte[9], new byte[10] })
+            {
+                sent.Clear();
+                await commands.DispatchAsync(context, new Packet(1, 186, invalid));
+                That(sent.Count == 1 && BitConverter.ToInt32(sent[0].Body, 2) == 0 && sent[0].Body.Length == 8,
+                    "截断、非法或空候选返回空列表，不退回全表或只用首个候选");
+            }
+            sent.Clear();
+            await commands.DispatchAsync(context, new Packet(1, 186,
+                ItemSearchBody(0, Enumerable.Range(1, 254).Append(SampleTemplate).ToArray())));
+            That(BitConverter.ToInt32(sent[0].Body, 2) == 2 && Dump(path) == before,
+                "186 的255个候选上限完整解析，后续模板命中且搜索零写库");
         }
         finally
         {
@@ -214,12 +241,17 @@ internal static class AuctionWindowModeTests
         }
     }
 
-    /// <summary>186（按道具搜索）请求体：mode + 偏移 + 保留 + 分类 + 道具模板 id（末两字节为固定尾）。</summary>
-    static byte[] ItemSearchBody(byte mode)
+    /// <summary>186：mode、偏移、强化范围、候选数量、分类、连续模板候选。</summary>
+    static byte[] ItemSearchBody(byte mode, params int[] templates)
     {
-        var body = new byte[14];
+        if (templates.Length == 0)
+            templates = [SampleTemplate];
+        var body = new byte[10 + templates.Length * sizeof(int)];
         body[0] = mode;
-        BitConverter.GetBytes(SampleTemplate).CopyTo(body, 10);
+        body[6] = 31;
+        body[7] = checked((byte)templates.Length);
+        for (int index = 0; index < templates.Length; index++)
+            BitConverter.GetBytes(templates[index]).CopyTo(body, 10 + index * sizeof(int));
         return body;
     }
 

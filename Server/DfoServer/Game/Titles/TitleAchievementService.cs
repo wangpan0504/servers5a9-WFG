@@ -44,11 +44,14 @@ internal sealed class TitleAchievementService(TitleCatalog titles, QuestCatalog 
         if (!titles.Quests.TryGetValue(floor.TitleQuestId, out var definition) ||
             definition.Quest.Grade != "[title]" || definition.Quest.Condition != "[condition under clear]" ||
             definition.Quest.SubType != 6 || !definition.Quest.IntData.SequenceEqual(new[] { floor.DungeonId, -1 }) ||
-            !titles.QuestCategories.GetValueOrDefault(floor.TitleQuestId, []).Contains(3) ||
-            !QuestEligibility.Evaluate(character, definition.Quest, quests, allowAboveMaximum: true).Eligible)
+            !titles.QuestCategories.GetValueOrDefault(floor.TitleQuestId, []).Contains(3))
             return TitleAchievementResult.Reject(floor.TitleQuestId);
-        if (character.TitleProgress.GetValueOrDefault(floor.TitleQuestId)?.Remaining.Complete == true)
+        // 已领取的称号（含旧完成任务存档）不再受接取资格检查，也不重复发奖。
+        if (character.TitleProgress.GetValueOrDefault(floor.TitleQuestId)?.Remaining.Complete == true ||
+            QuestEligibility.Completed(character).Contains(floor.TitleQuestId))
             return new(true, 0, floor.TitleQuestId, default);
+        if (!QuestEligibility.Evaluate(character, definition.Quest, quests, allowAboveMaximum: true).Eligible)
+            return TitleAchievementResult.Reject(floor.TitleQuestId);
         return Prepare(character, [(floor.TitleQuestId, default(TitleCounters))], floor.TitleQuestId, now);
     }
 

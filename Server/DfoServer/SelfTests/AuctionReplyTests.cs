@@ -1,6 +1,7 @@
 using static DfoServer.Testing.TestCheck;
 using DfoServer.Development.Auction;
 using DfoServer.Game.Auction;
+using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.GameWorld.Items;
@@ -167,7 +168,16 @@ internal static class AuctionReplyTests
         That(BitConverter.ToInt16(reply, 6) == 1, "本批条数是 u16");
         That(BitConverter.ToInt32(reply, 8) == 0x11223344, "挂牌 id 在记录 [0..3]");
         That(BitConverter.ToInt32(reply, 12) == 1_700_086_400, "到期时间在记录 [4..7]");
-        That(reply[16] == 0, "记录 [8] 保持 0");
+        That(reply[16] == 0, "默认大区身份为0，调用方可显式传入当前真实大区");
+        var seller = AuctionPackets.EncodeListing(listing with { SellerName = "中文甲乙丙丁" }, sellerServerIndex: 7);
+        That(seller[8] == 7 && CharacterName.Encoding.GetString(seller, 21, 12) == "中文甲乙丙丁" && seller[33] == 0,
+            "搜索记录包含原属大区及12B CP936卖家名，13B区末字节保留NUL供原生自买判断");
+        var longSeller = AuctionPackets.EncodeListing(listing with { SellerName = "ABCDEFGHIJK中文" });
+        That(CharacterName.Encoding.GetString(longSeller, 21, 11) == "ABCDEFGHIJK" && longSeller[32] == 0 && longSeller[33] == 0,
+            "历史异常长卖家名仅截完整编码字符，不把半个中文或尾字节写入下一字段");
+        var identityReply = AuctionPackets.SearchReply(0, 1, [listing], sellerServerIndex: 7);
+        That(identityReply[16] == 7 && CharacterName.Encoding.GetString(identityReply, 29, 12) == listing.SellerName,
+            "批量编码传递同一真实大区和挂牌卖家名，不把名字留空");
         That(BitConverter.ToInt32(reply, 17) == 12_000, "无出价时「当前竞拍」列取起拍价");
         That(BitConverter.ToInt32(reply, 21) == -1, "纯竞拍的一口价写 -1 而不是 0");
         That(BitConverter.ToInt32(AuctionPackets.EncodeListing(listing with { CurrentBid = 15_500 }), 9) == 15_500, "有出价时「当前竞拍」列取最高出价");
