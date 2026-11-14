@@ -86,8 +86,8 @@ internal static partial class RaidCombatProjection
             });
         foreach (bool enemy in new[] { false, true })
         {
-            var units = field.Areas.Where(row => (enemy ? row.Value.Enemy : row.Value.Monster) is not null)
-                .ToImmutableDictionary(row => row.Key, row => (enemy ? row.Value.Enemy : row.Value.Monster)!.Value);
+            // 与同次1530使用同一已提交符号快照；缓存记录实际写出的问号或真实头像。
+            var units = FiendwarUnitSnapshot(view, enemy, battle.FiendwarDefinition!.Guide);
             context.Sender.PostPrepared(0, (ushort)(enemy ? NotiPacketType.FIEND_WAR_BOARD_ENEMY_INFO : NotiPacketType.FIEND_WAR_BOARD_MONSTER_INFO),
                 1 + 60 * (enemy ? 14 : 10), () =>
                 {
@@ -143,6 +143,19 @@ internal static partial class RaidCombatProjection
             context.FiendwarWarningDisplays.Clear();
             context.FiendwarEventDisplayInstance = field.Instance;
         }
+    }
+
+    internal static ImmutableDictionary<int, FiendwarUnit> FiendwarUnitSnapshot(
+        AntonRaidBattleView view, bool enemy, bool guide)
+    {
+        // 原生两套头像表的0分别是敌军/中立怪问号；引导路线不套团队雷达规则。
+        bool reveal = guide || view.Symbols.GetValueOrDefault("[radar state]") == 1;
+        return view.Fiendwar!.Areas.Where(row => (enemy ? row.Value.Enemy : row.Value.Monster) is not null)
+            .ToImmutableDictionary(row => row.Key, row =>
+            {
+                var unit = (enemy ? row.Value.Enemy : row.Value.Monster)!.Value;
+                return reveal ? unit : unit with { Kind = 0 };
+            });
     }
 
     internal static ImmutableDictionary<(byte Area, byte Kind), FiendwarTimerRow> FiendwarTimerSnapshot(AntonRaidBattleView view)
