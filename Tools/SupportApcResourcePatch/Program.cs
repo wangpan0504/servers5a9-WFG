@@ -3,6 +3,12 @@ using System.Text.Json;
 using PvfLib;
 
 Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+if (args is ["prepare-support-buff-boost", var buffPvf, var buffOutput])
+{
+    using var source = PvfArchive.Open(buffPvf);
+    SupportBuffBoostDelta.Write(source, buffOutput);
+    return;
+}
 if (args is ["prepare-support-graduation-balance", var balancePvf, var balanceConfig, var balanceOutput])
 {
     using var source = PvfArchive.Open(balancePvf);

@@ -1,6 +1,12 @@
 using System.Text.Json;
 using PvfLib;
 
+if (args is ["--buff-boost", var buffBefore, var buffAfter, var buffReport])
+{
+    SupportBuffBoostTests.Run(buffBefore, buffAfter, buffReport);
+    return;
+}
+
 if (args is ["--graduation-balance", var balancePvf, var balanceConfig, var balanceOutput])
 {
     SupportGraduationTests.Run(balancePvf, balanceConfig, balanceOutput, balanceOnly: true);

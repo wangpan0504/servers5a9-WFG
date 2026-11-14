@@ -6,6 +6,13 @@
 
 ## 命令
 
+`prepare-support-buff-boost current.pvf new-output`在当前168个基础/变体模板上增加15%有效BUFF。
+三奶只调整主BUFF五列和一觉两列；光兵仅调整烈日气息抗性/防御/双速及念气罩HP，光之兵刃完全保持原值。
+已有百分比归一按`(100 + 当前百分比) * 1.15 - 100`替换，负归一同样适用；缺少补正的列从零起算。
+装备、技能等级、AI、外观、持续时间、范围及共享SKL保持原样，偏爱与圣歌继续使用原生逻辑。
+生成独立差量后，用既有字符串池重映射写包工具累计；测试入口为`--buff-boost before.pvf after.pvf report.json`，
+直接回读两个PVF核对全部模板实际倍率和非目标token，不能把仅生成JSON当作已经安装。
+
 `prepare-support-graduation-balance current.pvf OverdriveConfiguration.json new-output`只调整三奶毕业档45个专用模板，
 专项验证为测试项目的`--graduation-balance`同参数入口。沿原技能表、装备加级、有效等级和施法属性反算AIC百分比修正，
 在原26%削弱后再削20%，累计保留59.2%：奶爸/奶妈主BUFF力智8732、三攻1391.2、一觉额外力智12376.1152。
