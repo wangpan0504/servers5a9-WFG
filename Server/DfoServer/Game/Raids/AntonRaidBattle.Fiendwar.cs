@@ -334,16 +334,23 @@ internal sealed partial class AntonRaidBattle
         lock (gate)
         {
             if (Kind != RaidKind.Fiendwar) return target is null;
-            if (target is null || target.Instance != Instance || target.Dungeon != dungeon || target.MazeOrdinal != ordinal ||
-                !AllowsFiendwarEntry(dungeon) || FiendwarAreaForDungeon(dungeon) != target.Area ||
-                current.DungeonGenerations.GetValueOrDefault(dungeon) != target.Generation) return false;
-            if (current.FiendwarFacilities.TryGetValue(target.Area, out var facility)) return facility.Target == target;
-            var presence = current.Fiendwar!.Areas[target.Area];
-            return target.FacilitySerial == 0 && target.EnemySerial == (presence.Enemy?.Serial ?? 0) &&
-                target.MonsterSerial == (presence.Monster?.Serial ?? 0) &&
-                fiendwarMazes.TryGetValue(dungeon, out var choice) && choice.Generation == target.Generation &&
-                choice.Enemy == target.EnemySerial && choice.Monster == target.MonsterSerial && choice.Ordinal == target.MazeOrdinal;
+            return AllowsFiendwarEntry(dungeon) && MatchesFiendwarTarget(target, dungeon, ordinal);
         }
+    }
+
+    // 已入场Run继续核对原目标代次；本体结算关门不能撤销当前场景的死亡成果。
+    bool MatchesFiendwarTarget(FiendwarDungeonTarget? target, int dungeon, int? ordinal)
+    {
+        if (target is null || target.Instance != Instance || target.Dungeon != dungeon || target.MazeOrdinal != ordinal ||
+            current.Fiendwar is null || FiendwarAreaForDungeon(dungeon) != target.Area ||
+            current.Dungeons.GetValueOrDefault(dungeon) != RaidDungeonState.Open ||
+            current.DungeonGenerations.GetValueOrDefault(dungeon) != target.Generation) return false;
+        if (current.FiendwarFacilities.TryGetValue(target.Area, out var facility)) return facility.Target == target;
+        var presence = current.Fiendwar!.Areas[target.Area];
+        return target.FacilitySerial == 0 && target.EnemySerial == (presence.Enemy?.Serial ?? 0) &&
+            target.MonsterSerial == (presence.Monster?.Serial ?? 0) &&
+            fiendwarMazes.TryGetValue(dungeon, out var choice) && choice.Generation == target.Generation &&
+            choice.Enemy == target.EnemySerial && choice.Monster == target.MonsterSerial && choice.Ordinal == target.MazeOrdinal;
     }
 
     internal bool IsFiendwarRunCurrent(Guid runId)
@@ -351,7 +358,7 @@ internal sealed partial class AntonRaidBattle
         lock (gate) return dungeonRuns.TryGetValue(runId, out var run) &&
             !current.FiendwarExpiredRuns.Contains(runId) && fiendwarEncounters.TryGetValue(runId, out var encounter) &&
             lukeClock.GetUtcNow() < encounter.Deadline &&
-            IsFiendwarTargetCurrent(run.FiendwarTarget, checked((int)run.Dungeon), run.MazeOrdinal);
+            MatchesFiendwarTarget(run.FiendwarTarget, checked((int)run.Dungeon), run.MazeOrdinal);
     }
 
     bool ReserveFiendwarEncounter(RaidDungeonRun run)
@@ -377,7 +384,7 @@ internal sealed partial class AntonRaidBattle
         {
             if (Kind != RaidKind.Fiendwar || pendingTransition is not null || TerminalRequested(current) || facts.Length is < 1 or > 4 ||
                 !dungeonRuns.TryGetValue(facts[0].Fact.Identity.InstanceId, out var run) || !run.Installed || run.Cleared ||
-                current.FiendwarExpiredRuns.Contains(run.Id) || !IsFiendwarTargetCurrent(run.FiendwarTarget, checked((int)run.Dungeon), run.MazeOrdinal) ||
+                current.FiendwarExpiredRuns.Contains(run.Id) || !MatchesFiendwarTarget(run.FiendwarTarget, checked((int)run.Dungeon), run.MazeOrdinal) ||
                 run.Active.Count != facts.Length || facts.Select(row => row.Actor).Distinct().Count() != facts.Length ||
                 !fiendwarEncounters.TryGetValue(run.Id, out var encounter) || lukeClock.GetUtcNow() >= encounter.Deadline) return null;
             foreach (var row in facts)
