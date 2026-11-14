@@ -1,6 +1,23 @@
 using System.Text.Json;
 using PvfLib;
 
+if (args is ["--buff-boost", var buffBefore, var buffAfter, var buffReport])
+{
+    SupportBuffBoostTests.Run(buffBefore, buffAfter, buffReport);
+    return;
+}
+
+if (args is ["--graduation-balance", var balancePvf, var balanceConfig, var balanceOutput])
+{
+    SupportGraduationTests.Run(balancePvf, balanceConfig, balanceOutput, balanceOnly: true);
+    return;
+}
+if (args is ["--graduation", var graduationPvf, var graduationConfig, var graduationOutput])
+{
+    SupportGraduationTests.Run(graduationPvf, graduationConfig, graduationOutput);
+    return;
+}
+
 if (args is ["--balanced-tiers", var balancedPvf, var balancedEvidence, var balancedOutput])
 {
     SupportBalancedTierTests.Run(balancedPvf, balancedEvidence, balancedOutput);

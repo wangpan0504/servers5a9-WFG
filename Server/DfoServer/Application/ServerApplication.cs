@@ -204,7 +204,12 @@ public static class ServerApplication
                 return 0;
             }
 
-            var geometry = Load("Common map geometry", () => DfoServer.GameWorld.Maps.MapGeometryConfig.ReadFile(Path.Combine(options.DataDirectory, "DisplayCompat.world.json")));
+            var geometry = Load("Common map geometry", () =>
+            {
+                if (options.DisplayWorldPath is not null && !File.Exists(options.DisplayWorldPath))
+                    throw new FileNotFoundException("Selected display world resource is missing.", options.DisplayWorldPath);
+                return DfoServer.GameWorld.Maps.MapGeometryConfig.ReadFile(options.EffectiveDisplayWorldPath);
+            });
             var towns = Load("Town resources", () => TownCatalog.Load(pvf, geometry, options.EpicRoad2019Enabled));
             if (command.Kind == ServerCommandKind.InspectTowns)
             {

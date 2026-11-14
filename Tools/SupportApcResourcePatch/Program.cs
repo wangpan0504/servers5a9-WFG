@@ -3,6 +3,24 @@ using System.Text.Json;
 using PvfLib;
 
 Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+if (args is ["prepare-support-buff-boost", var buffPvf, var buffOutput])
+{
+    using var source = PvfArchive.Open(buffPvf);
+    SupportBuffBoostDelta.Write(source, buffOutput);
+    return;
+}
+if (args is ["prepare-support-graduation-balance", var balancePvf, var balanceConfig, var balanceOutput])
+{
+    using var source = PvfArchive.Open(balancePvf);
+    OverdriveDelta.Write(source, balanceConfig, balanceOutput, graduation: true, balanceOnly: true);
+    return;
+}
+if (args is ["prepare-support-graduation", var graduationPvf, var graduationConfig, var graduationOutput])
+{
+    using var source = PvfArchive.Open(graduationPvf);
+    OverdriveDelta.Write(source, graduationConfig, graduationOutput, graduation: true);
+    return;
+}
 if (args is ["prepare-support-balanced-tiers", var balancedPvf, var balancedEvidence, var balancedOutput])
 {
     using var source = PvfArchive.Open(balancedPvf);

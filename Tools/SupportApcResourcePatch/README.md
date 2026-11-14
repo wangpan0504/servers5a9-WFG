@@ -6,7 +6,30 @@
 
 ## 命令
 
-现行两女平衡使用 `prepare-support-balanced-tiers current.pvf verified-overdrive-report.json new-output`，
+`prepare-support-buff-boost current.pvf new-output`在当前168个基础/变体模板上增加15%有效BUFF。
+三奶只调整主BUFF五列和一觉两列；光兵仅调整烈日气息抗性/防御/双速及念气罩HP，光之兵刃完全保持原值。
+已有百分比归一按`(100 + 当前百分比) * 1.15 - 100`替换，负归一同样适用；缺少补正的列从零起算。
+装备、技能等级、AI、外观、持续时间、范围及共享SKL保持原样，偏爱与圣歌继续使用原生逻辑。
+生成独立差量后，用既有字符串池重映射写包工具累计；测试入口为`--buff-boost before.pvf after.pvf report.json`，
+直接回读两个PVF核对全部模板实际倍率和非目标token，不能把仅生成JSON当作已经安装。
+
+`prepare-support-graduation-balance current.pvf OverdriveConfiguration.json new-output`只调整三奶毕业档45个专用模板，
+专项验证为测试项目的`--graduation-balance`同参数入口。沿原技能表、装备加级、有效等级和施法属性反算AIC百分比修正，
+在原26%削弱后再削20%，累计保留59.2%：奶爸/奶妈主BUFF力智8732、三攻1391.2、一觉额外力智12376.1152。
+小魔女335在原生红关心15%增幅后为同档105%，因此基础目标先除1.15；343一觉不在偏爱增幅表，独立设置为同档105%。
+只替换主BUFF五列和一觉两列，不改其它档位、光兵、装备、学习等级、AI、伤害、持续时间、玩家共享技能或客户端属性。
+按实际偏爱技能/倍率表复验链路，不往旧百分比后追加乘数。表内目标是原公式增益，原生装备附加效果、技能叠加及整数取整仍须分别验证。
+
+`prepare-support-graduation current.pvf OverdriveConfiguration.json new-output`为单独的装备同步与旧26%毕业平衡模式，
+专项验证使用测试项目的`--graduation`同参数入口。奶妈继承王富贵20905的12件战斗装备三元组，
+小魔女仅换界·夜语黑瞳扫把，光兵换超界苍天布甲五件和界·夜语黑瞳手套，外观保持。
+共享装备继承、套装阈值与原生buff-option门禁计算真实加级，调整两女学习等级以保留同档有效主BUFF及一觉等级。
+三奶仅`huge`（中文毕业）档按原技能表和适用属性反算百分比列：主BUFF力智10915、三攻1739，
+一觉额外力智15470.144。其余档位、持续时间、伤害、偏爱与圣歌保持；不修改真人SKL或客户端最终属性。
+战斗装备后两个原生整数逐项复制参考模板，不把字段猜作额外增幅或附魔；参考当前均为0。
+实际装备追加效果和最终队友面板仍须游戏验收。工具输出逐资源before守卫，不可用旧整PVF覆盖累计。
+
+两女基础平衡工具使用 `prepare-support-balanced-tiers current.pvf verified-overdrive-report.json new-output`，
 专项验证为测试项目 `--balanced-tiers current.pvf verified-overdrive-report.json new-output`。
 它核对134个专用模板、实际装备和已验证的装备加级，保留学习/被动/装备/AI/KEY，替换旧主BUFF保底加值，
 以奶爸同档基础力智4950/7750/14750、三攻850/1250/2350重算原生百分比修正；
